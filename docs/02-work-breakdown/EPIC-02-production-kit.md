@@ -1561,7 +1561,7 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given each story commit When diffed against its Files table Then no unlisted file without justification | `tests/e2e/test_e02_gate.py::test_bootstrap_creates_production_kit` (re-run as part of review; manual check recorded in Evidence) |
-| 2 | Given each acceptance row When `pytest <nodeid>` Then passes | `tests/e2e/test_e02_gate.py::test_doctor_passes_and_writes_manifest` (full suite re-run recorded) |
+| 2 | Given each acceptance row When `pytest <nodeid>` Then passes | `tests/e2e/test_e02_gate.py::test_doctor_passes_and_writes_manifest` |
 | 3 | Given the demo repo When `walk doctor --strict` Then exit 0 | `tests/cli/test_cmd_doctor_fix.py::test_strict_clean_exit_zero` |
 | 4 | Given §4.1 table When compared with `builtins.py` + deferral table Then every row accounted for | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
 | 5 | Given fixtures When scanned for secrets Then only deliberate samples | `tests/memory/test_secrets.py::test_contains_secret_patterns_and_negative` |
