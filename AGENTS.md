@@ -23,7 +23,7 @@ the output does not depend on which model does the work.
 - Never invent requirements. Ambiguity above autonomy level 0 → mark story BLOCKED, commit,
   move on (protocol §4.2).
 - Quality gate must be green before every commit:
-  `uv run ruff format --check . && uv run ruff check . && uv run mypy src tests && uv run pytest`
+  `uv run ruff format --check . && uv run ruff check . && uv run mypy src tests && uv run lint-imports && uv run pytest`
 - One commit per story, then push immediately. Format `feat: ...` / `bugfix: ...` /
   `docs: ...` / `chore: ...`. No attribution, signature or AI-tool names in messages.
 - Never commit secrets, provider transcripts, or `requirements/`.
