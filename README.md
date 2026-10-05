@@ -1,8 +1,8 @@
 # WAL-K — Workflow Agent Layers Kernel
 
-> **AI Game Studio Kernel** — kernel điều phối một đội AI agents theo role chuyên môn để tự vận hành production game Unity từ GDD, theo từng phase, và chỉ cần user can thiệp tại các quyết định quan trọng hoặc Phase Gate.
+> **AI Game Studio Kernel** — a kernel that orchestrates a team of role-specialized AI agents to autonomously run Unity game production from a GDD, phase by phase, requiring user involvement only at major decisions and Phase Gates.
 
-**Trạng thái:** Draft — đang ở giai đoạn requirement, chưa có code.
+**Status:** Draft — requirements stage, no code yet.
 
 ---
 
@@ -19,30 +19,30 @@ USER ── GDD + Project Constraints ──▶ WAL-K
                                    PHASE GATE ──▶ USER: GO / REWORK / CHANGE / STOP
 ```
 
-User đóng vai trò **Game Director / Product Authority / Studio Owner**, không trực tiếp điều phối từng task, từng agent hay từng tool.
+The user acts as **Game Director / Product Authority / Studio Owner**, rather than directly coordinating individual tasks, agents, or tools.
 
-WAL-K là một **production orchestration system**, không chỉ là coding agent framework. Kernel phải duy trì trạng thái production xuyên suốt nhiều agent, nhiều AI model, nhiều session, nhiều machine, nhiều phase và nhiều tháng phát triển.
+WAL-K is a **production orchestration system**, not just a coding agent framework. The kernel must maintain production state across many agents, many AI models, many sessions, many machines, many phases, and many months of development.
 
 ---
 
-## Nguyên tắc thiết kế cốt lõi
+## Core Design Principles
 
-| Nguyên tắc | Ý nghĩa |
+| Principle | Meaning |
 |---|---|
-| **Role ≠ Model** | Role mang professional identity; model chỉ là worker có thể thay thế, route và fallback. |
-| **Project Knowledge ≠ Model Context** | Tri thức dự án sống trong repository, không sống trong context window. |
-| **Work State ≠ Project Knowledge** | Work state quản lý qua Jira; implementation state quản lý qua Git. |
-| **Implementation ≠ Verification** | Code review và QC phải độc lập với người implement. |
-| **Evidence > Assertion** | Mọi kết luận phải có bằng chứng; Phase Gate sinh evidence package, không chỉ text report. |
-| **Conflict is a Feature** | Agents được phép phản biện và tranh luận có cấu trúc (structured debate). |
-| **Context First** | Agent phải load đúng context trước khi hành động. |
-| **Autonomy Must Have Boundaries** | Tự chủ trong phạm vi approved phase; escalate theo autonomy level. |
-| **Recoverable & Auditable** | Mọi quyết định và hành động quan trọng đều phục hồi được và truy vết được. |
-| **User Retains Final Product Authority** | User là thẩm quyền cuối cùng về sản phẩm. |
+| **Role ≠ Model** | Roles carry professional identity; models are replaceable workers that can be routed and swapped via fallback. |
+| **Project Knowledge ≠ Model Context** | Project knowledge lives in the repository, not in the context window. |
+| **Work State ≠ Project Knowledge** | Work state is managed through Jira; implementation state is managed through Git. |
+| **Implementation ≠ Verification** | Code review and QC must be independent from the implementer. |
+| **Evidence > Assertion** | Every conclusion must be backed by evidence; Phase Gates produce evidence packages, not just text reports. |
+| **Conflict is a Feature** | Agents are allowed to challenge each other through structured debate. |
+| **Context First** | An agent must load the right context before acting. |
+| **Autonomy Must Have Boundaries** | Autonomy is scoped to the approved phase; escalation follows autonomy levels. |
+| **Recoverable & Auditable** | Every important decision and action can be recovered and traced. |
+| **User Retains Final Product Authority** | The user is the final authority on the product. |
 
 ---
 
-## Kiến trúc tổng quan
+## High-Level Architecture
 
 ```text
 ┌───────────────────────────────────────┐
@@ -78,39 +78,39 @@ Agent Instance = Role Constitution + Authority + Runtime Policy
 
 ### Agent Roles
 
-| Role | Trách nhiệm chính |
+| Role | Primary responsibility |
 |---|---|
-| Orchestrator | Điều phối toàn bộ production, routing task, phase gate |
-| Product Owner | Thẩm quyền về requirement / GDD, resolution cấp PO |
-| Scrum Master | Workflow, Jira, tiến độ |
+| Orchestrator | Coordinates overall production, task routing, phase gates |
+| Product Owner | Authority over requirements / GDD, PO-level resolution |
+| Scrum Master | Workflow, Jira, progress tracking |
 | Design Leader | Game design, GDD interpretation |
 | Art Director | Art direction, asset pipeline, visual validation |
-| Lead Developer | Kiến trúc kỹ thuật, code review độc lập |
-| Senior Developer | Implementation theo Executable Story Contract |
-| Quality Control | Kiểm thử độc lập, bug workflow |
+| Lead Developer | Technical architecture, independent code review |
+| Senior Developer | Implementation against the Executable Story Contract |
+| Quality Control | Independent testing, bug workflow |
 | UA / Release | Release candidate, store metadata, publishing |
 
-Game Director agent là tùy chọn.
+A Game Director agent is optional.
 
 ---
 
-## Phạm vi MVP
+## MVP Scope
 
-MVP nhằm **chứng minh kernel**, chưa hoàn thiện toàn bộ AI studio.
+The MVP is meant to **prove the kernel**, not to complete the full AI studio.
 
-- **Roles:** Orchestrator, Lead Dev, Senior Dev, QC (tùy chọn sớm: PO, Design Leader)
-- **Models:** Claude, Codex — phải chứng minh được `Role ≠ Model`, preferred model, fallback model và handover
-- **Integrations:** Local repository, Git, Jira, Unity project (khuyến nghị: Graphify)
+- **Roles:** Orchestrator, Lead Dev, Senior Dev, QC (optional early: PO, Design Leader)
+- **Models:** Claude, Codex — must demonstrate `Role ≠ Model`, preferred model, fallback model, and handover
+- **Integrations:** Local repository, Git, Jira, Unity project (recommended: Graphify)
 
-### Non-goals (giai đoạn đầu)
+### Non-goals (initial)
 
-Không tự sinh GDD từ một prompt, không thay thế Unity Editor / Jira / Git, không train hay tự xây LLM, không hỗ trợ engine ngoài Unity, không hoàn thiện art pipeline hay tự publish build trong MVP, không phụ thuộc một AI provider duy nhất.
+No GDD generation from a single prompt; no replacement of Unity Editor, Jira, or Git; no model training or proprietary LLM; no engines other than Unity; no complete art pipeline or self-publishing of builds in the MVP; no dependency on a single AI provider.
 
 ---
 
 ## Roadmap
 
-| Stage | Nội dung |
+| Stage | Scope |
 |---|---|
 | 1 — Kernel Core | runtime, workflow, persistence, model adapters & router, context manager, tool registry |
 | 2 — Production Kit | environment bootstrap, skills, hooks, approved artifacts, permissions |
@@ -126,7 +126,7 @@ Không tự sinh GDD từ một prompt, không thay thế Unity Editor / Jira / 
 
 ---
 
-## Cấu trúc repository dự kiến
+## Planned Repository Layout
 
 ```text
 kernel/
@@ -137,19 +137,19 @@ kernel/
 ├── persistence/    ├── telemetry/     ├── improvement/   └── cli/
 ```
 
-Game project sử dụng kernel sẽ giữ project memory trong thư mục `.ai/` (project, phases, features, bugs, decisions, approved, reports, handovers, improvements, agents).
+A game project using the kernel keeps its project memory in an `.ai/` directory (project, phases, features, bugs, decisions, approved, reports, handovers, improvements, agents).
 
 ---
 
-## Tài liệu
+## Documentation
 
-- [`requirements/WAL_K_REQ.md`](requirements/WAL_K_REQ.md) — Master Requirements Specification (Draft v0.2), 140 mục, bao gồm design principles, agent roles, model policy, context & memory, workflow, phase gate, continuous improvement, MVP strategy, roadmap, invariants, risks và open design questions.
+The Master Requirements Specification (Draft v0.2) is maintained outside this repository. It covers design principles, agent roles, model policy, context & memory, workflow, phase gates, continuous improvement, MVP strategy, roadmap, invariants, risks, and open design questions.
 
-Các câu hỏi thiết kế còn mở (schema constitution, format `.ai/`, workflow engine, model adapter API, scheduler, sandbox, Unity automation...) sẽ được chốt trong giai đoạn Architecture / Technical Design.
+Open design questions (constitution schema, `.ai/` format, workflow engine, model adapter API, scheduler, sandbox, Unity automation, ...) will be resolved during the Architecture / Technical Design phases.
 
 ---
 
-## Triết lý
+## Philosophy
 
 > AI models are replaceable workers.
 > Roles provide professional identity.
