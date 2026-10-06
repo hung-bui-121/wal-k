@@ -945,7 +945,7 @@ For the owner:
 
 ### E02-S07 — Skill drift detection, `walk skills check-drift`, startup check
 
-**Status:** DONE (pending)
+**Status:** DONE (9a8616c)
 **Type:** feat
 **Requirements:** §28, §27, §137, §138
 **Depends on:** E02-S06, E02-S02
@@ -1079,7 +1079,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** TODO
+**Status:** BLOCKED
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1181,6 +1181,17 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 - `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`), `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `path`, `remaining_work_present`.
 - Pitfall: `ON_MODEL_FALLBACK → ON_AGENT_HANDOFF` is a nested `fire`; ensure `HookManager.fire` is re-entrant (no shared mutable state).
 - Commit subject: `feat: register builtin must hooks (E02-S08)`.
+- **BLOCKING (implementer, 2026-10-07): two table rows conflict with the E01 pause paths, and AC 7 encodes one of them.**
+  - **`builtin.budget_block` (`ON_BUDGET_EXHAUSTED`).** `BudgetManager.meter` fires this hook after commit, inside the run's own task: from the executor's usage metering, and from `_end` metering `EXECUTION_TIME_S`. `DefaultAgentExecutor.pause(run_id)` → `_stopping` awaits `live.task`, which is the current task, so it never returns. Also, E01-S27 `_block_budget` already cancels the adapter, takes the PAUSE checkpoint and ends the run `BLOCKED_BUDGET`. The hook's own `checkpoint(run, PAUSE)` would duplicate it (ARCHITECTURE §4.1 forbids duplicate checkpoints; rule 8 settles that only for END/HANDOFF). The one effect E01 lacks is the `ESCALATION` approval request. But `permissions.request_approval` fires `ON_PROTECTED_ACTION_REQUESTED`, which chains into the second row.
+  - **`builtin.pause_for_approval` (`ON_PROTECTED_ACTION_REQUESTED`).** `request_approval` is called by `ToolInvoker` inside the run task, which then sets `PAUSED_FOR_APPROVAL`, checkpoints PAUSE and waits on `ApprovalWaiter` while the run stays alive (E01-S26). `executor.pause(run_id)` here deadlocks the same way. If run elsewhere, it would end a run that the waiter keeps alive (`PAUSED_BY_USER`), which contradicts E01-S26.
+  - **Decision needed (planner).** Proposed, following rule 8: `builtin.budget_block` only requests the `ESCALATION` approval (approver USER), without triggering a run pause through `ON_PROTECTED_ACTION_REQUESTED`. `builtin.pause_for_approval` becomes a guard that is a no-op when the payload carries `approval_id` (the tool invoker pauses), or moves to E02-S11. AC 7 then reads "run `BLOCKED_BUDGET` by the executor, exactly one PAUSE checkpoint, one pending `ESCALATION` approval".
+  - **Also found, for the same revision** (each fits a Level-0 or Files-table fix once the above is decided):
+    - (a) `builtin.freshness_check` calls `MemoryManager.assess_freshness`, which raises `ConfigError("implemented in E04-S03")`. `ON_AGENT_START` fires on every run with `context_doc_ids`, so FAIL_CLOSED fails every run whose context holds a memory document. Proposal: register it in E04-S04, or skip deferred `ConfigError`s explicitly. AC 8 needs a fake memory either way.
+    - (b) `RecoveryManager` fires `ON_MODEL_FALLBACK` with payload `{trigger, from, to}`, without `checkpoint_id`/`handover_id`, although both exist at that point. The chained `builtin.handoff_checkpoint_and_handover` would then require `handover` and fail closed. Add both keys there (`runtime/recovery.py` to the Files table).
+    - (c) `ON_RECOVERY_RESUME` carries `handover_id: None` in native-resume mode. `builtin.load_handover` must accept `None` when `mode` is native.
+    - (d) `ON_CONTEXT_UPDATED` → `builtin.index_update`: `MemoryManager` has no per-path index method, and `write()` already upserts the index row in the same transaction. A full `rebuild_index()` per write duplicates that work.
+    - (e) The `builtin.memory_index` row says `required=False`, prio 60, while AC 1 expects every table id `required=True`, prio < 50.
+  - Not affected: the `builtin.wip_commit` payload (`wip_commit_done`, binding Note), the END/HANDOFF no-op rows, and the executor-side payloads (`context_doc_ids`, `checkpoint_id`, `handover_id`), which exist as planned.
 
 #### Evidence (filled by implementer)
 _pending_
