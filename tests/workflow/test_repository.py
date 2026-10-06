@@ -1,8 +1,10 @@
+import itertools
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from walk.common.errors import ConfigError
+from walk.common.roles import AgentRole
 from walk.persistence import Database, UnitOfWork
 from walk.workflow import (
     Bug,
@@ -11,9 +13,11 @@ from walk.workflow import (
     ProjectRepository,
     Story,
     StoryContract,
+    TransitionSource,
     WorkflowRepository,
     WorkItem,
     WorkItemState,
+    WorkItemTransition,
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -143,3 +147,37 @@ async def test_project_repository_round_trip_and_single(db: Database) -> None:
         await projects.insert(other, uow)
     with pytest.raises(ConfigError, match="found 2"):
         await projects.single()
+
+
+async def test_transitions_returns_newest_first(
+    db: Database, items: WorkflowRepository, project: Project
+) -> None:
+    del project
+    await _insert(db, items, _feature(1))
+    states = [WorkItemState.IDEA, WorkItemState.READY, WorkItemState.IMPLEMENTING]
+    async with UnitOfWork(db) as uow:
+        for n, (before, after) in enumerate(itertools.pairwise(states)):
+            row = WorkItemTransition(
+                seq=0,
+                work_item_id="FEAT-0001",
+                from_state=before,
+                to_state=after,
+                event=f"e{n}",
+                source=TransitionSource.KERNEL,
+                actor_role=AgentRole.ORCHESTRATOR,
+                at=T0 + timedelta(minutes=n),
+            )
+            await items.add_transition(row, uow)
+        await items.add_transition(
+            row.model_copy(update={"event": "e2", "at": T0 + timedelta(minutes=5)}), uow
+        )
+
+    newest = await items.transitions("FEAT-0001", limit=2)
+    default = await items.transitions("FEAT-0001")
+    everything = await items.transitions("FEAT-0001", limit=None)
+
+    assert [t.event for t in newest] == ["e2", "e1"]
+    assert newest[0].seq > newest[1].seq
+    assert [t.event for t in default] == ["e2", "e1", "e0"]
+    assert [t.event for t in everything] == ["e2", "e1", "e0"]
+    assert await items.transitions("FEAT-0002") == []

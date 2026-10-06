@@ -3150,7 +3150,7 @@ _pending_
 
 ### E01-S23 — Integration protocols and `GitCliProvider` local operations
 
-**Status:** DONE (pending)
+**Status:** DONE (ce79967)
 **Type:** feat
 **Requirements:** §26 (manifest model), §43 (protocol), §55 (protocol), §59, §60 (worktrees), §62 (protocols), §78 (protocol), §81 (`COMMIT`), §90, §91 (protected branches, repository boundary), §137 (Inv. 3)
 **Depends on:** E01-S04, E01-S05
@@ -3361,7 +3361,7 @@ Level-0 decisions:
 
 ### E01-S24 — Context manager skeleton: mandatory items, token budget, `ContextBundle`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.8, §40, §42 (flagging only), §43 (optional graph), §137 (Inv. 2), §138 (Hallucinated Project State, Excessive Context Cost)
 **Depends on:** E01-S08, E01-S16
@@ -3494,7 +3494,58 @@ async def transitions(
 - Commit subject: `feat: add context manager skeleton with mandatory tier and token budget (E01-S24)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+198 files already formatted
+All checks passed!
+Success: no issues found in 196 source files
+Required test coverage of 85% reached. Total coverage: 99.95%
+647 passed in 47.15s
+```
+Touched modules: `context/*` 100%, `workflow/repository.py` 100%, `cli/cmd_work.py` 100%.
+
+Demo (no CLI in this story; a script builds the bundle for a story under a feature that has a context document):
+```
+budget 54000
+WORK_ITEM:STORY-0001             tokens= 252 mandatory=True
+WORKFLOW_STATE:STORY-0001        tokens=  34 mandatory=True
+FEATURE_CONTEXT:FEAT-0001        tokens= 211 mandatory=True
+ref {"item_ids":["WORK_ITEM:STORY-0001","WORKFLOW_STATE:STORY-0001","FEATURE_CONTEXT:FEAT-0001"],"total_tokens_estimate":497,"stale_item_ids":[]}
+```
+
+The commit subject is shortened to `feat: add context manager skeleton with mandatory tier (E01-S24)`, because the prescribed subject has 81 characters and the hook allows 72.
+
+Contract change (small, backwards compatible for callers; see commit body):
+- `WorkflowRepository.transitions` already existed: E01-S09 added it as `transitions(work_item_id)`, returning all rows oldest first. The story assumed a new method.
+  - It is now `transitions(work_item_id, *, limit: int | None = 5)`, newest first, as the story specifies. `limit=None` returns every row; I added `None` so that full history stays available.
+  - `walk work show` (`cli/cmd_work.py`, outside the Files table) now calls `transitions(id, limit=None)` and reverses the result, so its output is unchanged.
+  - The other existing caller (`tests/workflow/test_service_ready.py`) reads a single row and is unaffected.
+
+Outside the Files table: `tests/context/conftest.py` holds the fixtures shared by `test_service_mandatory.py` and `test_determinism.py` (workflow, memory and hook stack, `make_manager`).
+
+Level-0 decisions:
+- Feature resolution:
+  - A FEATURE uses its own context.
+  - A BUG uses `BUG_CONTEXT:<bug>`, then `FEATURE_CONTEXT:<related_feature_id>` when that is set.
+  - Every other kind walks `parent_id` to the nearest FEATURE (cycle-safe).
+  - When no feature is found (an EPIC, or an orphan story), there is no FEATURE_CONTEXT item. The "(no context document yet for <id>)" item is used only when a feature or bug exists but has no document.
+- Contents:
+  - `WORK_ITEM` is `json.dumps(model_dump(mode="json"), sort_keys=True, indent=2)`.
+  - `WORKFLOW_STATE` lists `state`, `state_version`, `fix_loops` and `blocked_reason` (or `none`), followed by a Markdown table `seq | at | from | to | event | actor | reason` of up to five transitions, newest first, or `(no transitions yet)`.
+  - Memory-backed items (HANDOVER, FEATURE/BUG_CONTEXT) hold `render_document(doc)`, front matter included, with `source_path = ".ai/" + doc.path`.
+  - `PROJECT_CONTEXT` holds `## <name>\n\n<body>` for each `PROJECT_CONTEXT_SECTIONS` heading present, matched case-insensitively. When none is present it says `(project context has none of: …)`. A missing `project.md` omits the item.
+  - Titles are `"<id> <title>"` for the work item and the document or decision title otherwise.
+- Freshness: the probe runs for HANDOVER, FEATURE/BUG_CONTEXT and PROJECT_CONTEXT, but not for a missing document.
+  - A `CURRENT` assessment is attached to the item, which is not flagged.
+  - Any other status sets `requires_verification` and fires `ON_CONTEXT_STALE` with `{doc_id, status, reason}`, `work_item_id` and `role=request.role`.
+  - Without a probe, `freshness` stays `None`. The `ledger` dependency is held but unused, as the story requires (no `CONTEXT_FRESHNESS`).
+- Decisions and artifacts:
+  - The decision lookup is called once as `(item, [])`. Only `ACCEPTED` results are kept, sorted by id.
+  - Each decision is rendered as Markdown: a header with category, status, owner, decided_at, affected systems and related work, then Outcome, Rationale and Alternatives.
+  - Artifacts are sorted by id. Their content is sorted-key JSON `{id, kind, title, status, version, scope, content_sha256}`, with no payload paths.
+- Budget overrun logs the warning `mandatory context exceeds the token budget` with `extra={work_item_id, tokens, budget}`. Items are kept and `excluded_count = 0`.
+- `token_budget_for` raises `ValueError` (as specified) when `max_output_tokens >= context_window_tokens`; otherwise it returns `max(int(ratio × window) − max_output, 1000)`. `DefaultContextManager.token_budget_for` delegates to it.
+- HEAD is resolved once per build. `built_at = clock.now()` is the only clock-dependent field.
 
 ---
 

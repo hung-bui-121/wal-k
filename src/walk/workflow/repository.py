@@ -114,11 +114,13 @@ class WorkflowRepository(Repository[WorkItem]):
         )
         return transition.model_copy(update={"seq": cursor.lastrowid})
 
-    async def transitions(self, work_item_id: WorkItemId) -> list[WorkItemTransition]:
-        """Return the item's transitions in commit order."""
-        sql = f"{_SELECT_TRANSITIONS_SQL} WHERE work_item_id = ? ORDER BY seq"
-        rows = self._db.connect().execute(sql, (work_item_id,)).fetchall()
-        return [_transition(row) for row in rows]
+    async def transitions(
+        self, work_item_id: WorkItemId, *, limit: int | None = 5
+    ) -> list[WorkItemTransition]:
+        """Return the item's newest transitions first; ``limit=None`` returns all of them."""
+        sql = f"{_SELECT_TRANSITIONS_SQL} WHERE work_item_id = ? ORDER BY seq DESC LIMIT ?"
+        rows = self._db.connect().execute(sql, (work_item_id, -1 if limit is None else limit))
+        return [_transition(row) for row in rows.fetchall()]
 
     async def last_transition_into(
         self, work_item_id: WorkItemId, state: WorkItemState

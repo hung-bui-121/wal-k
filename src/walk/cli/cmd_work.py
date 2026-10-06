@@ -106,7 +106,8 @@ def show(
     db = _open(ctx, repo)
     try:
         item = asyncio.run(open_workflow(db).get(item_id))
-        transitions = asyncio.run(WorkflowRepository(db).transitions(item.id))
+        newest_first = asyncio.run(WorkflowRepository(db).transitions(item.id, limit=None))
+        transitions = list(reversed(newest_first))
     except WalkError as exc:
         exit_with(exc)
     finally:
