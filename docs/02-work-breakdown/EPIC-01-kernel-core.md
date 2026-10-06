@@ -1650,4 +1650,972 @@ class DefaultAgentManager:
 #### Evidence (filled by implementer)
 _pending_
 
+### E01-S18 — Agent execution contract: `AgentInput/AgentOutput/Handover`, templates, `instantiate`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §9, §22, §29, §40 (section order), §126, §128, §137 (Inv. 1, 2)
+**Depends on:** E01-S14, E01-S16, E01-S17, E01-S24
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The §126 execution contract exists as pydantic models, a `Handover` converts losslessly to and from a `.ai/handovers/` document, the nine purpose templates render deterministic kernel-owned prompts, and `AgentManager.instantiate` assembles a complete `AgentInstance` with validated tools and permissions.
+
+#### Scope
+- In: contract models (`AgentInput`, `AgentOutput`, `Handover`, `Finding`, `FileChange`, `NextAction`, `ExpectedOutput`, `ObservationDraft`, `ToolCallSummary`, relocated `AgentOutputStatus`), `walk.agents.handover.to_document/from_document`, `walk.agents.rendering`, nine `templates/<purpose>.md.j2` skeletons, `DefaultAgentManager.instantiate/render_instructions`.
+- Out: adapter boundary and `RunSession` (E01-S19), rich template bodies (E03-S06, E04-S14), skill validation against a real `SkillRegistry` (E02-S05 wires it; here skills are resolved by name only).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/models.py` | modify | `AgentOutputStatus`, `ToolCallSummary`, `Finding`, `FileChange`, `NextAction`, `Handover`, `ObservationDraft`, `ExpectedOutput`, `AgentInput`, `AgentOutput` |
+| `src/walk/agents/handover.py` | create | `to_document`, `from_document`, `HANDOVER_SECTION_FIELDS` |
+| `src/walk/agents/rendering.py` | create | `TEMPLATE_PURPOSES`, `TemplateRenderer`, `render_constitution`, `render_input_sections`, `INPUT_SECTION_ORDER` |
+| `src/walk/agents/templates/__init__.py` | create | — |
+| `src/walk/agents/templates/IMPLEMENT.md.j2` | create | — |
+| `src/walk/agents/templates/DESIGN.md.j2` | create | — |
+| `src/walk/agents/templates/REVIEW.md.j2` | create | — |
+| `src/walk/agents/templates/QC.md.j2` | create | — |
+| `src/walk/agents/templates/TRIAGE.md.j2` | create | — |
+| `src/walk/agents/templates/DEBATE.md.j2` | create | — |
+| `src/walk/agents/templates/PLAN.md.j2` | create | — |
+| `src/walk/agents/templates/ANALYSIS.md.j2` | create | — |
+| `src/walk/agents/templates/RETRO.md.j2` | create | — |
+| `src/walk/agents/service.py` | modify | `DefaultAgentManager.instantiate`, `render_instructions` |
+| `src/walk/agents/__init__.py` | modify | re-exports |
+| `tests/agents/test_contract_models.py` | create | — |
+| `tests/agents/test_handover_document.py` | create | — |
+| `tests/agents/test_rendering.py` | create | — |
+| `tests/agents/test_templates.py` | create | — |
+| `tests/agents/test_instantiate.py` | create | — |
+
+#### Interface contract
+Models: DOMAIN-MODEL §4.2 (`ToolCallSummary` … `AgentOutput`) verbatim; `AgentOutputStatus` = DOMAIN-MODEL §3 definition, **relocated** from `walk.runtime.models` to `walk.agents.models` (see Notes). Protocol: INTERFACES.md §1.2 `instantiate`, `render_instructions`. Deltas:
+```python
+HANDOVER_SECTION_FIELDS: tuple[tuple[str, str], ...] = (            # §22 H2 heading → Handover field, in SECTION_ORDER[HANDOVER] order
+    ("Task", "task_summary"), ("Current State", "current_state"), ("Completed Work", "completed_work"),
+    ("Modified Files", "modified_files"), ("Findings", "findings"), ("Hypotheses", "hypotheses"),
+    ("Decisions", "decisions"), ("Risks", "risks"), ("Remaining Work", "remaining_work"), ("Next Action", "next_action"))
+def to_document(handover: Handover, *, actor: Actor, now: datetime) -> MemoryDocument: ...   # type HANDOVER, id = handover.id; scalar fields (role, from_run_id, from_model_id, to_run_id, reason, worktree_head, branch, work_item_id) in front matter `extra`; list fields as "- " bullets; findings as "- **summary** — detail" with evidence ids; proposed_decisions as JSON block under "Decisions"
+def from_document(doc: MemoryDocument) -> Handover: ...                                     # inverse; ConfigError when a required section/front-matter key is missing
+
+TEMPLATE_PURPOSES: tuple[str, ...] = ("IMPLEMENT", "DESIGN", "REVIEW", "QC", "TRIAGE", "DEBATE", "PLAN", "ANALYSIS", "RETRO")
+INPUT_SECTION_ORDER: tuple[str, ...] = ("Agent Role", "Constitution", "Authority", "Task", "Workflow State", "Relevant Context",
+    "Approved Artifacts", "Relevant Decisions", "Available Skills", "Allowed Tools", "Permissions", "Budget", "Effort",
+    "Required Evidence", "Expected Output", "Handover")                                      # §126 order; "Handover" only when present
+class TemplateRenderer:
+    def __init__(self, templates_dir: Path, project_templates_dir: Path | None = None) -> None: ...   # jinja2 Environment(autoescape=False, undefined=StrictUndefined, keep_trailing_newline=True)
+    def render(self, purpose: str, **context: object) -> str: ...                            # ConfigError on unknown purpose or undefined variable
+    def version_of(self, purpose: str) -> str: ...                                           # first line of the template: `{# version: 1.0 #}`
+def render_constitution(constitution: Constitution, project_constitution_markdown: str | None) -> str: ...   # ADR-0013 D-3 section order, front matter fields rendered as bullet lists, then body_markdown, then project constitution
+def render_input_sections(agent_input: AgentInput) -> str: ...                              # one `## <section>` per INPUT_SECTION_ORDER entry; models serialised as fenced ```json (model_dump(mode="json"), sort_keys) except ContextBundle items which are rendered as `### <kind> <id>` + content
+class DefaultAgentManager:
+    def __init__(self, constitutions: ConstitutionLoader, policies: PolicyLoader, permissions: PermissionManager,
+                 tools: ToolRegistry, renderer: TemplateRenderer, *, skills: SkillRegistry | None = None) -> None: ...   # constructor extended from E01-S17
+    async def instantiate(self, role: AgentRole, item: WorkItem, model_id: ModelId, effort: Effort, budget_ids: list[str], available_env_keys: set[str]) -> AgentInstance: ...
+    def render_instructions(self, agent: AgentInstance, item: WorkItem, purpose: str) -> str: ...
+```
+Template skeleton (every purpose, identical structure, differing only in the purpose paragraph): `{# version: 1.0 #}`, `# Task: {{ purpose }} {{ item.id }} — {{ item.title }}`, sections `## How to work` (§40 order: read context → decisions → approved artifacts → workflow state → code graph → required source → execute), `## Deliverables` (from `expected_output.deliverables`), `## Output contract` (write `.walk/output.json` matching `AgentOutput`, required `status`, `no_context_change_reason` rule, `handover` required for PARTIAL), `## Handover` (rendered only when `handover` is given: "continue from Next Action").
+
+#### Behavior
+1. `AgentOutput` validation (pydantic `model_validator`): `status == PARTIAL` requires `handover`; `status in {BLOCKED, NEEDS_INPUT}` requires non-empty `escalations`; empty `context_updates` with `status != FAILED` requires `no_context_change_reason`. Violations raise `pydantic.ValidationError` (callers convert to `OutputInvalid`).
+2. `to_document` then `from_document` is lossless for every `Handover` field; the document's `related.work_items == [handover.work_item_id]`, `freshness` left for `MemoryManager.write` to stamp.
+3. `from_document` rejects a document whose `type != HANDOVER` or whose `extra.reason` is not one of the §22 reasons (`ConfigError` naming the key).
+4. `render_constitution` output is byte-stable for equal inputs and never contains a provider name (inherits the E01-S17 lint: a `Constitution` cannot carry one).
+5. `render_input_sections` emits sections strictly in `INPUT_SECTION_ORDER`; `Relevant Context` preserves `ContextBundle.items` order and marks items with `requires_verification` as `> VERIFY AGAINST SOURCE BEFORE RELYING ON THIS`.
+6. `instantiate`: loads constitution and policy; `permissions = PermissionManager.rules_for(role, extra=constitution.tool_permissions)`; `tools = ToolRegistry.for_role(policy.allowed_tools, available_env_keys, required=[])` names; `skills = policy.default_skills ∪ item.contract.required_skills` (contract present) — when a `SkillRegistry` is injected, `for_role(role, required)` validates them (`ConfigError` on missing); returns `AgentInstance(role, constitution, runtime_policy, skills, tools, permissions, model_id, effort, budget_ids)`.
+7. `instantiate` raises `ConfigError` when a required tool (`policy.allowed_tools` entries marked required by the contract's `constraints` of the form `tool:<name>`) is unavailable, propagating `ToolRegistry.for_role`'s message.
+8. `render_instructions(agent, item, purpose)` renders `templates/<purpose>.md.j2` with `item`, `purpose`, `agent`, `expected_output` (built from the purpose: IMPLEMENT → `[COMPLETED, PARTIAL, BLOCKED, FAILED]`, REVIEW/QC → `[APPROVED, REJECTED, NEEDS_INPUT]`, TRIAGE/PLAN/DESIGN/ANALYSIS/RETRO/DEBATE → `[COMPLETED, NEEDS_INPUT, FAILED]`; `required_evidence = item.contract.required_evidence` when present) and `handover=None`; the executor (E01-S27) re-renders with the handover when one exists. Unknown purpose → `ConfigError`.
+9. A project template at `.ai/agents/templates/<purpose>.md.j2` shadows the kernel template (same loader rule as skills); its `version_of` is reported in `LedgerEvent.behavior_versions["prompt:<purpose>"]` by the executor.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `AgentOutput(status=PARTIAL)` without `handover` is validated, Then `ValidationError` naming `handover` | `tests/agents/test_contract_models.py::test_partial_requires_handover` |
+| 2 | When `status=BLOCKED` with empty `escalations`, Then `ValidationError`; with one escalation → valid | `tests/agents/test_contract_models.py::test_blocked_requires_escalation` |
+| 3 | When `context_updates == []`, `status=COMPLETED`, no reason, Then `ValidationError`; with `no_context_change_reason` → valid | `tests/agents/test_contract_models.py::test_empty_context_updates_requires_reason` |
+| 4 | When `AgentInput` is built from fixtures, Then every §126 input field is present and `model_dump_json()` round-trips | `tests/agents/test_contract_models.py::test_agent_input_round_trip` |
+| 5 | Given a full `Handover`, When `to_document` then `from_document`, Then equal; sections appear in `SECTION_ORDER[HANDOVER]` | `tests/agents/test_handover_document.py::test_handover_document_round_trip` |
+| 6 | Given a document with `type: feature`, Then `ConfigError`; with `reason: WHATEVER`, Then `ConfigError` naming `reason` | `tests/agents/test_handover_document.py::test_from_document_rejects_wrong_type_or_reason` |
+| 7 | Given the LEAD_DEV default constitution, When rendered twice, Then identical output with ADR-0013 D-3 headings in order | `tests/agents/test_rendering.py::test_render_constitution_is_deterministic_and_ordered` |
+| 8 | Given an `AgentInput` with a `requires_verification` context item and a handover, When rendered, Then sections in `INPUT_SECTION_ORDER`, VERIFY marker present, `## Handover` last | `tests/agents/test_rendering.py::test_render_input_sections_order_and_markers` |
+| 9 | For each of the nine purposes, When `TemplateRenderer.render`, Then non-empty output containing `.walk/output.json` and `version_of == "1.0"` | `tests/agents/test_templates.py::test_all_purpose_templates_render` |
+| 10 | Given a project template dir shadowing `IMPLEMENT.md.j2` with version `1.1`, Then the project template wins and `version_of == "1.1"` | `tests/agents/test_templates.py::test_project_template_shadows_kernel` |
+| 11 | When `render("NOPE")` or a template references an undefined variable, Then `ConfigError` | `tests/agents/test_templates.py::test_render_rejects_unknown_purpose_or_variable` |
+| 12 | Given SENIOR_DEV, a story and `available_env_keys={"git"}`, When `instantiate`, Then `AgentInstance` with merged permissions, tool names ⊆ available tools, `skills` = defaults ∪ contract skills, `model_id/effort/budget_ids` as passed | `tests/agents/test_instantiate.py::test_instantiate_assembles_instance` |
+| 13 | Given a constitution rule widening a kernel deny, When `instantiate`, Then the rule is absent from `AgentInstance.permissions` | `tests/agents/test_instantiate.py::test_instantiate_permissions_only_narrow` |
+| 14 | Given a contract constraint `tool:unity.compile` and no unity env, Then `ConfigError` naming the tool | `tests/agents/test_instantiate.py::test_instantiate_missing_required_tool_raises` |
+| 15 | When `render_instructions(agent, story, "IMPLEMENT")`, Then output contains the story id and `COMPLETED`/`PARTIAL` status options; `"REVIEW"` lists `APPROVED`/`REJECTED` | `tests/agents/test_instantiate.py::test_render_instructions_per_purpose` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `python -c "from walk.agents.rendering import TemplateRenderer; ..."` is not a CLI; record the rendered `IMPLEMENT` prompt for `STORY-0001` (first 20 lines) from the test run instead.
+
+#### Notes
+- ADR-0004 D-3/D-4/D-5; ADR-0013 D-3; ADR-0003 D-5 (handover as document); WBS §3.9 (templates and purposes).
+- `RELOCATE: AgentOutputStatus → walk.agents.models`. DOMAIN-MODEL §3 places it in `walk.runtime.models`, but `AgentOutput.status` (agents) needs it and `agents` may not import `runtime` (ARCHITECTURE §2.2). `walk.runtime.models` re-exports it for readers.
+- `NEW NAME:` modules `walk.agents.handover`, `walk.agents.rendering`; symbols `HANDOVER_SECTION_FIELDS`, `TEMPLATE_PURPOSES`, `INPUT_SECTION_ORDER`, `TemplateRenderer`, `render_constitution`, `render_input_sections`; template version comment `{# version: x.y #}`; contract constraint convention `tool:<name>` for required tools (§29 has no field for required tools on `StoryContract`).
+- Pitfall: `AgentInput` embeds `Constitution`, `ContextBundle`, `Debate`; keep `model_config` default (`WalkModel`) so `extra` fields from older JSON are rejected, which is what makes the repair turn (E01-S27) meaningful.
+- Commit subject: `feat: add agent execution contract, handover documents and prompt templates (E01-S18)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S19 — `ModelAdapter` protocol, `RunSession`, `AgentEvent`, `FakeModelAdapter`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §16 (descriptor data), §17, §21 (triggers), §22, §126, §128, §137 (Inv. 1, 2), §138 (Model Lock-In)
+**Depends on:** E01-S18
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The normalised adapter boundary (protocol, event stream, session configuration, output parsing) exists, and a scripted `FakeModelAdapter` that honours every rule of the boundary is available to every later test and both epic gates.
+
+#### Scope
+- In: `model_router.models` (all DOMAIN-MODEL §4.10 models and the §3 `Capability`-independent enums), `ModelAdapter` and `ModelRouter` protocols, `RunSession`/`ProviderEffortConfig`, `NotResumable`/`BlockedProvider`, shared output parsing, `tests/fakes/fake_model_adapter.py`.
+- Out: `DefaultModelRouter`, `models.yaml`, costing (E01-S20); real adapters (E01-S21/S22); `FakeSkillProjector` (E02-S06).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/model_router/__init__.py` | create | re-exports |
+| `src/walk/model_router/models.py` | create | `FallbackTrigger`, `ModelDescriptor`, `CapabilityRegistry`, `TaskProfile`, `RoutingDecision`, `ProviderSessionRef`, `UsageReport`, `AdapterHealth`, `AgentEventKind`, `AgentEvent`, `RunSession`, `ProviderEffortConfig` |
+| `src/walk/model_router/protocols.py` | create | `ModelAdapter`, `ModelRouter` (protocol only; service in E01-S20) |
+| `src/walk/model_router/errors.py` | create | `NotResumable`, `BlockedProvider` |
+| `src/walk/model_router/output.py` | create | `parse_agent_output`, `read_output_file`, `OUTPUT_RELATIVE_PATH` |
+| `src/walk/model_router/adapters/__init__.py` | create | — |
+| `tests/fakes/fake_model_adapter.py` | create | `FakeScript`, `FakeModelAdapter`, `fake_descriptor` |
+| `tests/model_router/__init__.py` | create | — |
+| `tests/model_router/test_models.py` | create | — |
+| `tests/model_router/test_output.py` | create | — |
+| `tests/model_router/test_fake_adapter.py` | create | — |
+| `tests/conftest.py` | modify | fixtures `fake_codex_adapter`, `fake_claude_adapter`, `run_session` |
+
+#### Interface contract
+Models: DOMAIN-MODEL §3 `FallbackTrigger`, §4.10 verbatim (`Capability` is imported from `walk.common.enums`, WBS §3.2); INTERFACES.md §2.1 `RunSession`, `ProviderEffortConfig`, `ModelAdapter`; INTERFACES.md §1.4 `ModelRouter`. Deltas:
+```python
+class NotResumable(PermanentError): """Adapter cannot continue the provider-side session (unsupported or expired)."""
+class BlockedProvider(TransientError): """No routing candidate survived; detail = list[(model_id, reason)]."""
+
+OUTPUT_RELATIVE_PATH = ".walk/output.json"
+def parse_agent_output(raw: str) -> AgentOutput: ...          # json → AgentOutput; raises OutputInvalid whose `detail` is the pydantic error list rendered as "<loc>: <msg>" lines (used verbatim in the repair turn)
+def read_output_file(path: Path) -> str | None: ...           # None when absent
+
+# tests/fakes/fake_model_adapter.py
+class FakeScript(WalkModel):
+    tool_calls: int = 3
+    tool_name: ToolName = "edit"
+    output: AgentOutput
+    partial_output: AgentOutput | None = None               # emitted as PARTIAL_OUTPUT before the last tool call when set
+    checkpoint_hint_at: list[int] = []                      # tool-call indexes after which CHECKPOINT_HINT is emitted
+    fail_after_tool_calls: int | None = None                # emit ERROR(trigger) after this many tool calls and stop
+    fail_trigger: FallbackTrigger | None = None
+    fail_error: str = "scripted failure"
+    invalid_output_times: int = 0                           # first N FINAL_OUTPUTs carry output=None + error (forces repair turns)
+    usage_per_tool_call: UsageReport = UsageReport(input_tokens=1000, output_tokens=200, cost_usd=0.0, turns=1, tool_calls=1, duration_s=1.0)
+    resumable: bool = True
+def fake_descriptor(model_id: ModelId, provider: str, **overrides: object) -> ModelDescriptor: ...   # all capabilities 4, 200k window, 16k output, all effort levels, prices 1.0/5.0 per MTok
+class FakeModelAdapter:
+    provider: str
+    def __init__(self, provider: str, descriptors: list[ModelDescriptor], script: FakeScript | Callable[[AgentInput], FakeScript], clock: Clock, *, healthy: bool = True) -> None: ...
+    runs: dict[RunId, list[AgentEvent]]                     # every event emitted, per run (assertion helper)
+    authorizations: list[tuple[RunId, ToolCallRequest, PermissionDecision]]
+    def set_healthy(self, ok: bool) -> None: ...
+    # ModelAdapter methods per INTERFACES §2.1
+```
+
+#### Behavior
+1. `AgentEvent` is frozen; `AgentEventKind` has exactly the ten ADR-0004 D-2 values; `ModelDescriptor.capabilities` values are validated `0..5`.
+2. `parse_agent_output` accepts a JSON object (optionally wrapped in a single ```json fence) and rejects everything else with `OutputInvalid`; the error detail lists every failing field.
+3. `FakeModelAdapter.run(input, session)`: emits `STARTED(session=ProviderSessionRef(provider, session_id=f"fake-{run_id}", resumable=script.resumable))`; then for `i in 1..tool_calls`: builds `ToolCallRequest(run_id, input.role, tool=script.tool_name, kind=PROVIDER_NATIVE, arguments={"path": f"src/Fake{i}.cs"}, paths=[...], worktree_path=session.worktree_path)`, emits `TOOL_CALL_REQUESTED`, awaits `session.permission_authorizer(request)`; on `ALLOW` writes `<worktree>/src/Fake{i}.cs` (one line, deterministic content) and emits `TOOL_CALL_RESULT(tool_result={"ok": true})`; on `DENY`/`REQUIRE_APPROVAL`-denied emits `TOOL_CALL_RESULT(tool_result={"ok": false, "reason": decision.reason})` and continues; emits `USAGE(script.usage_per_tool_call)` after every tool call; emits `CHECKPOINT_HINT` after indexes in `checkpoint_hint_at`.
+4. When `fail_after_tool_calls == i`: emits `ERROR(error=fail_error, trigger=fail_trigger)` and returns (no `FINAL_OUTPUT`, no `ENDED`).
+5. At the end: writes `script.output.model_dump_json()` to `session.output_path` (creating `.walk/`), emits `FINAL_OUTPUT(output=parsed)` — or, for the first `invalid_output_times` runs/resumes, `FINAL_OUTPUT(output=None, error="scripted invalid output")` and writes `{"status": "BOGUS"}` instead — then `USAGE` (cumulative) and `ENDED`. `partial_output` is emitted as `PARTIAL_OUTPUT` before the last tool call.
+6. `resume(session_ref, instruction, session)`: `NotResumable` when `session_ref.resumable` is false or the ref is unknown; otherwise continues the same script from the recorded tool-call index (so a run interrupted at 3/12 performs the remaining 9 tool calls) and applies rule 5; `instruction` is recorded in `runs`.
+7. `cancel(run_id)` sets a flag checked between events; the generator then emits `ENDED` and stops. `usage(run_id)` returns the cumulative `UsageReport`. `health()` returns `AdapterHealth(ok=healthy, provider, detail, checked_at=clock.now())`. `map_effort` returns `ProviderEffortConfig(model_id, params={"fake_effort": effort.value})` and degrades to the nearest lower level when the descriptor lacks it (`params["degraded_from"]`). `skill_projector()` raises `ConfigError("skill projection available from E02-S06")`. `parse_output` delegates to `parse_agent_output`.
+8. The fake never emits `TEXT` containing the word `thinking` and never reads `AgentInput.constitution` (Invariant 1 sanity: role-agnostic).
+9. Fixtures: `fake_codex_adapter` (`provider="fake-codex"`, descriptor `fake-codex/sim`) and `fake_claude_adapter` (`provider="fake-claude"`, descriptor `fake-claude/sim`) with a default 3-tool-call COMPLETED script; `run_session(tmp_repo)` builds a `RunSession` with an always-ALLOW authorizer.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `AgentEventKind` and `FallbackTrigger` members are enumerated, Then they equal ADR-0004 D-2 and DOMAIN-MODEL §3 lists | `tests/model_router/test_models.py::test_event_kinds_and_triggers_match_architecture` |
+| 2 | When a `ModelDescriptor` has capability 6, Then `ValidationError`; `AgentEvent` is frozen | `tests/model_router/test_models.py::test_descriptor_validation_and_event_frozen` |
+| 3 | When `parse_agent_output` receives a fenced valid JSON, Then `AgentOutput`; with `{"status":"BOGUS"}` Then `OutputInvalid` listing `status` | `tests/model_router/test_output.py::test_parse_agent_output_accepts_fence_and_lists_errors` |
+| 4 | When `read_output_file` on a missing path, Then `None` | `tests/model_router/test_output.py::test_read_output_file_missing_returns_none` |
+| 5 | Given a 3-call script, When `run` is consumed, Then events are `STARTED, (TOOL_CALL_REQUESTED, TOOL_CALL_RESULT, USAGE)×3, FINAL_OUTPUT, USAGE, ENDED`, three files exist in the worktree and `output.json` parses | `tests/model_router/test_fake_adapter.py::test_run_emits_normalised_stream_and_writes_output` |
+| 6 | Given an authorizer returning DENY, Then no file written and `TOOL_CALL_RESULT.tool_result["ok"] is False` | `tests/model_router/test_fake_adapter.py::test_run_respects_denied_authorization` |
+| 7 | Given `fail_after_tool_calls=3, fail_trigger=PROVIDER_OUTAGE` on a 12-call script, Then stream ends with `ERROR(trigger=PROVIDER_OUTAGE)` after 3 results | `tests/model_router/test_fake_adapter.py::test_run_scripted_failure_emits_error_and_stops` |
+| 8 | Given that interrupted run, When `resume(ref, "continue")`, Then 9 more tool calls then `FINAL_OUTPUT` | `tests/model_router/test_fake_adapter.py::test_resume_continues_from_recorded_index` |
+| 9 | Given `resumable=False`, When `resume`, Then `NotResumable` | `tests/model_router/test_fake_adapter.py::test_resume_not_resumable_raises` |
+| 10 | Given `invalid_output_times=1`, Then first `FINAL_OUTPUT.output is None` with `error`, and after `resume` the output is valid | `tests/model_router/test_fake_adapter.py::test_invalid_output_then_repair` |
+| 11 | When `cancel` is called mid-stream, Then the stream ends with `ENDED` without `FINAL_OUTPUT` | `tests/model_router/test_fake_adapter.py::test_cancel_stops_stream` |
+| 12 | When `map_effort(VERY_HIGH)` on a descriptor supporting up to HIGH, Then `params["degraded_from"] == "VERY_HIGH"` and `fake_effort == "HIGH"` | `tests/model_router/test_fake_adapter.py::test_map_effort_degrades` |
+| 13 | When `set_healthy(False)`, Then `health().ok is False` | `tests/model_router/test_fake_adapter.py::test_health_toggle` |
+
+#### Evidence required
+- Quality gate output.
+
+#### Notes
+- ADR-0004 D-1/D-2/D-3/D-6; WBS §3.6 (fakes implement the real protocol; descriptor ids `fake-codex/sim`, `fake-claude/sim`).
+- `NEW NAME:` `walk.model_router.output` module with `parse_agent_output`, `read_output_file`, `OUTPUT_RELATIVE_PATH`; fake helpers `FakeScript`, `fake_descriptor`; `NotResumable`/`BlockedProvider` are already registered in WBS §6.
+- Boundary rule fixed here and reused by E01-S21/S22/S27: an adapter whose final output is missing or invalid emits `FINAL_OUTPUT(output=None, error=<detail>)`; the executor owns the repair turn.
+- Pitfall: `run()` is an async generator; `cancel()` must not raise inside the consumer — use a flag, not `Task.cancel()`.
+- Commit subject: `feat: add model adapter boundary and scripted fake adapter (E01-S19)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S20 — Model router: `CapabilityRegistry`, `models.yaml`, `select`, `classify_error`, costing
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §14, §15, §16, §17, §21 (select path), §23, §84, §137 (Inv. 1), §138 (Model Lock-In)
+**Depends on:** E01-S19, E01-S12
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Model families resolve to concrete descriptors from configuration, `ModelRouter.select` implements INTERFACES §5.3 steps 1–4 deterministically, adapter errors map to §21 triggers, and token usage converts to `CostRecord`s using descriptor prices.
+
+#### Scope
+- In: `models.yaml` defaults + project override loader, family resolution (ADR-0011 D-1/D-2/D-4), `DefaultModelRouter.registry/adapter_for/select/classify_error/health_all`, `costing.usage_to_cost_record`.
+- Out: `fallback` steps 5–10 (E01-S28 — raises `ConfigError("implemented in E01-S28")` here), `walk doctor` validation of `models.yaml` (E02-S15), `walk policy set-model` (E02-S13).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/model_router/defaults/__init__.py` | create | — |
+| `src/walk/model_router/defaults/models.yaml` | create | — |
+| `src/walk/model_router/registry.py` | create | `ModelsConfig`, `FamilyLevel`, `load_models_config`, `build_registry`, `resolve_family`, `FAMILY_PATTERN` |
+| `src/walk/model_router/costing.py` | create | `usage_to_cost_record`, `estimate_usage_cost_usd` |
+| `src/walk/model_router/service.py` | create | `DefaultModelRouter`, `ERROR_TRIGGER_MAP` |
+| `src/walk/model_router/__init__.py` | modify | re-exports |
+| `tests/model_router/test_registry.py` | create | — |
+| `tests/model_router/test_defaults.py` | create | — |
+| `tests/model_router/test_select.py` | create | — |
+| `tests/model_router/test_classify_error.py` | create | — |
+| `tests/model_router/test_costing.py` | create | — |
+
+#### Interface contract
+Protocol: INTERFACES.md §1.4 `ModelRouter`. Deltas:
+```python
+FAMILY_PATTERN = r"^[a-z0-9-]+/[a-z0-9-]+$"                 # "claude/opus", "codex/default", "fake-codex/sim"
+class FamilyLevel(FrozenModel):
+    model: ModelId
+    params: JsonDict                                         # provider params for this effort (effort, max_turns, model_reasoning_effort …)
+    execution_time_s: int                                    # ADR-0011 D-2 wall-clock bound
+    escalate_to: str | None = None                           # family name when this level is served by another family (sonnet VERY_HIGH → claude/opus)
+class ModelsConfig(WalkModel):
+    version: str
+    models: dict[ModelId, ModelDescriptor]
+    families: dict[str, dict[Effort, FamilyLevel]]
+def load_models_config(default_path: Path, project_path: Path | None) -> ModelsConfig: ...   # deep-merge: project `models` entries replace by id; project `families` replace by family name; ConfigError on schema violation or a family level naming an unknown model
+def build_registry(config: ModelsConfig) -> CapabilityRegistry: ...
+def resolve_family(config: ModelsConfig, family_or_model: str, effort: Effort) -> tuple[ModelId, FamilyLevel]: ...   # concrete ModelId passes through (level synthesised from descriptor); unknown family → ConfigError; follows `escalate_to` once
+def usage_to_cost_record(usage: UsageReport, descriptor: ModelDescriptor, subject: BudgetSubject, *, record_id: str, at: datetime) -> CostRecord: ...   # category LLM, dimension TOKENS, quantity = input+output+cache_read, unit "tokens", cost_usd from prices, token fields copied
+def estimate_usage_cost_usd(usage: UsageReport, descriptor: ModelDescriptor) -> float: ...
+ERROR_TRIGGER_MAP: dict[type[BaseException], FallbackTrigger] = {ProviderUnavailable: PROVIDER_OUTAGE, RateLimited: RATE_LIMIT, QuotaExhausted: QUOTA_EXHAUSTED, Timeout: TIMEOUT, ToolCrashed: TOOL_INCOMPATIBILITY, BudgetExhausted: BUDGET_RESTRICTION, OutputInvalid: REPEATED_OUTPUT_INVALID}
+class DefaultModelRouter:
+    def __init__(self, config: ModelsConfig, adapters: dict[str, ModelAdapter], clock: Clock) -> None: ...   # adapters keyed by provider; every enabled descriptor's provider must have an adapter → ConfigError otherwise
+```
+`defaults/models.yaml` content is ADR-0011 D-2 verbatim: models `claude-opus-5-5`, `claude-sonnet-5-5` (provider `claude`), `gpt-5-codex` (provider `codex`) with `supports_effort_levels` = all four, `supports_native_resume: true`, capability scores (opus: all 5 except VISUAL_REASONING 4; sonnet: CODING 4, ARCHITECTURE 4, others 4, VISUAL_REASONING 3; codex: CODING 5, REPOSITORY_NAVIGATION 5, TOOL_USE 5, ARCHITECTURE 3, DESIGN_REASONING 2, VISUAL_REASONING 1, REVIEW 4, PLANNING 3, LONG_CONTEXT_REASONING 4), context windows 200000/200000/272000, max output 32000/32000/32000, prices (per MTok USD) 15/75, 3/15, 1.25/10 with cache read 1.5/0.3/0.125; families `claude/opus`, `claude/sonnet` (VERY_HIGH `escalate_to: claude/opus`), `codex/default` with the D-2 params and `execution_time_s` 600/1500/2700/5400.
+
+#### Behavior
+1. `select(role, policy, profile, effort, exclude, task_override)` implements INTERFACES §5.3 steps 1–4 literally: candidates `[task_override]` (only when `policy.allow_task_override`) + `preferred` + `fallback`, de-duplicated preserving order; each candidate resolved via `resolve_family(…, effort)` to a concrete `ModelId`; removed when in `policy.restricted` (by family or id), `descriptor.enabled is False` (rejected `"MODEL_DISABLED"`), or in `exclude`.
+2. Per candidate, in this order, with `rejected` accumulating `(model_id, reason)`: capability (`any(d.capabilities[c] < 3 for c in profile.required_capabilities ∪ policy.required_capabilities)` → `"capability:<c>"`), context (`profile.estimated_context_tokens > 0.6 * d.context_window_tokens` → `"context"`), effort (`effort ∉ d.supports_effort_levels` and `adapter.map_effort` cannot degrade → `"effort"`), cross-model deferral (`policy.cross_model_review and profile.implementer_model_id == m` and another candidate remains → moved to the end once), health (`not (await adapter.health()).ok` → `"health"`).
+3. The first survivor yields `RoutingDecision(model_id, provider, effort, reason="preferred"|"fallback"|"override", rejected, is_fallback = m ∉ resolved(preferred))`; none → `BlockedProvider(rejected)`.
+4. `select` performs no ledger writes (`MODEL_SELECTED` is written by the executor); it is deterministic given adapter health.
+5. `adapter_for(model_id)` returns the adapter of the descriptor's provider; unknown id → `ConfigError`. `registry()` returns the built `CapabilityRegistry`. `health_all()` queries every adapter once and maps the result onto every model it serves.
+6. `classify_error(exc, adapter)`: if the adapter exposes `classify_error(exc)` (duck-typed, optional) and it returns a trigger, use it; else walk `ERROR_TRIGGER_MAP` by `isinstance` (most-derived first); `BudgetExhausted` maps only when `exc.hard_action == FALLBACK_MODEL`; everything else → `None`.
+7. `usage_to_cost_record`: `cost_usd = (input × in_price + output × out_price + cache_read × cache_price) / 1_000_000`, rounded to 6 decimals; `provider = descriptor.provider`; `run_id/work_item_id/phase_id/role/project_key` copied from `subject`.
+8. `load_models_config` rejects a project override that sets a price `< 0`, a capability outside `0..5`, or a family level whose `model` is not in `models` (`ConfigError` naming family/level).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `defaults/models.yaml` loads, Then three models, three families, every family has all four effort levels and `claude/sonnet[VERY_HIGH].escalate_to == "claude/opus"` | `tests/model_router/test_defaults.py::test_default_models_yaml_matches_adr_0011` |
+| 2 | Given a project override changing `gpt-5-codex` prices and adding family `fake-codex/sim`, When loaded, Then merged config keeps other defaults | `tests/model_router/test_registry.py::test_project_override_merges_by_id_and_family` |
+| 3 | Given a family level naming an unknown model, Then `ConfigError` naming the family | `tests/model_router/test_registry.py::test_unknown_family_model_rejected` |
+| 4 | When `resolve_family("claude/sonnet", VERY_HIGH)`, Then `claude-opus-5-5` with the opus VERY_HIGH params; `resolve_family("claude-opus-5-5", LOW)` passes through | `tests/model_router/test_registry.py::test_resolve_family_escalation_and_passthrough` |
+| 5 | Given policy preferred `[fake-codex/sim]`, fallback `[fake-claude/sim]`, all healthy, Then decision is `fake-codex/sim`, `is_fallback False`, `rejected == []` | `tests/model_router/test_select.py::test_select_prefers_first_healthy_candidate` |
+| 6 | Given the preferred adapter unhealthy, Then fallback chosen, `is_fallback True`, `rejected == [(fake-codex/sim, "health")]` | `tests/model_router/test_select.py::test_select_rejects_unhealthy_and_marks_fallback` |
+| 7 | Given `profile.required_capabilities=[VISUAL_REASONING]` and the preferred descriptor scoring 2, Then rejected `"capability:VISUAL_REASONING"` | `tests/model_router/test_select.py::test_select_rejects_on_capability` |
+| 8 | Given `estimated_context_tokens` above 60 % of the window, Then rejected `"context"` | `tests/model_router/test_select.py::test_select_rejects_on_context_window` |
+| 9 | Given `cross_model_review=True` and `implementer_model_id == preferred`, Then the fallback is chosen and the preferred is `rejected` with `"cross_model_review"` | `tests/model_router/test_select.py::test_select_defers_implementer_model_for_review` |
+| 10 | Given `task_override` set and `allow_task_override=False`, Then override ignored; with `True` Then override chosen with `reason="override"` | `tests/model_router/test_select.py::test_select_task_override_respects_policy` |
+| 11 | Given every candidate excluded or disabled, Then `BlockedProvider` whose detail lists each rejection | `tests/model_router/test_select.py::test_select_raises_blocked_provider` |
+| 12 | For each `ERROR_TRIGGER_MAP` entry, When `classify_error(exc())`, Then the mapped trigger; `ValueError` → `None`; `BudgetExhausted(hard_action=BLOCK)` → `None` | `tests/model_router/test_classify_error.py::test_classify_error_maps_taxonomy` |
+| 13 | Given an adapter exposing `classify_error` returning `CONTEXT_OVERFLOW`, Then that wins | `tests/model_router/test_classify_error.py::test_adapter_classification_takes_precedence` |
+| 14 | Given usage 1 000 000 in / 100 000 out on prices 3/15, Then `cost_usd == 4.5`, `quantity == 1_100_000`, `category == LLM` | `tests/model_router/test_costing.py::test_usage_to_cost_record_prices` |
+| 15 | When `adapter_for("nope")`, Then `ConfigError`; `health_all()` returns one entry per model | `tests/model_router/test_select.py::test_adapter_for_and_health_all` |
+
+#### Evidence required
+- Quality gate output.
+
+#### Notes
+- ADR-0011 D-1/D-2/D-4; ADR-0004 D-9 (pricing lives in configuration); INTERFACES §5.3 steps 1–4; §23.
+- `NEW NAME:` `walk.model_router.registry` module (`ModelsConfig`, `FamilyLevel`, `load_models_config`, `build_registry`, `resolve_family`, `FAMILY_PATTERN`), `ERROR_TRIGGER_MAP`, `estimate_usage_cost_usd`; `ModelId` pattern must accept family strings (E01-S17 note) — verify `walk.common.ids.ModelId` allows `/`.
+- Rejection reason strings (`capability:<c>`, `context`, `effort`, `health`, `cross_model_review`, `MODEL_DISABLED`) are part of the `MODEL_SELECTED` payload and asserted by the gate; keep them literal.
+- Commit subject: `feat: add model registry, routing selection and usage costing (E01-S20)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S21 — `ClaudeAdapter` (claude-agent-sdk)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §17, §21, §22, §31 (per-call authorisation), §91 (tool allowlist, repository boundary), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API)
+**Depends on:** E01-S19, E01-S02
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A real `ModelAdapter` for Claude runs behind the normalised boundary: SDK messages become `AgentEvent`s, every native tool call is authorised through `RunSession.permission_authorizer` before execution, thinking blocks never leave the adapter, and the adapter is unit-tested through an injected SDK client.
+
+#### Scope
+- In: `ClaudeAdapter`, `ClaudeClient` protocol + SDK-backed implementation, message translation, effort mapping, `can_use_tool` request translation, `ClaudeSkillProjector` (pure projection), fake SDK client.
+- Out: wiring the authorizer to `ToolInvoker` (E01-S26), writing projections into worktrees (E02-S06), credential handling (E02-S01 — the SDK uses its own login or `ANTHROPIC_API_KEY` from the scrubbed env).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/model_router/adapters/claude/__init__.py` | create | `ClaudeAdapter` |
+| `src/walk/model_router/adapters/claude/client.py` | create | `ClaudeClient`, `SdkClaudeClient`, `ClaudeQueryOptions`, `SdkMessage` |
+| `src/walk/model_router/adapters/claude/adapter.py` | create | `ClaudeAdapter` |
+| `src/walk/model_router/adapters/claude/events.py` | create | `translate_message`, `ClaudeTranslationState` |
+| `src/walk/model_router/adapters/claude/permissions.py` | create | `to_tool_call_request`, `to_sdk_permission_result`, `NATIVE_TOOL_NAMES` |
+| `src/walk/model_router/adapters/claude/effort.py` | create | `map_claude_effort` |
+| `src/walk/model_router/adapters/claude/projector.py` | create | `ClaudeSkillProjector` |
+| `tests/fakes/fake_claude_client.py` | create | `FakeClaudeClient`, `scripted_messages` |
+| `tests/model_router/adapters/__init__.py` | create | — |
+| `tests/model_router/adapters/claude/__init__.py` | create | — |
+| `tests/model_router/adapters/claude/test_adapter.py` | create | — |
+| `tests/model_router/adapters/claude/test_events.py` | create | — |
+| `tests/model_router/adapters/claude/test_permissions.py` | create | — |
+| `tests/model_router/adapters/claude/test_effort.py` | create | — |
+| `tests/model_router/adapters/claude/test_projector.py` | create | — |
+
+#### Interface contract
+Protocol: INTERFACES.md §2.1 `ModelAdapter`, §1.11 `SkillProjector`. Deltas:
+```python
+class ClaudeQueryOptions(FrozenModel):
+    """Provider-mechanical options; field names are the ones ADR-0014 verified for `claude_agent_sdk.ClaudeAgentOptions`."""
+    cwd: str
+    model: ModelId
+    allowed_tools: list[str]
+    permission_mode: str                       # restricted mode name per ADR-0014 (the one that routes every tool through can_use_tool)
+    max_turns: int
+    system_prompt: str
+    effort: str                                # low | medium | high | xhigh | max
+    env: dict[str, str]
+    resume: str | None = None                  # session id
+    output_schema: JsonDict | None = None      # AgentOutput JSON schema when ADR-0014 confirms structured-output support
+SdkMessage = object                            # opaque SDK message; translate_message inspects type name + attributes
+class ClaudeClient(Protocol):
+    def query(self, prompt: str, options: ClaudeQueryOptions, can_use_tool: Callable[[str, JsonDict], Awaitable[JsonDict]]) -> AsyncIterator[SdkMessage]: ...
+    async def available(self) -> tuple[bool, str]: ...     # CLI present + authenticated; detail text
+    async def interrupt(self, session_id: str) -> None: ...
+class SdkClaudeClient: ...                     # the only module importing claude_agent_sdk (ARCHITECTURE §2.3)
+class ClaudeTranslationState(WalkModel):       # per run: session_id, pending tool calls by SDK tool_use_id, cumulative usage, turns
+def translate_message(msg: SdkMessage, state: ClaudeTranslationState, run_id: RunId, now: datetime) -> list[AgentEvent]: ...
+NATIVE_TOOL_NAMES: dict[str, ToolName] = {"Read": "read", "Write": "write", "Edit": "edit", "MultiEdit": "edit", "Bash": "bash", "Glob": "glob", "Grep": "grep"}
+def to_tool_call_request(tool_name: str, tool_input: JsonDict, *, run_id: RunId, role: AgentRole, worktree_path: str) -> ToolCallRequest: ...   # command from input["command"] for Bash; paths from file_path/path/notebook_path/pattern dirs; unknown tool name → tool=lower(name), kind=PROVIDER_NATIVE
+def to_sdk_permission_result(decision: PermissionDecision) -> JsonDict: ...   # ADR-0014 shape: allow → {"behavior": "allow", "updatedInput": ...}; deny → {"behavior": "deny", "message": reason}
+def map_claude_effort(effort: Effort, descriptor: ModelDescriptor, level: FamilyLevel | None) -> ProviderEffortConfig: ...   # params {"effort": low|medium|high|xhigh, "max_turns": n}; degrade per ADR-0011 D-4
+class ClaudeSkillProjector:
+    provider = "claude"
+    def project(self, skill: Skill, worktree_path: str) -> SkillProjection: ...   # target `<worktree>/.claude/skills/<name>/SKILL.md`; content = front matter {name, description, version} + body_markdown
+class ClaudeAdapter:
+    provider = "claude"
+    def __init__(self, client: ClaudeClient, descriptors: list[ModelDescriptor], clock: Clock, *, system_prompt_builder: Callable[[AgentInput], str], user_message_builder: Callable[[AgentInput], str]) -> None: ...   # builders injected by the composition root from walk.agents.rendering (model_router may import agents)
+```
+
+#### Behavior
+1. `run(input, session)`: builds `ClaudeQueryOptions(cwd=session.worktree_path, model=session.model_id, allowed_tools=[SDK names of session.allowed_tools with kind PROVIDER_NATIVE], permission_mode=<restricted>, max_turns=session.max_turns, system_prompt=system_prompt_builder(input), effort=map_claude_effort(...).params["effort"], env=session.env_allowlist)` and streams `client.query(user_message_builder(input), options, can_use_tool)`; each SDK message passes through `translate_message`.
+2. `can_use_tool(tool_name, tool_input)`: `request = to_tool_call_request(...)`; `decision = await session.permission_authorizer(request)`; records `TOOL_CALL_REQUESTED` (always) and returns `to_sdk_permission_result(decision)`; `REQUIRE_APPROVAL` is resolved by the authorizer (it awaits the approval) so the adapter only ever sees `ALLOW`/`DENY`.
+3. `translate_message`: system `init` → `STARTED(session=ProviderSessionRef("claude", session_id, resumable=True))`; assistant text blocks → `TEXT`; thinking/redacted-thinking blocks → dropped (no event, not logged); `tool_use` blocks → remembered by id (the event was already emitted in rule 2); user `tool_result` blocks → `TOOL_CALL_RESULT(tool_result={"ok": not is_error, "content": truncated to 4 kB})`; result message → `USAGE(UsageReport from usage fields, cost from `total_cost_usd` when present else 0.0)` then `FINAL_OUTPUT` (rule 4) then `ENDED`; result with `is_error` → `ERROR(error=text, trigger=None)`.
+4. Final output: structured output from the result message when `output_schema` was accepted (ADR-0014), else `read_output_file(session.output_path)`; `parse_agent_output` success → `FINAL_OUTPUT(output=…)`, failure/missing → `FINAL_OUTPUT(output=None, error=detail)` (E01-S19 boundary rule).
+5. `resume(session_ref, instruction, session)`: same as `run` with `options.resume = session_ref.session_id` and `instruction` as the prompt; `session_ref.provider != "claude"` or `not resumable` → `NotResumable`.
+6. Exceptions from the client are mapped before leaving the adapter: SDK connection/process errors → `ProviderUnavailable`; HTTP 429 / "rate limit" in the message → `RateLimited`; "overloaded"/5xx → `ProviderUnavailable`; `asyncio.TimeoutError` after `session.timeout_s` → `Timeout` (the client is interrupted first); CLI-not-found → `ConfigError`.
+7. `health()` calls `client.available()` at most once per 60 s (clock-based cache) and returns `AdapterHealth`. `cancel(run_id)` interrupts the session id recorded for the run. `usage(run_id)` returns the cumulative report. `parse_output` = `parse_agent_output`. `skill_projector()` returns `ClaudeSkillProjector()`.
+8. `descriptors()` returns the descriptors given at construction (the registry, not the adapter, is authoritative — ADR-0004 D-9).
+9. Nothing outside `adapters/claude/client.py` imports `claude_agent_sdk`; the import is lazy inside `SdkClaudeClient` so the kernel runs without the optional extra.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a scripted client (init, text, tool_use Edit, tool_result, result), When `run` is consumed, Then events `STARTED, TEXT, TOOL_CALL_REQUESTED, TOOL_CALL_RESULT, USAGE, FINAL_OUTPUT, ENDED` and the output file parsed | `tests/model_router/adapters/claude/test_adapter.py::test_run_translates_sdk_stream` |
+| 2 | Given a thinking block in the script, Then no event carries its text | `tests/model_router/adapters/claude/test_events.py::test_thinking_blocks_are_dropped` |
+| 3 | Given the authorizer returns DENY, When the client invokes `can_use_tool("Bash", {"command": "rm -rf /"})`, Then the SDK result is a deny with the reason and `TOOL_CALL_REQUESTED` was emitted | `tests/model_router/adapters/claude/test_adapter.py::test_can_use_tool_denies_through_authorizer` |
+| 4 | When `to_tool_call_request("Edit", {"file_path": "/wt/src/A.cs", ...})`, Then `tool == "edit"`, `paths == [...]`, `kind == PROVIDER_NATIVE`; `"Bash"` sets `command` | `tests/model_router/adapters/claude/test_permissions.py::test_to_tool_call_request_maps_tools` |
+| 5 | When `to_sdk_permission_result(ALLOW)` / `(DENY)`, Then the ADR-0014 shapes | `tests/model_router/adapters/claude/test_permissions.py::test_sdk_permission_result_shapes` |
+| 6 | Given no output file and no structured result, Then `FINAL_OUTPUT.output is None` with error detail | `tests/model_router/adapters/claude/test_adapter.py::test_missing_output_yields_repairable_final_output` |
+| 7 | Given a client raising a connection error, Then `ProviderUnavailable`; raising a 429 error → `RateLimited` | `tests/model_router/adapters/claude/test_adapter.py::test_client_errors_are_mapped` |
+| 8 | Given a client that never yields, When `timeout_s=1` (fake clock + injected sleep), Then `Timeout` and `interrupt` called | `tests/model_router/adapters/claude/test_adapter.py::test_timeout_interrupts_and_raises` |
+| 9 | When `resume(ref)`, Then `options.resume == ref.session_id`; non-claude ref → `NotResumable` | `tests/model_router/adapters/claude/test_adapter.py::test_resume_passes_session_id_or_raises` |
+| 10 | When `health()` twice within 60 s, Then `available()` called once | `tests/model_router/adapters/claude/test_adapter.py::test_health_is_cached` |
+| 11 | For each `Effort`, When `map_claude_effort` on the opus descriptor, Then params equal ADR-0011 D-2 (`effort`, `max_turns`); on a descriptor without VERY_HIGH → degraded to HIGH with `degraded_from` | `tests/model_router/adapters/claude/test_effort.py::test_map_claude_effort_matches_adr_and_degrades` |
+| 12 | When `ClaudeSkillProjector.project(skill, wt)`, Then target `<wt>/.claude/skills/<name>/SKILL.md`, `generated_from_sha256 == skill.content_sha256`, nothing written to disk | `tests/model_router/adapters/claude/test_projector.py::test_projection_is_pure_and_targets_claude_dir` |
+| 13 | When `walk.model_router.adapters.claude.adapter` is imported without `claude_agent_sdk` installed (monkeypatched import), Then import succeeds | `tests/model_router/adapters/claude/test_adapter.py::test_module_imports_without_sdk` |
+
+#### Evidence required
+- Quality gate output.
+- Optional (not gating): transcript of `uv run pytest -m integration tests/model_router/adapters/claude` against a logged-in SDK, if the implementer has credentials.
+
+#### Notes
+- ADR-0004 D-1/D-2/D-7; ADR-0006 D-1 (enforcement point 2); ADR-0011 D-2/D-4; ADR-0014 (E01-S02) is authoritative for SDK option/field names, permission-result shape and structured-output support — the implementer reads it before coding `client.py` and `permissions.py`.
+- `NEW NAME:` `ClaudeClient`, `SdkClaudeClient`, `ClaudeQueryOptions`, `SdkMessage`, `ClaudeTranslationState`, `translate_message`, `to_tool_call_request`, `to_sdk_permission_result`, `NATIVE_TOOL_NAMES`, `map_claude_effort`, `ClaudeSkillProjector`, `FakeClaudeClient`; constructor builder callables (`system_prompt_builder`, `user_message_builder`) keep `rendering` out of the adapter.
+- Pitfall: `TEXT` events are diagnostics only; the executor must not persist them (E01-S27 rule).
+- Commit subject: `feat: add claude agent sdk model adapter (E01-S21)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S22 — `CodexAdapter` (`codex exec --json`)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §17, §21, §22, §91 (sandbox, secret isolation), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API, sandbox technology)
+**Depends on:** E01-S19, E01-S02
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A real `ModelAdapter` for Codex drives `codex exec --json` as a sandboxed subprocess with a scrubbed environment, parses its JSON event lines into `AgentEvent`s (tool calls reported post-hoc), supports thread resume, and is unit-tested from recorded fixtures without spawning the CLI.
+
+#### Scope
+- In: `CodexAdapter`, process launcher protocol + asyncio implementation, command builder, `CodexSandboxConfig` model, event parsing/translation, effort mapping, `CodexSkillProjector` (pure), JSONL fixtures.
+- Out: `configure_sandbox()` policy (which paths/network a run may use — E01-S26), `BoundaryAuditor` post-run audit (E01-S25/S27), projection writing (E02-S06), env allowlist contents (E02-S01 — the adapter passes `session.env_allowlist` and nothing else).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/model_router/adapters/codex/__init__.py` | create | `CodexAdapter` |
+| `src/walk/model_router/adapters/codex/adapter.py` | create | `CodexAdapter` |
+| `src/walk/model_router/adapters/codex/process.py` | create | `CodexProcessLauncher`, `AsyncioCodexProcessLauncher`, `CodexProcess` |
+| `src/walk/model_router/adapters/codex/command.py` | create | `build_exec_command`, `build_resume_command`, `CODEX_BINARY` |
+| `src/walk/model_router/adapters/codex/sandbox.py` | create | `CodexSandboxConfig`, `DEFAULT_SANDBOX_MODE` |
+| `src/walk/model_router/adapters/codex/events.py` | create | `CodexEvent`, `parse_codex_line`, `translate_codex_event`, `CodexTranslationState` |
+| `src/walk/model_router/adapters/codex/effort.py` | create | `map_codex_effort` |
+| `src/walk/model_router/adapters/codex/projector.py` | create | `CodexSkillProjector`, `AGENTS_MD_START`, `AGENTS_MD_END` |
+| `tests/fakes/fake_codex_launcher.py` | create | `FakeCodexProcessLauncher` |
+| `tests/fixtures/codex/__init__.py` | create | — |
+| `tests/fixtures/codex/exec_success.jsonl` | create | — |
+| `tests/fixtures/codex/exec_error_rate_limit.jsonl` | create | — |
+| `tests/fixtures/codex/exec_resume.jsonl` | create | — |
+| `tests/model_router/adapters/codex/__init__.py` | create | — |
+| `tests/model_router/adapters/codex/test_adapter.py` | create | — |
+| `tests/model_router/adapters/codex/test_command.py` | create | — |
+| `tests/model_router/adapters/codex/test_events.py` | create | — |
+| `tests/model_router/adapters/codex/test_effort.py` | create | — |
+| `tests/model_router/adapters/codex/test_projector.py` | create | — |
+
+#### Interface contract
+Protocol: INTERFACES.md §2.1 `ModelAdapter`, §1.11 `SkillProjector`. Deltas:
+```python
+CODEX_BINARY = "codex"
+DEFAULT_SANDBOX_MODE = "workspace-write"
+class CodexSandboxConfig(FrozenModel):
+    mode: str = DEFAULT_SANDBOX_MODE          # read-only | workspace-write | danger-full-access (never set by the kernel)
+    cwd: str
+    network_enabled: bool = False
+    writable_roots: list[str] = []            # extra `-c sandbox_workspace_write.writable_roots=[...]`; default none beyond cwd
+class CodexProcess(Protocol):
+    pid: int | None
+    def lines(self) -> AsyncIterator[str]: ...                 # stdout lines (JSONL)
+    async def wait(self) -> int: ...                           # exit code
+    async def kill(self) -> None: ...
+    async def stderr_text(self) -> str: ...
+class CodexProcessLauncher(Protocol):
+    async def launch(self, argv: list[str], *, cwd: str, env: dict[str, str]) -> CodexProcess: ...
+    async def version(self) -> tuple[bool, str]: ...           # `codex --version` ok + text
+    async def login_status(self) -> tuple[bool, str]: ...      # `codex login status`
+class AsyncioCodexProcessLauncher: ...                         # asyncio.create_subprocess_exec; the only module spawning the codex CLI (ARCHITECTURE §2.3)
+def build_exec_command(cfg: ProviderEffortConfig, sandbox: CodexSandboxConfig, *, prompt_file: str, output_schema_path: str | None) -> list[str]: ...
+    # ["codex", "exec", "--json", "--sandbox", sandbox.mode, "--cd", sandbox.cwd, "-c", f"model={cfg.model_id}", "-c", f"model_reasoning_effort={cfg.params['model_reasoning_effort']}", *(["--output-schema", path] if path), *network/writable flags per ADR-0014, "-"]   # prompt on stdin
+def build_resume_command(thread_id: str, cfg: ProviderEffortConfig, sandbox: CodexSandboxConfig) -> list[str]: ...   # ["codex", "exec", "resume", thread_id, "--json", ...same flags, "-"]
+class CodexEvent(FrozenModel):                 # one parsed JSONL line: type, item_type, item_id, payload (raw dict)
+def parse_codex_line(line: str) -> CodexEvent | None: ...     # None for blank/non-JSON lines (logged)
+class CodexTranslationState(WalkModel): ...    # thread_id, usage so far, turns, last agent_message text, seen item ids
+def translate_codex_event(ev: CodexEvent, state: CodexTranslationState, run_id: RunId, now: datetime) -> list[AgentEvent]: ...
+def map_codex_effort(effort: Effort, descriptor: ModelDescriptor, level: FamilyLevel | None) -> ProviderEffortConfig: ...   # params {"model_reasoning_effort": low|medium|high|xhigh}
+AGENTS_MD_START = "<!-- walk:skills:start -->"; AGENTS_MD_END = "<!-- walk:skills:end -->"
+class CodexSkillProjector:
+    provider = "codex"
+    def project(self, skill: Skill, worktree_path: str) -> SkillProjection: ...   # target `<worktree>/AGENTS.md`; content = `## Skill: <name> (v<version>)` + body; E02-S06 merges all skill contents inside the managed markers
+class CodexAdapter:
+    provider = "codex"
+    def __init__(self, launcher: CodexProcessLauncher, descriptors: list[ModelDescriptor], clock: Clock, *, system_prompt_builder: Callable[[AgentInput], str], user_message_builder: Callable[[AgentInput], str], sandbox_factory: Callable[[RunSession], CodexSandboxConfig] | None = None) -> None: ...   # sandbox_factory default: workspace-write, cwd = worktree, network off (E01-S26 injects the policy-aware factory)
+```
+Fixture event vocabulary (`tests/fixtures/codex/*.jsonl`, recorded by the E01-S02 spike and authoritative for the parser): `thread.started{thread_id}`, `turn.started`, `item.started|item.completed{item:{id,type,…}}` with item types `agent_message{text}`, `reasoning{…}`, `command_execution{command, exit_code, aggregated_output}`, `file_change{changes:[{path,kind}]}`, `turn.completed{usage:{input_tokens,cached_input_tokens,output_tokens}}`, `error{message}`. Exact field names follow ADR-0014; the fixture files are updated with it.
+
+#### Behavior
+1. `run(input, session)`: writes the prompt (`system_prompt_builder(input)` + `\n\n` + `user_message_builder(input)`) to `<worktree>/.walk/prompt.md` and the `AgentOutput` JSON schema to `<worktree>/.walk/output.schema.json`; `sandbox = sandbox_factory(session)`; launches `build_exec_command(map_codex_effort(...), sandbox, ...)` with `cwd=session.worktree_path`, `env=session.env_allowlist` (nothing inherited); emits `STARTED(session=ProviderSessionRef("codex", thread_id, resumable=True))` on `thread.started`.
+2. Translation: `reasoning` items → dropped; `agent_message` → `TEXT` (last text remembered); `command_execution` completed → `TOOL_CALL_REQUESTED` immediately followed by `TOOL_CALL_RESULT` (post-hoc: `ToolCallRequest(tool="bash", kind=PROVIDER_NATIVE, command=…, worktree_path)`, `tool_result={"ok": exit_code == 0, "exit_code", "output": truncated 4 kB}`); `file_change` completed → the same pair with `tool="edit"` and `paths`; `turn.completed` → `USAGE` (cache tokens → `cache_read_tokens`, `cost_usd=0.0` — costing is the router's job); `error` → `ERROR(error=message, trigger=None)`; every event increments nothing else.
+3. Codex tool calls are **not** pre-authorised (ADR-0004 D-8, ADR-0006 D-5); the adapter calls `session.permission_authorizer` only in *advisory* mode after the fact: `DENY` decisions are recorded as `TOOL_CALL_RESULT.tool_result["kernel_decision"] = "DENY"` so the executor/`BoundaryAuditor` can fail the run; the adapter never blocks the stream on them.
+4. Process end: exit code 0 → final output from the last `agent_message` text when it parses as `AgentOutput`, else `read_output_file(session.output_path)`; success → `FINAL_OUTPUT(output=…)`, failure/missing → `FINAL_OUTPUT(output=None, error=detail)`; then cumulative `USAGE`, `ENDED`. Non-zero exit without an `error` event → mapped exception (rule 6).
+5. `resume(session_ref, instruction, session)`: `build_resume_command(session_ref.session_id, …)` with `instruction` as the prompt; non-codex ref or `resumable=False` → `NotResumable`.
+6. Error mapping: launcher cannot find the binary → `ConfigError`; exit code ≠ 0 with stderr matching `(?i)rate.?limit|429` → `RateLimited`; matching `(?i)quota|usage limit|insufficient` → `QuotaExhausted`; no output within `session.timeout_s` → process killed, `Timeout`; any other non-zero exit → `ProviderUnavailable(detail=stderr tail)`.
+7. `cancel(run_id)` kills the recorded process; `health()` = `version()` ok and `login_status()` ok, cached 60 s; `usage(run_id)` cumulative; `parse_output` = `parse_agent_output`; `skill_projector()` = `CodexSkillProjector()`; `descriptors()` as constructed.
+8. The adapter never adds environment variables (no `OPENAI_API_KEY`, no inherited `os.environ`); the launched env equals `session.env_allowlist` exactly.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given `exec_success.jsonl` through the fake launcher, When `run` is consumed, Then events `STARTED, TEXT, (TOOL_CALL_REQUESTED, TOOL_CALL_RESULT)×2, USAGE, FINAL_OUTPUT, USAGE, ENDED` with `session_id` from `thread.started` | `tests/model_router/adapters/codex/test_adapter.py::test_run_translates_jsonl_stream` |
+| 2 | Given a `reasoning` item in the fixture, Then no event contains its text | `tests/model_router/adapters/codex/test_events.py::test_reasoning_items_dropped` |
+| 3 | When `parse_codex_line("not json")`, Then `None`; a `command_execution` line → `CodexEvent(item_type="command_execution")` | `tests/model_router/adapters/codex/test_events.py::test_parse_codex_line` |
+| 4 | When `build_exec_command` for `gpt-5-codex`/HIGH with default sandbox, Then argv contains `exec`, `--json`, `--sandbox workspace-write`, `--cd <wt>`, `-c model=gpt-5-codex`, `-c model_reasoning_effort=high`, `--output-schema <path>` and ends with `-` | `tests/model_router/adapters/codex/test_command.py::test_build_exec_command_flags` |
+| 5 | When `build_resume_command("thr_1", …)`, Then argv starts `codex exec resume thr_1 --json` | `tests/model_router/adapters/codex/test_command.py::test_build_resume_command` |
+| 6 | When `run`, Then the launcher received `env == session.env_allowlist` and `cwd == worktree` | `tests/model_router/adapters/codex/test_adapter.py::test_launch_env_is_exactly_allowlist` |
+| 7 | Given `exec_error_rate_limit.jsonl` + exit 1 + stderr "429 rate limit", Then `RateLimited` | `tests/model_router/adapters/codex/test_adapter.py::test_rate_limit_exit_maps_to_rate_limited` |
+| 8 | Given exit 1 with unrelated stderr, Then `ProviderUnavailable` carrying the stderr tail | `tests/model_router/adapters/codex/test_adapter.py::test_unknown_failure_maps_to_provider_unavailable` |
+| 9 | Given a launcher that emits nothing, When `timeout_s=1`, Then process killed and `Timeout` | `tests/model_router/adapters/codex/test_adapter.py::test_timeout_kills_process` |
+| 10 | Given the authorizer returns DENY for a `command_execution`, Then `TOOL_CALL_RESULT.tool_result["kernel_decision"] == "DENY"` and the stream continues | `tests/model_router/adapters/codex/test_adapter.py::test_advisory_deny_is_recorded_not_blocking` |
+| 11 | Given no parsable agent message and no output file, Then `FINAL_OUTPUT.output is None` with error | `tests/model_router/adapters/codex/test_adapter.py::test_missing_output_yields_repairable_final_output` |
+| 12 | Given `exec_resume.jsonl`, When `resume(ref)`, Then the resume command was launched and events translated; non-codex ref → `NotResumable` | `tests/model_router/adapters/codex/test_adapter.py::test_resume_uses_thread_id_or_raises` |
+| 13 | When `health()` with `login_status` false, Then `ok False` with detail; cached on second call | `tests/model_router/adapters/codex/test_adapter.py::test_health_requires_login_and_caches` |
+| 14 | For each `Effort`, When `map_codex_effort`, Then `model_reasoning_effort` per ADR-0011 D-2; degraded when unsupported | `tests/model_router/adapters/codex/test_effort.py::test_map_codex_effort_matches_adr` |
+| 15 | When `CodexSkillProjector.project`, Then target `<wt>/AGENTS.md`, content starts with `## Skill: <name>`, nothing written | `tests/model_router/adapters/codex/test_projector.py::test_projection_targets_agents_md` |
+
+#### Evidence required
+- Quality gate output.
+- Optional (not gating): `uv run pytest -m integration tests/model_router/adapters/codex` against a logged-in `codex` CLI.
+
+#### Notes
+- ADR-0004 D-2/D-8; ADR-0006 D-5 (compensating controls — this story records decisions, E01-S25/S26/S27 enforce them); ADR-0009 D-5/D-8; ADR-0011 D-2; ADR-0014 authoritative for flags and event names.
+- `NEW NAME:` `CodexProcessLauncher`, `AsyncioCodexProcessLauncher`, `CodexProcess`, `CodexSandboxConfig`, `DEFAULT_SANDBOX_MODE`, `CODEX_BINARY`, `build_exec_command`, `build_resume_command`, `CodexEvent`, `parse_codex_line`, `translate_codex_event`, `CodexTranslationState`, `map_codex_effort`, `CodexSkillProjector`, `AGENTS_MD_START/END`, `FakeCodexProcessLauncher`, fixture folder `tests/fixtures/codex/`.
+- Architecture inconsistency to report: WBS §6 routes all subprocess calls through `walk.integrations.subprocess.SubprocessRunner`, but ARCHITECTURE §2.2 forbids `model_router → integrations`. This story therefore defines its own structurally equivalent `CodexProcessLauncher` inside the adapter package; the composition root may adapt one to the other. The architect should either allow `model_router → integrations (subprocess only)` or move `SubprocessRunner` to `walk.common`.
+- Commit subject: `feat: add codex cli model adapter (E01-S22)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S23 — Integration protocols and `GitCliProvider` local operations
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §26 (manifest model), §43 (protocol), §55 (protocol), §59, §60 (worktrees), §62 (protocols), §78 (protocol), §81 (`COMMIT`), §90, §91 (protected branches, repository boundary), §137 (Inv. 3)
+**Depends on:** E01-S04, E01-S05
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Every provider-boundary protocol and its value objects exist in `walk.integrations`, subprocess execution is injectable, and the local git operations needed by sandboxes, checkpoints and freshness (branches, worktrees, status/diff, WIP commits with trailers, guard hooks, ancestry) work against a real repository.
+
+#### Scope
+- In: `integrations.models`, `integrations.protocols` (all INTERFACES §1.12, §2.2–§2.6 protocols), `NotSupported`/`GitError`, `SubprocessRunner`, `GitCliProvider` local operations, guard-hook scripts, `tests/fakes/fake_subprocess.py`, `tmp_game_repo` fixture.
+- Out: `push`, `open_pr`, `merge`, `squash_wip` (E03-S01 — raise `ConfigError("implemented in E03-S01")`), `IntegrationManager` service (E03-S03), work/unity/graphify/asset providers (E03/E04/E08), `CredentialStore` (E02-S01).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/integrations/__init__.py` | create | re-exports |
+| `src/walk/integrations/models.py` | create | `ReadinessState`, `ComponentStatus`, `EnvironmentManifest`, `ProductionKit`, `WorkProviderEvent`, `WorkItemRef`, `CommitInfo`, `PullRequestRef`, `BuildTarget`, `JobResult`, `AssetRequest`, `AssetJob`, `AssetProvenance`, `GraphNode`, `GraphEdge`, `GraphNeighborhood` |
+| `src/walk/integrations/protocols.py` | create | `IntegrationManager`, `WorkProvider`, `GitProvider`, `UnityProvider`, `CiProvider`, `AssetProvider`, `CodeGraphProvider` |
+| `src/walk/integrations/errors.py` | create | `NotSupported`, `GitError` |
+| `src/walk/integrations/subprocess.py` | create | `SubprocessResult`, `SubprocessRunner`, `AsyncioSubprocessRunner` |
+| `src/walk/integrations/git/__init__.py` | create | `GitCliProvider` |
+| `src/walk/integrations/git/provider.py` | create | `GitCliProvider`, `FORBIDDEN_COMMIT_PATHSPECS`, `WORK_ITEM_TRAILER` |
+| `src/walk/integrations/git/guard_hooks.py` | create | `render_guard_hook`, `GUARD_HOOK_MARKER` |
+| `tests/fakes/fake_subprocess.py` | create | `FakeSubprocessRunner` |
+| `tests/integrations/__init__.py` | create | — |
+| `tests/integrations/test_models.py` | create | — |
+| `tests/integrations/test_subprocess.py` | create | — |
+| `tests/integrations/git/__init__.py` | create | — |
+| `tests/integrations/git/test_provider.py` | create | — |
+| `tests/integrations/git/test_guard_hooks.py` | create | — |
+| `tests/conftest.py` | modify | fixture `tmp_game_repo` (real git repo: `git init -b main`, user config, one commit with `README.md`, `.gitignore` containing `.walk/` and `.ai/kernel.db`) |
+
+#### Interface contract
+Models: DOMAIN-MODEL §4.13 verbatim; INTERFACES §2.2–§2.6 value objects (`WorkItemRef`, `CommitInfo`, `PullRequestRef`, `BuildTarget`, `JobResult`, `AssetRequest`, `AssetJob`, `AssetProvenance`, `GraphNode`, `GraphEdge`, `GraphNeighborhood`) placed in `integrations.models` (WBS §3.2). Protocols: INTERFACES.md §1.12, §2.2, §2.3, §2.4, §2.5, §2.6 verbatim. Deltas:
+```python
+class NotSupported(PermanentError): """Provider does not implement the operation (e.g. LocalWorkProvider.parse_webhook)."""
+class GitError(TransientError): """git exited non-zero; detail = argv + stderr tail."""
+class SubprocessResult(FrozenModel):
+    argv: list[str]; exit_code: int; stdout: str; stderr: str; duration_ms: int
+class SubprocessRunner(Protocol):
+    async def run(self, argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None, timeout_s: int = 120, input_text: str | None = None) -> SubprocessResult: ...
+class AsyncioSubprocessRunner: ...               # asyncio.create_subprocess_exec; env=None → inherit; timeout → kill + Timeout
+WORK_ITEM_TRAILER = "Walk-Work-Item"
+FORBIDDEN_COMMIT_PATHSPECS: tuple[str, ...] = (":(exclude).ai/kernel.db", ":(exclude).ai/kernel.db-wal", ":(exclude).ai/kernel.db-shm", ":(exclude).walk/**", ":(exclude)**/*.env", ":(exclude)ProjectSettings/*Secrets*")
+GUARD_HOOK_MARKER = "# walk-guard-hook v1"
+def render_guard_hook(kind: Literal["pre-commit", "pre-push"], protected_branches: list[str]) -> str: ...   # POSIX sh script; exits 1 with a message when the current/target branch matches a protected glob
+class GitCliProvider:
+    provider = "git-cli"
+    def __init__(self, repo_root: Path, runner: SubprocessRunner, ledger: LedgerManager, idempotency: IdempotencyStore, clock: Clock, *, project_key: ProjectKey) -> None: ...
+    async def discard_changes(self, path: str) -> None: ...    # `git checkout -- .` + `git clean -fd` restricted to the worktree (used by BoundaryAuditor path, E01-S27)
+    # GitProvider methods per INTERFACES §2.3; remote ops deferred to E03-S01
+```
+
+#### Behavior
+1. `AsyncioSubprocessRunner.run` never raises on non-zero exit (returns the result); raises `Timeout` after killing the process; `input_text` is written to stdin; `env=None` inherits the parent environment, a dict replaces it entirely.
+2. `GitCliProvider` runs every command through the runner with `cwd` = the given path (or `repo_root`) and raises `GitError` on non-zero exit, except where a method documents otherwise.
+3. `head(path)` → `git rev-parse HEAD`; `current_branch(path)` → `git rev-parse --abbrev-ref HEAD`; `status(path)` → `git status --porcelain=v1` paths; `diff_names(path, base)` → `git diff --name-only <base>` (base `None` → `HEAD`) ∪ untracked files; `is_ancestor` → `git merge-base --is-ancestor` (exit 1 → `False`, other → `GitError`); `changed_between(a, b, paths)` → `git diff --name-only a b -- paths`.
+4. `ensure_branch(name, base, idempotency_key)`: wrapped in `IdempotencyStore.run(key)`; creates `name` from `base` if absent (`git branch name base`), returns the branch name; existing branch → no-op.
+5. `add_worktree(path, branch)` → `git worktree add <path> <branch>` (creates parent dirs; existing worktree at path → no-op) and returns the absolute path; `remove_worktree(path, force)` → `git worktree remove [--force] <path>` then `git worktree prune`.
+6. `commit_all(path, message, trailer_work_item, idempotency_key)`: `git add -A -- . <FORBIDDEN_COMMIT_PATHSPECS>`; if nothing staged → `None`; else `git commit -m <message> --trailer "Walk-Work-Item: <id>"` (fallback: trailer appended to the message when the git version lacks `--trailer`); returns `CommitInfo(sha, message, files)`; writes `COMMIT` (payload: sha, branch, files count, work item) in the same `IdempotencyStore` transaction; replay with an existing key returns the stored `CommitInfo` without committing.
+7. `install_guard_hooks(path, protected_branches)` writes `pre-commit` and `pre-push` into the worktree's hooks dir (`git rev-parse --git-path hooks`), executable, overwriting only files carrying `GUARD_HOOK_MARKER` (foreign hooks → `ConfigError`); the scripts block commits/pushes to any branch matching a protected glob.
+8. `push`, `open_pr`, `merge`, `squash_wip` raise `ConfigError("implemented in E03-S01")`.
+9. `discard_changes(path)` resets tracked and untracked changes inside the worktree only; never touches `repo_root` when `path` differs.
+10. The provider never reads credentials and never calls a remote in this story.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `EnvironmentManifest`, `JobResult`, `GraphNeighborhood` are built from fixtures, Then JSON round-trips and `BuildTarget` has the five INTERFACES §2.4 values | `tests/integrations/test_models.py::test_integration_models_round_trip` |
+| 2 | When `AsyncioSubprocessRunner.run(["python", "-c", "print(1)"])`, Then exit 0 and stdout `1`; a failing command returns non-zero without raising | `tests/integrations/test_subprocess.py::test_runner_returns_result_without_raising` |
+| 3 | Given a sleeping command and `timeout_s=1`, Then `Timeout` | `tests/integrations/test_subprocess.py::test_runner_timeout_kills_and_raises` |
+| 4 | When `FakeSubprocessRunner` is scripted for an argv prefix, Then `run` returns the scripted result and records the call | `tests/integrations/test_subprocess.py::test_fake_runner_scripts_and_records` |
+| 5 | Given `tmp_game_repo`, When `head`, `current_branch`, Then a 40-hex sha and `main` | `tests/integrations/git/test_provider.py::test_head_and_current_branch` |
+| 6 | When `ensure_branch("feat/STORY-0001-x", "main", key)` twice, Then branch exists once and the second call replays the key | `tests/integrations/git/test_provider.py::test_ensure_branch_is_idempotent` |
+| 7 | When `add_worktree(<repo>/.walk/worktrees/RUN1, branch)`, Then the path exists on that branch; `remove_worktree` removes it and prunes | `tests/integrations/git/test_provider.py::test_worktree_add_and_remove` |
+| 8 | Given a dirty worktree with `src/A.cs` and `.walk/x.json` and `secrets.env`, When `commit_all`, Then only `src/A.cs` committed, message carries `Walk-Work-Item: STORY-0001`, `COMMIT` ledger written | `tests/integrations/git/test_provider.py::test_commit_all_excludes_forbidden_and_adds_trailer` |
+| 9 | Given a clean worktree, When `commit_all`, Then `None` and no ledger event | `tests/integrations/git/test_provider.py::test_commit_all_clean_returns_none` |
+| 10 | When `commit_all` with an already-used idempotency key, Then the stored `CommitInfo` is returned and HEAD unchanged | `tests/integrations/git/test_provider.py::test_commit_all_replays_idempotency_key` |
+| 11 | When `status`/`diff_names` on a worktree with one modified and one untracked file, Then both listed | `tests/integrations/git/test_provider.py::test_status_and_diff_names_include_untracked` |
+| 12 | Given commits A→B, When `is_ancestor(A, B)` Then `True`; `(B, A)` Then `False`; `changed_between(A, B, paths=["src/"])` lists only files under `src/` | `tests/integrations/git/test_provider.py::test_ancestry_and_changed_between` |
+| 13 | When `install_guard_hooks(wt, ["main", "release/*"])` then a commit is attempted on `main` in that worktree, Then git rejects it; on `feat/x` it succeeds | `tests/integrations/git/test_provider.py::test_guard_hooks_block_protected_branches` |
+| 14 | Given a foreign `pre-commit` hook without the marker, Then `ConfigError` and the file untouched | `tests/integrations/git/test_guard_hooks.py::test_foreign_hook_is_not_overwritten` |
+| 15 | When `render_guard_hook("pre-push", ["release/*"])`, Then script contains the marker and the glob | `tests/integrations/git/test_guard_hooks.py::test_render_guard_hook_contents` |
+| 16 | When `push`/`open_pr`/`merge`/`squash_wip`, Then `ConfigError` mentioning E03-S01 | `tests/integrations/git/test_provider.py::test_remote_operations_deferred` |
+| 17 | When `discard_changes(wt)` on a dirty worktree, Then clean; repo root untouched | `tests/integrations/git/test_provider.py::test_discard_changes_scoped_to_worktree` |
+
+#### Evidence required
+- Quality gate output (requires `git` ≥ 2.32 on PATH; record `git --version`).
+
+#### Notes
+- ADR-0002 D-4/D-7 (WIP commits, idempotency in the same transaction); ADR-0005 (protocol only); ADR-0006 D-1 (guard hooks = enforcement point 4); ADR-0009 D-5/D-10; ARCHITECTURE §4.3 (`COMMIT` write point), §6 (forbidden paths).
+- `NEW NAME:` `GitError`, `SubprocessResult`, `GitCliProvider.discard_changes` (INTERFACES §1.13 `BoundaryAuditor` prescribes `git checkout -- .` without naming a `GitProvider` method), `FORBIDDEN_COMMIT_PATHSPECS`, `WORK_ITEM_TRAILER`, `render_guard_hook`, `GUARD_HOOK_MARKER`, `FakeSubprocessRunner`, fixture `tmp_game_repo`; `SubprocessRunner`/`AsyncioSubprocessRunner`/`NotSupported` are already registered in WBS §6.
+- Pitfall (Windows): hook scripts need LF line endings and a `#!/bin/sh` shebang (Git for Windows ships `sh`); write bytes, not text with platform newlines. Worktree paths from `git worktree list --porcelain` are forward-slash; normalise with `Path.resolve()` before comparing.
+- Commit subject: `feat: add integration protocols, subprocess runner and local git provider (E01-S23)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S24 — Context manager skeleton: mandatory items, token budget, `ContextBundle`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.8, §40, §42 (flagging only), §43 (optional graph), §137 (Inv. 2), §138 (Hallucinated Project State, Excessive Context Cost)
+**Depends on:** E01-S08, E01-S16
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`ContextManager.build` produces a deterministic `ContextBundle` containing the §40 mandatory tier in order (work item, workflow state, open handover, feature/bug context + selected project sections, accepted decisions, approved-artifact metadata) within an effort-derived token budget, with a manifest suitable for checkpoints.
+
+#### Scope
+- In: `context.models`, `context.protocols`, token budget (ADR-0012 D-3), `DefaultContextManager` mandatory tier a–f, freshness flag plumbing, determinism contract, `WorkflowRepository.transitions`.
+- Out: ranked candidates g–j, scoring, source slicing, code graph (E04-S08…S12); real freshness assessment (E04-S03); decisions and approved artifacts providers (E04-S05, E02-S12 — injected callables default to empty).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/context/__init__.py` | create | re-exports |
+| `src/walk/context/models.py` | create | `ContextItemKind`, `ContextItem`, `ContextRequest`, `ContextBundle`, `ContextBundleRef` |
+| `src/walk/context/protocols.py` | create | `ContextManager` |
+| `src/walk/context/budget.py` | create | `EFFORT_BUDGET_RATIO`, `CHARS_PER_TOKEN`, `estimate_tokens`, `token_budget_for` |
+| `src/walk/context/service.py` | create | `DefaultContextManager`, `PROJECT_CONTEXT_SECTIONS`, `MANDATORY_ORDER` |
+| `src/walk/workflow/repository.py` | modify | `WorkflowRepository.transitions` |
+| `tests/context/__init__.py` | create | — |
+| `tests/context/test_models.py` | create | — |
+| `tests/context/test_budget.py` | create | — |
+| `tests/context/test_service_mandatory.py` | create | — |
+| `tests/context/test_determinism.py` | create | — |
+| `tests/workflow/test_repository.py` | modify | — |
+
+#### Interface contract
+Models: DOMAIN-MODEL §4.9 verbatim. Protocol: INTERFACES.md §1.7. Deltas:
+```python
+EFFORT_BUDGET_RATIO: dict[Effort, float] = {LOW: 0.20, MEDIUM: 0.35, HIGH: 0.50, VERY_HIGH: 0.60}   # ADR-0012 D-3
+CHARS_PER_TOKEN = 3.5
+def estimate_tokens(text: str) -> int: ...                                   # ceil(len(text) / 3.5)
+def token_budget_for(effort: Effort, context_window_tokens: int, max_output_tokens: int) -> int: ...   # int(ratio × window) − max_output; minimum 1000
+PROJECT_CONTEXT_SECTIONS: tuple[str, ...] = ("Goals", "Technical Constraints", "Coding Conventions", "Architecture Overview")   # matched case-insensitively against SECTION_ORDER[PROJECT] headings
+MANDATORY_ORDER: tuple[ContextItemKind, ...] = (WORK_ITEM, WORKFLOW_STATE, HANDOVER, FEATURE_CONTEXT, BUG_CONTEXT, PROJECT_CONTEXT, DECISION, APPROVED_ARTIFACT)
+FreshnessProbe = Callable[[MemoryDocument, Sha], Awaitable[FreshnessAssessment | None]]
+HandoverLookup = Callable[[WorkItemId], Awaitable[MemoryDocument | None]]
+DecisionLookup = Callable[[WorkItem, list[str]], Awaitable[list[Decision]]]
+ArtifactLookup = Callable[[WorkItem], Awaitable[list[ApprovedArtifact]]]
+class DefaultContextManager:
+    def __init__(self, workflow: WorkflowManager, items: WorkflowRepository, memory: MemoryManager, hooks: HookManager, ledger: LedgerManager, clock: Clock, *,
+                 head_resolver: Callable[[], Awaitable[Sha]], freshness: FreshnessProbe | None = None, handovers: HandoverLookup | None = None,
+                 decisions: DecisionLookup | None = None, artifacts: ArtifactLookup | None = None) -> None: ...
+# WorkflowRepository
+async def transitions(self, work_item_id: WorkItemId, *, limit: int = 5) -> list[WorkItemTransition]: ...   # newest first
+```
+
+#### Behavior
+1. `build(request)` implements INTERFACES §5.4 steps 1–3, 7, 8 for the mandatory tier; steps 4–6 (candidates) are a no-op returning `excluded_count = 0` until E04-S08.
+2. Item ids are stable: `WORK_ITEM:<id>`, `WORKFLOW_STATE:<id>`, `HANDOVER:<HO id>`, `FEATURE_CONTEXT:<FEAT id>`, `BUG_CONTEXT:<BUG id>`, `PROJECT_CONTEXT:project`, `DECISION:<DEC id>`, `APPROVED_ARTIFACT:<id>`; every mandatory item has `mandatory=True`, `score=1.0`.
+3. `WORK_ITEM` content = the item serialised as sorted-key JSON (contract included); `WORKFLOW_STATE` content = state, `state_version`, `fix_loops`, `blocked_reason`, the last five transitions (`WorkflowRepository.transitions`) as a table.
+4. `HANDOVER` is included only when `handovers(work_item_id)` returns a document (its rendered Markdown is the content); `FEATURE_CONTEXT`/`BUG_CONTEXT` reads `MemoryManager.read(<feature or bug id>)` where the feature is the item itself or its nearest FEATURE ancestor (via `parent_id`; bugs use `related_feature_id`); a missing document yields an item with content `(no context document yet for <id>)` so the agent is told explicitly (Hallucinated Project State); `PROJECT_CONTEXT` includes only the `PROJECT_CONTEXT_SECTIONS` of `project.md` (missing document → item omitted).
+5. For every memory-backed item, when a `freshness` probe is injected and returns an assessment with `status != CURRENT`: `requires_verification = True`, `freshness` set, `ON_CONTEXT_STALE` fired with payload `{doc_id, status, reason}`; the `CONTEXT_FRESHNESS` ledger event belongs to `MemoryManager` (E04-S03) and is **not** written here (WBS §3.5).
+6. `DECISION` items come from `decisions(item, affected_systems=[])` (ACCEPTED only, content = the decision as Markdown); `APPROVED_ARTIFACT` items carry metadata only (id, kind, version, scope, sha) — never the payload.
+7. Mandatory items are never trimmed; when their total exceeds `request.token_budget` the bundle is still returned and `TelemetryManager`-free: a `logging` warning is emitted and `ContextBundle.excluded_count` stays 0.
+8. `ContextBundle.items` order = `MANDATORY_ORDER` (bugs have no `FEATURE_CONTEXT` item unless `related_feature_id` is set, in which case both appear, bug first); `head_commit = await head_resolver()`; `built_at = clock.now()`.
+9. Determinism (ADR-0012 D-7): two `build()` calls with the same DB, `.ai/` tree, HEAD and request produce byte-identical `model_dump_json(exclude={"built_at"})`.
+10. `token_budget_for` never returns less than 1000 and raises `ValueError` when `max_output_tokens >= context_window_tokens`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `ContextItemKind` members are enumerated, Then the 12 DOMAIN-MODEL §4.9 values; `ContextBundle.ref()` lists ids and stale ids | `tests/context/test_models.py::test_context_models_and_ref` |
+| 2 | For each `Effort`, When `token_budget_for(e, 200_000, 16_000)`, Then `int(ratio × 200000) − 16000`; `estimate_tokens("a" * 35) == 10` | `tests/context/test_budget.py::test_token_budget_and_estimate` |
+| 3 | When `token_budget_for(LOW, 10_000, 16_000)`, Then `ValueError`; tiny window → minimum 1000 | `tests/context/test_budget.py::test_token_budget_bounds` |
+| 4 | Given a story under a feature with a context document and a project document, When `build`, Then items `WORK_ITEM, WORKFLOW_STATE, FEATURE_CONTEXT, PROJECT_CONTEXT` in that order, all `mandatory`, project item contains only the four sections | `tests/context/test_service_mandatory.py::test_build_includes_mandatory_items_in_order` |
+| 5 | Given an open handover document returned by the lookup, Then `HANDOVER` item placed after `WORKFLOW_STATE` | `tests/context/test_service_mandatory.py::test_build_includes_open_handover` |
+| 6 | Given a feature without a context document, Then `FEATURE_CONTEXT` content says no document yet | `tests/context/test_service_mandatory.py::test_missing_feature_context_is_explicit` |
+| 7 | Given a bug with `related_feature_id`, Then `BUG_CONTEXT` then `FEATURE_CONTEXT` | `tests/context/test_service_mandatory.py::test_bug_includes_bug_then_feature_context` |
+| 8 | Given a freshness probe returning `POSSIBLY_STALE`, Then item `requires_verification`, `ref().stale_item_ids` contains it, `ON_CONTEXT_STALE` fired once, no `CONTEXT_FRESHNESS` ledger row | `tests/context/test_service_mandatory.py::test_stale_item_flagged_and_hook_fired` |
+| 9 | Given decision and artifact lookups returning one each, Then `DECISION` and `APPROVED_ARTIFACT` items present, artifact content has no payload key | `tests/context/test_service_mandatory.py::test_decisions_and_artifact_metadata_included` |
+| 10 | Given five transitions on the item, Then `WORKFLOW_STATE` content lists the newest five, newest first | `tests/context/test_service_mandatory.py::test_workflow_state_lists_recent_transitions` |
+| 11 | Given a tiny `token_budget`, Then mandatory items still included and `excluded_count == 0` | `tests/context/test_service_mandatory.py::test_mandatory_items_never_trimmed` |
+| 12 | When `build` twice on unchanged inputs, Then `model_dump_json(exclude={"built_at"})` identical | `tests/context/test_determinism.py::test_bundle_is_byte_identical` |
+| 13 | When `WorkflowRepository.transitions(id, limit=2)`, Then the two newest rows | `tests/workflow/test_repository.py::test_transitions_returns_newest_first` |
+
+#### Evidence required
+- Quality gate output.
+
+#### Notes
+- ADR-0012 D-1/D-3/D-4/D-7; INTERFACES §5.4 steps 1–3, 7–8; §40 order.
+- `NEW NAME:` `walk.context.budget` module (`EFFORT_BUDGET_RATIO`, `CHARS_PER_TOKEN`, `estimate_tokens`), `PROJECT_CONTEXT_SECTIONS`, `MANDATORY_ORDER`, injected lookup callables (`FreshnessProbe`, `HandoverLookup`, `DecisionLookup`, `ArtifactLookup`), `WorkflowRepository.transitions`. The lookups exist because `context` may not import `runtime` (handovers table) and the decisions/artifact services arrive in later epics; E01-S30 wires `CheckpointManager.latest_open_handover_doc`.
+- Pitfall: serialise with `sort_keys=True` and fixed `datetime` formatting; never include `clock.now()` inside item content.
+- Commit subject: `feat: add context manager skeleton with mandatory tier and token budget (E01-S24)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S25 — Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §22, §41, §54, §60, §89, §90, §91 (repository boundary), §137 (Inv. 10, 12, 13)
+**Depends on:** E01-S18, E01-S20, E01-S23
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Agent runs, checkpoints and handovers persist in SQLite; every run gets an isolated git worktree with guard hooks; a checkpoint makes a WIP commit, records the run's durable state and (when asked) writes a handover document; and a post-run boundary audit detects writes outside the allowed paths.
+
+#### Scope
+- In: `runtime.models` (`AgentRunState`, `CheckpointKind`, `AgentRun`, `Checkpoint`, `AppliedEffects`), `runtime.protocols` (all INTERFACES §1.13 protocols), repositories, `DefaultSandboxManager`, `DefaultCheckpointManager`, `DefaultBoundaryAuditor`, `tests/fakes/fake_git_provider.py`.
+- Out: `ToolInvoker` (E01-S26), `AgentExecutor`/`OutputApplier` (E01-S27), recovery (E01-S28), skill projections into the worktree (E02-S06 modifies `sandbox.py`), scrubbed env (E02-S01), forbidden-path configuration from `permissions.yaml` (E02-S14).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/__init__.py` | create | re-exports |
+| `src/walk/runtime/models.py` | create | `AgentRunState`, `CheckpointKind`, `AgentRun`, `Checkpoint`, `AppliedEffects` (re-exports `AgentOutputStatus` from `walk.agents.models`) |
+| `src/walk/runtime/protocols.py` | create | `CheckpointManager`, `AgentExecutor`, `ToolInvoker`, `OutputApplier`, `SandboxManager`, `BoundaryAuditor` |
+| `src/walk/runtime/errors.py` | create | `RunNotFound`, `CheckpointNotFound` |
+| `src/walk/runtime/repository.py` | create | `AgentRunRepository`, `CheckpointRepository`, `HandoverRepository` |
+| `src/walk/runtime/sandbox.py` | create | `DefaultSandboxManager`, `WORKTREES_DIR`, `branch_name_for` |
+| `src/walk/runtime/checkpoints.py` | create | `DefaultCheckpointManager` |
+| `src/walk/runtime/boundary.py` | create | `DefaultBoundaryAuditor`, `DEFAULT_FORBIDDEN_PATHS`, `DEFAULT_ALLOWED_PATHS` |
+| `tests/fakes/fake_git_provider.py` | create | `FakeGitProvider` |
+| `tests/runtime/__init__.py` | create | — |
+| `tests/runtime/test_models.py` | create | — |
+| `tests/runtime/test_repository.py` | create | — |
+| `tests/runtime/test_sandbox.py` | create | — |
+| `tests/runtime/test_checkpoints.py` | create | — |
+| `tests/runtime/test_boundary.py` | create | — |
+
+#### Interface contract
+Models: DOMAIN-MODEL §3 runtime enums (except the relocated `AgentOutputStatus`), §4.11 verbatim; `AppliedEffects` from INTERFACES §1.13 (WBS §3.2). Protocols: INTERFACES.md §1.13 verbatim. Deltas:
+```python
+class RunNotFound(PermanentError): ...
+class CheckpointNotFound(PermanentError): ...
+class AgentRunRepository(Repository[AgentRun]):      # table agent_runs; projection columns per DOMAIN-MODEL §6.2
+    async def by_state(self, states: list[AgentRunState], *, kernel_instance_not: str | None = None) -> list[AgentRun]: ...
+    async def for_item(self, work_item_id: WorkItemId) -> list[AgentRun]: ...
+    async def set_state(self, run_id: RunId, state: AgentRunState, *, failure_reason: str | None = None, conn: sqlite3.Connection | None = None) -> AgentRun: ...
+class CheckpointRepository:                           # append-only; insert(conn) + latest(run_id) + latest_for_item(work_item_id) + next_seq(run_id)
+class HandoverRepository(Repository[Handover]):       # table handovers; projection: work_item_id, from_run_id, to_run_id, reason, ai_path, created_at
+    async def latest_open(self, work_item_id: WorkItemId) -> Handover | None: ...   # to_run_id IS NULL, newest
+    async def close(self, handover_id: HandoverId, to_run_id: RunId) -> Handover: ...
+WORKTREES_DIR = ".walk/worktrees"
+def branch_name_for(item: WorkItem) -> str: ...     # item.branch or f"feat/{item.id.lower()}-{slug(title)[:30]}"
+class DefaultSandboxManager:
+    def __init__(self, repo_root: Path, git: GitProvider, protected_branches: list[str]) -> None: ...
+    async def create(self, run: AgentRun, item: WorkItem) -> str: ...   # ensure_branch(idempotency `git.branch:{item.id}`) → add_worktree(<repo>/.walk/worktrees/<run_id>) → install_guard_hooks → returns absolute path
+    async def remove(self, run: AgentRun, *, keep_branch: bool = True) -> None: ...
+class DefaultCheckpointManager:
+    def __init__(self, db: Database, runs: AgentRunRepository, checkpoints: CheckpointRepository, handovers: HandoverRepository, git: GitProvider,
+                 memory: MemoryManager, hooks: HookManager, ledger: LedgerManager, ids: IdSequenceStore, idempotency: IdempotencyStore, clock: Clock, *, project_key: ProjectKey) -> None: ...
+    async def latest_open_handover(self, work_item_id: WorkItemId) -> Handover | None: ...
+    async def latest_open_handover_doc(self, work_item_id: WorkItemId) -> MemoryDocument | None: ...   # for ContextManager (E01-S24 HandoverLookup)
+    async def close_handover(self, handover_id: HandoverId, to_run_id: RunId) -> Handover: ...
+DEFAULT_FORBIDDEN_PATHS: tuple[str, ...] = (".ai/**", ".walk/**", "**/*.env", "ProjectSettings/*Secrets*", ".git/**", ".claude/**", "AGENTS.md", ".codex/**")
+DEFAULT_ALLOWED_PATHS: tuple[str, ...] = ("**",)
+class DefaultBoundaryAuditor:
+    def audit(self, worktree_path: str, changed_files: list[str], allowed_paths: list[str], forbidden_paths: list[str]) -> list[str]: ...
+```
+
+#### Behavior
+1. `AgentRunRepository.set_state` updates `state`, `failure_reason`, `ended_at` (for terminal states) and the JSON column atomically; unknown id → `RunNotFound`. `by_state(states, kernel_instance_not=X)` is the recovery query (ARCHITECTURE §5.3 step 1).
+2. `CheckpointRepository` has no update/delete methods; `next_seq(run_id)` = max(seq)+1 (1 for the first); the unique index `(run_id, seq)` makes concurrent duplicates fail loudly.
+3. `SandboxManager.create`: branch from `item.branch` or `branch_name_for(item)` based on `Project.default_branch`; the worktree path is `<repo>/.walk/worktrees/<run_id>`; guard hooks installed with `protected_branches`; returns the absolute path and the caller stores `run.worktree_path/branch`. Projections are written by E02-S06 (extension point: a `post_create` coroutine list, empty here).
+4. `SandboxManager.remove(run, keep_branch=True)` removes the worktree (force) and never deletes the branch unless `keep_branch=False` and the branch is not protected.
+5. `checkpoint(run, kind, handover=None)`: (1) `git.commit_all(run.worktree_path, f"wip({run.work_item_id}): checkpoint {seq}", trailer_work_item=run.work_item_id, idempotency_key=f"git.commit:{run.id}:{seq}")` — `None` when clean; (2) `head_sha = git.head(worktree)`, `dirty_files = git.status(worktree)` (after the commit, normally empty); (3) if `handover` given: allocate `HO-` id when `handover.id` is empty, insert `handovers` row, `memory.write_handover(to_document(handover), actor=Actor(role=run.role, run_id), head=head_sha, branch=run.branch)` (idempotency key `handover:{run.id}:{seq}` — replay skips the write and reuses the stored path), set `run.handover_out_id`; (4) insert the `checkpoints` row with `Checkpoint(id=ULID, seq, kind, role, model_id, effort, workflow_state=<item state passed via run context>, head_sha, wip_commit_sha, dirty_files, tool_calls_so_far=run.tool_calls, budget_consumed, provider_session=run.provider_session, handover_id, context_manifest)` — `budget_consumed` and `context_manifest` are supplied by the caller through optional keyword args `budget_consumed: dict[BudgetDimension, float] | None`, `context_manifest: ContextBundleRef | None` (empty defaults); (5) write `CHECKPOINT_CREATED` (payload: seq, kind, head_sha, wip_commit_sha, handover_id) in the same transaction as the row; (6) after commit fire `ON_AGENT_CHECKPOINT`.
+6. `latest(run_id)`/`latest_for_item(work_item_id)` return the newest row or `None`; `interrupted_runs(current_instance)` = `runs.by_state([RUNNING, PAUSED_FOR_APPROVAL], kernel_instance_not=current_instance)`.
+7. `build_handover(run, reason, partial_output)`: never reads transcripts; `task_summary` = item contract goal (or title); `current_state` = `f"{item.state}; {run.tool_calls} tool calls; branch {run.branch} @ {head}"`; `completed_work` = `partial_output.result` split into bullet lines + each finding summary; `modified_files` = `git.diff_names(worktree, base=<branch base sha>)`; `findings` = `partial_output.findings`; `hypotheses/risks/remaining_work/next_action` from `partial_output.handover` when present, else `remaining_work = [n.description for n in partial_output.next_actions]`, `next_action = remaining_work[0]` or `"Continue the task from the current worktree state"`; `decisions = []`, `proposed_decisions = partial_output.decisions`; `worktree_head = git.head(worktree)`, `branch = run.branch`, `from_run_id = run.id`, `from_model_id = run.model_id`, `reason` as given. With `partial_output=None` all lists are empty and `next_action` is the default sentence.
+8. `BoundaryAuditor.audit` returns, in input order, every changed file that is outside `worktree_path` (after `Path.resolve`), or matches any `forbidden_paths` glob, or matches no `allowed_paths` glob; matching uses `PurePosixPath.match` on worktree-relative forward-slash paths plus `**` semantics (`fnmatch` on the full relative path). Exception: files under `.ai/features/**/evidence/`, `.ai/bugs/**/evidence/`, `.ai/phases/**/evidence/` are allowed even though `.ai/**` is forbidden (ADR-0006 D-5 "except evidence folders").
+9. `audit` is pure (no git, no I/O beyond path resolution).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `AgentRunState`/`CheckpointKind` members are enumerated, Then the DOMAIN-MODEL §3 lists; `Checkpoint` is frozen; `runtime.models.AgentOutputStatus is agents.models.AgentOutputStatus` | `tests/runtime/test_models.py::test_runtime_enums_and_relocated_status` |
+| 2 | When a run is inserted and `set_state(COMPLETED)`, Then `ended_at` set and `by_state([COMPLETED])` returns it; unknown id → `RunNotFound` | `tests/runtime/test_repository.py::test_run_repository_state_updates` |
+| 3 | Given runs owned by instance A and B in RUNNING, When `by_state([RUNNING], kernel_instance_not="B")`, Then only A's | `tests/runtime/test_repository.py::test_by_state_excludes_current_instance` |
+| 4 | When a checkpoint row is UPDATEd directly, Then `sqlite3.IntegrityError`; `next_seq` increments | `tests/runtime/test_repository.py::test_checkpoints_immutable_and_sequenced` |
+| 5 | Given two handovers for an item (one closed), When `latest_open`, Then the open one; `close` sets `to_run_id` | `tests/runtime/test_repository.py::test_handover_latest_open_and_close` |
+| 6 | Given `tmp_game_repo` and a story, When `SandboxManager.create`, Then worktree at `.walk/worktrees/<run>` on branch `feat/story-0001-…`, guard hooks installed, path absolute | `tests/runtime/test_sandbox.py::test_create_worktree_with_branch_and_hooks` |
+| 7 | When `create` twice for the same item (two runs), Then one branch, two worktrees | `tests/runtime/test_sandbox.py::test_create_reuses_branch_across_runs` |
+| 8 | When `remove(run)`, Then worktree gone and branch kept; `remove(keep_branch=False)` deletes a non-protected branch | `tests/runtime/test_sandbox.py::test_remove_keeps_or_deletes_branch` |
+| 9 | Given a dirty worktree, When `checkpoint(run, PERIODIC)`, Then WIP commit `wip(STORY-0001): checkpoint 1` with trailer, `head_sha` = new HEAD, `checkpoints` row seq 1, `CHECKPOINT_CREATED`, `ON_AGENT_CHECKPOINT` fired after commit | `tests/runtime/test_checkpoints.py::test_checkpoint_makes_wip_commit_and_records` |
+| 10 | Given a clean worktree, Then no commit, `wip_commit_sha is None`, row still written | `tests/runtime/test_checkpoints.py::test_checkpoint_on_clean_worktree` |
+| 11 | When `checkpoint(run, HANDOFF, handover=h)`, Then `handovers` row, `.ai/handovers/HO-0001.md` exists with §22 sections, `HANDOVER_CREATED` written once, `run.handover_out_id` set | `tests/runtime/test_checkpoints.py::test_checkpoint_with_handover_writes_document` |
+| 12 | Given the ledger fails on `CHECKPOINT_CREATED`, Then no checkpoint row (commit on git may exist; replay-safe via idempotency key) | `tests/runtime/test_checkpoints.py::test_checkpoint_row_and_ledger_are_atomic` |
+| 13 | Given a `PARTIAL` output with findings and next actions, When `build_handover(run, "FALLBACK", output)`, Then fields populated from output + `git diff --name-only`, `next_action` = first next action, no transcript text | `tests/runtime/test_checkpoints.py::test_build_handover_from_output_and_git` |
+| 14 | When `build_handover(run, "RECOVERY", None)`, Then empty lists and the default `next_action` | `tests/runtime/test_checkpoints.py::test_build_handover_without_output` |
+| 15 | Given changed files `src/A.cs`, `.ai/agents/roles/qc.md`, `../outside.txt`, `.ai/features/FEAT-0001/evidence/log.txt`, `secrets.env`, When `audit` with defaults, Then violations `[".ai/agents/roles/qc.md", "../outside.txt", "secrets.env"]` | `tests/runtime/test_boundary.py::test_audit_flags_forbidden_and_outside_paths` |
+| 16 | Given `allowed_paths=["Assets/**"]` and a change in `Packages/x.json`, Then flagged | `tests/runtime/test_boundary.py::test_audit_enforces_allowed_paths` |
+| 17 | When `FakeGitProvider` is used for `checkpoint`, Then calls recorded and injected `GitError` propagates | `tests/runtime/test_checkpoints.py::test_checkpoint_propagates_git_errors` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: after the checkpoint test, `git -C <tmp repo> log --oneline feat/story-0001-… | head -3` showing a `wip(STORY-0001): checkpoint 1` commit (paste from test output).
+
+#### Notes
+- ADR-0002 D-4/D-5/D-7; ADR-0006 D-5/D-6 (`BoundaryAuditor` forbids `.ai/agents/**`, `.ai/approved/**`); ADR-0009 D-5; ADR-0013 D-6; ARCHITECTURE §5.2, §6 (forbidden paths).
+- Write-point note: ARCHITECTURE §4.3 lists `CHECKPOINT_CREATED` under `runtime.AgentExecutor`; it is written by `runtime.CheckpointManager` (same package) because the checkpoint row and the event must share a transaction. `HANDOVER_CREATED` is written by `MemoryManager.write_handover` (E01-S16) — not duplicated here.
+- `NEW NAME:` `RunNotFound`, `CheckpointNotFound`, `AgentRunRepository.by_state/for_item/set_state`, `CheckpointRepository`, `HandoverRepository.latest_open/close`, `WORKTREES_DIR`, `branch_name_for`, `DefaultCheckpointManager.latest_open_handover/latest_open_handover_doc/close_handover`, `DEFAULT_FORBIDDEN_PATHS`, `DEFAULT_ALLOWED_PATHS`, `FakeGitProvider`; `checkpoint()` optional kwargs `budget_consumed`, `context_manifest`.
+- Pitfall: `Checkpoint.workflow_state` is not on `AgentRun`; the executor passes it via the `workflow_state` kwarg — add it to the optional kwargs of `checkpoint()` and default to `IMPLEMENTING`? No: default is `ConfigError` when absent and `kind != START`; keep callers explicit.
+- Commit subject: `feat: add agent run persistence, worktree sandbox, checkpoints and boundary audit (E01-S25)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S26 — `ToolInvoker`: permission enforcement point, Claude `can_use_tool` bridge, Codex sandbox config
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §30, §31, §32 (`on_tool_*`), §81 (tool invocation), §91, §92, §137 (Inv. 7, 9)
+**Depends on:** E01-S15, E01-S25, E01-S07, E01-S12
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Every tool call an agent makes is decided by the kernel at one enforcement point: provider-native calls are authorised through the `RunSession.permission_authorizer` (Claude `can_use_tool` → `ToolInvoker.authorize`), kernel tools are dispatched only after authorisation and metering, `REQUIRE_APPROVAL` pauses the run until a decision or timeout, and Codex runs receive a policy-derived sandbox configuration.
+
+#### Scope
+- In: `DefaultToolInvoker.authorize/invoke/record_result/authorizer_for`, kernel-tool handler registry, `ApprovalWaiter` protocol + polling default, run pausing on approval, `CodexAdapter.configure_sandbox`, `ON_TOOL_BEFORE/AFTER/DENIED` firing, `TOOL_INVOKED`/`TOOL_DENIED` ledger writes, `TOOL_CALLS` metering.
+- Out: event-driven `ApprovalWaiter` registry, expiry sweeps and `walk approve/deny` CLI (E02-S11), kernel tool handlers for jira/git/unity (E03-S03/S08/S11 — none registered here), default rule set data (E02-S10), scrubbed env (E02-S01).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/tool_invoker.py` | create | `DefaultToolInvoker`, `KernelToolHandler`, `ApprovalWaiter`, `PollingApprovalWaiter`, `APPROVAL_TIMEOUT_S` |
+| `src/walk/runtime/__init__.py` | modify | re-exports |
+| `src/walk/model_router/adapters/codex/adapter.py` | modify | `CodexAdapter.configure_sandbox` |
+| `src/walk/model_router/adapters/codex/sandbox.py` | modify | `sandbox_for_session` |
+| `tests/runtime/test_tool_invoker.py` | create | — |
+| `tests/runtime/test_approval_wait.py` | create | — |
+| `tests/model_router/adapters/codex/test_sandbox.py` | create | — |
+
+#### Interface contract
+Protocol: INTERFACES.md §1.13 `ToolInvoker`. Deltas:
+```python
+KernelToolHandler = Callable[[ToolCallRequest], Awaitable[JsonDict]]
+APPROVAL_TIMEOUT_S = 24 * 3600                                           # ADR-0006 D-4 default
+class ApprovalWaiter(Protocol):
+    async def wait(self, approval_id: ApprovalRequestId, *, timeout_s: int) -> bool: ...   # True = approved; False = denied or expired
+class PollingApprovalWaiter:
+    def __init__(self, approvals: ApprovalRepository, clock: Clock, *, sleep: Callable[[float], Awaitable[None]], interval_s: float = 1.0) -> None: ...   # E02-S11 replaces with an event-based waiter; on timeout marks the request EXPIRED
+class DefaultToolInvoker:
+    def __init__(self, permissions: PermissionManager, tools: ToolRegistry, budgets: BudgetManager, hooks: HookManager, ledger: LedgerManager,
+                 runs: AgentRunRepository, checkpoints: CheckpointManager, waiter: ApprovalWaiter, clock: Clock, *,
+                 handlers: dict[ToolName, KernelToolHandler] | None = None, approval_timeout_s: int = APPROVAL_TIMEOUT_S, project_key: ProjectKey) -> None: ...
+    def register_handler(self, tool: ToolName, handler: KernelToolHandler) -> None: ...   # duplicate → ConfigError
+    def authorizer_for(self, run: AgentRun) -> Callable[[ToolCallRequest], Awaitable[PermissionDecision]]: ...   # binds run for RunSession.permission_authorizer
+    async def authorize(self, request: ToolCallRequest) -> PermissionDecision: ...
+    async def invoke(self, request: ToolCallRequest) -> JsonDict: ...
+    async def record_result(self, request: ToolCallRequest, result: JsonDict, *, duration_ms: int) -> None: ...   # post event for PROVIDER_NATIVE tools (called by the executor on TOOL_CALL_RESULT)
+# adapters/codex
+def sandbox_for_session(session: RunSession, *, network_enabled: bool = False, extra_writable: list[str] = ()) -> CodexSandboxConfig: ...
+class CodexAdapter:
+    def configure_sandbox(self, session: RunSession) -> CodexSandboxConfig: ...   # workspace-write, cwd = session.worktree_path, network off, no extra roots in MVP
+```
+
+#### Behavior
+1. `authorize(request)`: `decision = permissions.decide(request)`; the request's `tool` is first normalised via `ToolRegistry.identify(request.command)` when `tool == "bash"` and a CLI sub-tool matches (so `git push --force` is evaluated as `git-cli`); then:
+   - `ALLOW` → fire `ON_TOOL_BEFORE` (payload: tool, command, paths), write `TOOL_INVOKED` with `outcome="OK"`, `payload={"phase": "pre", "matched_rule": …}`; return.
+   - `DENY` → write `TOOL_DENIED` (`outcome="DENIED"`, reason, matched rule), fire `ON_TOOL_DENIED`; return.
+   - `REQUIRE_APPROVAL` → `approval = permissions.request_approval(request, kind="TOOL_CALL" | "PROTECTED_ACTION" (when the tool has a `protected_action`), approver=decision.matched_rule.approver or USER, requested_by=request.role, run_id, work_item_id)`; set run `PAUSED_FOR_APPROVAL`; `checkpoints.checkpoint(run, PAUSE)`; `approved = await waiter.wait(approval.id, timeout_s)`; set run `RUNNING`; approved → treated as `ALLOW` (rule above, payload includes `approval_request_id`), else `DENY("approval denied or expired")`.
+2. `invoke(request)` is for `kind == KERNEL` only (others → `ConfigError`): `decision = await authorize(request)`; `DENY` → raise `PermissionDenied(decision.reason)`; else `budgets.meter(BudgetSubject(project_key, phase_id=None, role=request.role, work_item_id, run_id), TOOL_CALLS, 1)` — `EXHAUSTED` → raise `BudgetExhausted` (the executor turns it into `BLOCKED_BUDGET`); dispatch to the registered handler (`ConfigError("no kernel handler for <tool>")` when absent); on return write `TOOL_INVOKED` (`phase="post"`, `duration_ms`, `outcome="OK"`), fire `ON_TOOL_AFTER`; on handler exception write `TOOL_INVOKED` with `outcome="FAILED"` and re-raise (converted to `ToolCrashed` when not already a `WalkError`).
+3. `record_result(request, result, duration_ms)` writes the `phase="post"` `TOOL_INVOKED` event (`outcome` from `result.get("ok", True)`), meters `TOOL_CALLS` by 1 on the run's subject, and fires `ON_TOOL_AFTER` with payload `{tool, paths, ok}` — the hook table's default `ON_CODE_CHANGED` attachment is E04-S04.
+4. `authorizer_for(run)` returns a coroutine function that fills `request.run_id`/`role`/`worktree_path` from the run when the adapter left them empty and delegates to `authorize`; the returned callable is what `RunSession.permission_authorizer` carries.
+5. `PollingApprovalWaiter.wait` polls `ApprovalRepository.get(id)` every `interval_s` using the injected `sleep`; returns on `APPROVED`/`DENIED`; after `timeout_s` sets the row to `EXPIRED` (via `PermissionManager.decide_approval(..., approve=False, by="kernel", note="timeout")`) and returns `False`.
+6. `configure_sandbox(session)` = `sandbox_for_session(session)` with `network_enabled=False` always in E01 (ADR-0006 D-5 keys network on `ToolSpec.requires_network`, which DOMAIN-MODEL does not define — see Notes); `CodexAdapter.run` uses `configure_sandbox` as its default `sandbox_factory`.
+7. Ledger write discipline: `APPROVAL_REQUESTED`/`APPROVAL_DECIDED` are written by `PermissionManager` (E01-S15); the invoker never duplicates them (WBS §3.5).
+8. All ledger events written here carry `run_id`, `work_item_id`, `tool`, `actor_role=request.role`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given rules allowing `edit` for SENIOR_DEV, When `authorize(edit request inside worktree)`, Then `ALLOW`, `ON_TOOL_BEFORE` fired, `TOOL_INVOKED(phase=pre)` written | `tests/runtime/test_tool_invoker.py::test_authorize_allow_fires_hook_and_logs` |
+| 2 | Given no rule for `write` for QC, Then `DENY`, `TOOL_DENIED` written, `ON_TOOL_DENIED` fired | `tests/runtime/test_tool_invoker.py::test_authorize_deny_logs_and_fires` |
+| 3 | Given `bash` with command `git push --force` and a DENY pattern on `git-cli`, Then the request is evaluated as `git-cli` and denied | `tests/runtime/test_tool_invoker.py::test_authorize_identifies_cli_subtool` |
+| 4 | Given `git.merge_protected` (protected action) and a waiter approving, When `authorize`, Then run went `PAUSED_FOR_APPROVAL` → `RUNNING`, a `PAUSE` checkpoint exists, `APPROVAL_REQUESTED` once, final decision `ALLOW` with `approval_request_id` | `tests/runtime/test_tool_invoker.py::test_require_approval_pauses_then_allows` |
+| 5 | Given the waiter returns False, Then `DENY` with reason containing `denied or expired` and `TOOL_DENIED` written | `tests/runtime/test_tool_invoker.py::test_require_approval_denied` |
+| 6 | Given a KERNEL tool with a registered handler, When `invoke`, Then handler called once, `TOOL_CALLS` metered by 1, `TOOL_INVOKED(phase=post)` with `duration_ms`, `ON_TOOL_AFTER` fired | `tests/runtime/test_tool_invoker.py::test_invoke_dispatches_meters_and_logs` |
+| 7 | Given a KERNEL tool denied, When `invoke`, Then `PermissionDenied` and handler not called | `tests/runtime/test_tool_invoker.py::test_invoke_denied_raises_without_dispatch` |
+| 8 | Given TOOL_CALLS budget exhausted, When `invoke`, Then `BudgetExhausted` and handler not called | `tests/runtime/test_tool_invoker.py::test_invoke_budget_exhausted_raises` |
+| 9 | Given a handler raising `RuntimeError`, Then `TOOL_INVOKED(outcome=FAILED)` and `ToolCrashed` | `tests/runtime/test_tool_invoker.py::test_invoke_handler_failure_logged_and_wrapped` |
+| 10 | When `invoke` with a PROVIDER_NATIVE request or an unregistered KERNEL tool, Then `ConfigError` | `tests/runtime/test_tool_invoker.py::test_invoke_rejects_non_kernel_or_unhandled` |
+| 11 | When `record_result(edit request, {"ok": true}, 42)`, Then `TOOL_INVOKED(phase=post, duration_ms=42)`, `TOOL_CALLS` metered, `ON_TOOL_AFTER` fired | `tests/runtime/test_tool_invoker.py::test_record_result_posts_event_and_meters` |
+| 12 | When `authorizer_for(run)` is called with a request lacking `run_id`, Then the decision was evaluated for `run.id`/`run.role` | `tests/runtime/test_tool_invoker.py::test_authorizer_for_binds_run` |
+| 13 | Given a PENDING approval that becomes APPROVED after two polls, When `PollingApprovalWaiter.wait`, Then `True` after two sleeps | `tests/runtime/test_approval_wait.py::test_polling_waiter_returns_on_decision` |
+| 14 | Given no decision within `timeout_s`, Then `False`, request `EXPIRED`, `APPROVAL_DECIDED` written with note `timeout` | `tests/runtime/test_approval_wait.py::test_polling_waiter_times_out_and_expires` |
+| 15 | When `configure_sandbox(session)`, Then `mode == "workspace-write"`, `cwd == worktree`, `network_enabled is False`, `writable_roots == []`; `build_exec_command` reflects it | `tests/model_router/adapters/codex/test_sandbox.py::test_configure_sandbox_defaults` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: transcript from `tests/runtime/test_tool_invoker.py::test_require_approval_pauses_then_allows` showing the `walk ledger query --run <id>` style event sequence (`APPROVAL_REQUESTED`, `CHECKPOINT_CREATED(PAUSE)`, `APPROVAL_DECIDED`, `TOOL_INVOKED`).
+
+#### Notes
+- ADR-0006 D-1 (enforcement points 1–3), D-3, D-4, D-5, D-7; ARCHITECTURE §4.1 (`ON_TOOL_*`, `ON_PROTECTED_ACTION_REQUESTED` fired by `PermissionManager.request_approval`), §4.2, §4.3 (`TOOL_INVOKED`, `TOOL_DENIED` write point).
+- `NEW NAME:` `KernelToolHandler`, `ApprovalWaiter`, `PollingApprovalWaiter`, `APPROVAL_TIMEOUT_S`, `DefaultToolInvoker.register_handler/authorizer_for/record_result`, `sandbox_for_session`, `CodexAdapter.configure_sandbox` (named in ADR-0006/ARCHITECTURE §4.2 but absent from INTERFACES §2.1).
+- Doc inconsistency to report: ADR-0006 D-5 conditions Codex network access on `ToolSpec.requires_network`, a field DOMAIN-MODEL §4.6 does not define. E01 keeps network off unconditionally; the architect should add the field or drop the clause.
+- Pitfall: `authorize` is awaited from inside the adapter's event stream (Claude callback). It must not call back into the adapter and must tolerate being awaited concurrently for different runs; keep per-run state on `AgentRun`, not on the invoker.
+- Commit subject: `feat: add tool invoker enforcement point with approval pausing and codex sandbox config (E01-S26)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
 <!-- CONTINUE -->

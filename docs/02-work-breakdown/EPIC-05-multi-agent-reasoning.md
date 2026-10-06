@@ -210,3 +210,254 @@ class DefaultDecisionManager:
 _pending_
 
 ---
+
+### E05-S02 — `Orchestrator.handle_escalation` routing (L1 debate, L2 PO run, L3 user approval)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §50, §51, §6.9, §92 (approval path), §137 (Inv. 7, 14), §138 (Infinite Debate — authority)
+**Depends on:** E05-S01, E02-S11
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Every persisted `Escalation` is routed by its `AutonomyLevel`: Level 1 opens a debate between the proposer and the category counterpart, Level 2 opens an arbitration-only debate for the PRODUCT_OWNER, Level 3 creates an `ApprovalRequest(approver=USER)`; a user approval turns the escalation into an ACCEPTED decision owned by USER and unblocks the work item.
+
+#### Scope
+- In: `EscalationRouter` (the `EscalationSink` implementation), `DefaultOrchestrator.handle_escalation`, participant selection by category, Level-3 approval resolution through `walk approve/deny`, degradation when no debate opener is wired yet.
+- Out: `DebateManager` implementation and the `debate_workflow` table (E05-S03); PO run scheduling and debate → USER escalation (E05-S05); conflict detection from review outputs (E05-S08).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/debate/participants.py` | create | `CATEGORY_COUNTERPART`, `select_participants` |
+| `src/walk/orchestrator/escalation.py` | create | `DebateOpener`, `EscalationRouter` |
+| `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.handle_escalation`, `DefaultOrchestrator.resolve_escalation_approval` `(verify module name, E01-S29)` |
+| `src/walk/orchestrator/commands.py` | modify | — (`approve`/`deny` handlers call `resolve_escalation_approval` when `approval.kind == "escalation"`) |
+| `src/walk/cli/composition.py` | modify | — (builds `EscalationRouter`, injects it as `sink` into `DefaultDecisionManager`) |
+| `tests/debate/__init__.py` | create | — |
+| `tests/debate/test_participants.py` | create | — |
+| `tests/orchestrator/test_escalation_router.py` | create | — |
+| `tests/orchestrator/test_escalation_approval.py` | create | — |
+
+#### Interface contract
+`Orchestrator.handle_escalation` verbatim `INTERFACES.md §1.1`. Deltas:
+```python
+# src/walk/debate/participants.py
+CATEGORY_COUNTERPART: dict[DecisionCategory, tuple[AgentRole, ...]] = {
+    DecisionCategory.TECH: (AgentRole.LEAD_DEV, AgentRole.ORCHESTRATOR),
+    DecisionCategory.DESIGN: (AgentRole.DESIGN_LEADER, AgentRole.ORCHESTRATOR),
+    DecisionCategory.PRODUCT: (AgentRole.PRODUCT_OWNER, AgentRole.ORCHESTRATOR),
+    DecisionCategory.QUALITY: (AgentRole.QC, AgentRole.LEAD_DEV),
+    DecisionCategory.ART: (AgentRole.ART_DIRECTOR, AgentRole.DESIGN_LEADER, AgentRole.ORCHESTRATOR),
+    DecisionCategory.RELEASE: (AgentRole.UA_RELEASE, AgentRole.ORCHESTRATOR),
+    DecisionCategory.PROCESS: (AgentRole.PROCESS_ARCHITECT, AgentRole.ORCHESTRATOR),
+}
+def select_participants(from_role: AgentRole, category: DecisionCategory, enabled_roles: list[AgentRole]) -> list[AgentRole]:
+    """[from_role, first enabled counterpart != from_role]; if none enabled -> ORCHESTRATOR; if that equals from_role -> LEAD_DEV.
+    Always two distinct roles, proposer first."""
+
+# src/walk/orchestrator/escalation.py
+class DebateOpener(Protocol):
+    """Structural subset of walk.debate.protocols.DebateManager.open (E05-S03); keeps S02 independent of S03."""
+    async def open(self, topic: str, category: DecisionCategory, participants: list[AgentRole], *, opened_by: AgentRole,
+                   work_item_id: WorkItemId | None, max_rounds: int | None = None) -> Debate: ...
+
+class EscalationRouter:
+    """Implements walk.decisions.protocols.EscalationSink."""
+    def __init__(self, escalations: EscalationRepository, decisions: DecisionManager, permissions: PermissionManager,
+                 workflow: WorkflowManager, enabled_roles: Callable[[], list[AgentRole]],
+                 debates: DebateOpener | None, clock: Clock) -> None: ...
+    async def __call__(self, escalation: Escalation) -> None: ...           # == route()
+    async def route(self, escalation: Escalation) -> None: ...
+    async def on_approval_decided(self, approval: ApprovalRequest) -> Decision | None: ...
+    async def on_resolved(self, escalation: Escalation, decision: Decision) -> None:
+        """EscalationRepository.resolve; if the work item is BLOCKED -> raise_event('unblock', payload {'blocker_resolved': True},
+        actor_role ORCHESTRATOR, source KERNEL)."""
+
+# DefaultOrchestrator
+async def handle_escalation(self, escalation: Escalation) -> None: ...                        # delegates to EscalationRouter.route
+async def resolve_escalation_approval(self, approval: ApprovalRequest) -> Decision | None: ...  # delegates to on_approval_decided
+```
+`ApprovalRequest.kind == "escalation"`; its stored request payload is `escalation.model_dump(mode="json")`.
+
+#### Behavior
+1. `route(escalation)` is idempotent: an escalation whose row json already has `routed_to`, or with `resolved_decision_id` set, is skipped.
+2. Level 1 (`MULTI_AGENT`): `participants = select_participants(escalation.from_role, category, enabled_roles())`; `debates.open(topic=escalation.question, category, participants, opened_by=escalation.from_role, work_item_id=escalation.work_item_id)`; row json gains `routed_to: "DEBATE"`, `debate_id`.
+3. Level 2 (`PO`): when `PRODUCT_OWNER ∈ enabled_roles()` → `debates.open(..., participants=[from_role, PRODUCT_OWNER], max_rounds=0)` (arbitration-only debate, E05-S03 Behavior 3), `routed_to: "PO_DEBATE"`; when PO is not enabled → handled as Level 3 and json carries `degraded_to_user: true`.
+4. Level 3 (`USER`): `permissions.request_approval(escalation, kind="escalation", approver=Approver.USER, requested_by=escalation.from_role, run_id=escalation.run_id, work_item_id=escalation.work_item_id)`; `EscalationRepository.set_approval(escalation.id, approval.id)`; `routed_to: "USER_APPROVAL"`.
+5. When `debates is None` (S03 not yet wired) Levels 1 and 2 degrade to Level 3 with `degraded_to_user: true`; nothing raises.
+6. Routing writes no ledger event and fires no hook: `DecisionManager.escalate` already wrote `ESCALATION_RAISED` and fired `ON_ESCALATION` before calling the sink (ARCHITECTURE §4.3 write point); routing facts live in the `escalations` row json (`routed_to`, `routed_at`, `debate_id` | `approval_request_id`, `degraded_to_user`).
+7. `on_approval_decided(approval)` for `kind == "escalation"`: APPROVED → build `Decision(id="DEC-0000", category, status=PROPOSED, topic=escalation.question, participants=[from_role, USER], positions=[DecisionPosition(role=from_role, model_id=None, position=recommendation or options[0], confidence=1.0)], evidence_ids, outcome=approval.note or recommendation or options[0], owner=USER, rationale="user approval <approval.id>", alternatives=options, affected_systems=[], related_work_items=[work_item_id] if any, autonomy_level=USER)` → `decisions.record(decision, by=Actor(role=USER))` → `on_resolved`; the PROPOSED decision named by the ledger payload `proposal_decision_id` (E05-S01) becomes `SUPERSEDED` and the new decision's `supersedes` points to it. DENIED or EXPIRED → that PROPOSED decision becomes `REJECTED`; the escalation stays unresolved; no `unblock`.
+8. `on_resolved` unblocks only when the item's current state is `BLOCKED`; `GuardRejected`/`UnknownTransition` from `unblock` is logged (structured `extra`) and swallowed — the decision stays recorded.
+9. `CommandConsumer` `approve`/`deny` handlers (E02-S11) call `resolve_escalation_approval` after `decide_approval` when `approval.kind == "escalation"`; other kinds are untouched.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given SENIOR_DEV, TECH, enabled roles `[ORCHESTRATOR, LEAD_DEV, SENIOR_DEV, QC]` When `select_participants` Then `[SENIOR_DEV, LEAD_DEV]` | `tests/debate/test_participants.py::test_counterpart_by_category` |
+| 2 | Given LEAD_DEV, DESIGN, DESIGN_LEADER not enabled When `select_participants` Then `[LEAD_DEV, ORCHESTRATOR]` | `tests/debate/test_participants.py::test_disabled_counterpart_falls_back_to_orchestrator` |
+| 3 | Given ORCHESTRATOR, PRODUCT, PO not enabled When `select_participants` Then `[ORCHESTRATOR, LEAD_DEV]` | `tests/debate/test_participants.py::test_always_two_distinct_roles` |
+| 4 | Given a Level-1 escalation and a fake opener When `route` Then `open` called once with two participants and the `work_item_id`, row json has `debate_id` | `tests/orchestrator/test_escalation_router.py::test_level1_opens_debate` |
+| 5 | Given a Level-2 escalation with PO enabled When `route` Then `open` called with `[from_role, PRODUCT_OWNER]` and `max_rounds=0` | `tests/orchestrator/test_escalation_router.py::test_level2_opens_arbitration_debate` |
+| 6 | Given a Level-2 escalation with PO disabled When `route` Then one `ApprovalRequest(kind="escalation", approver=USER)` pending and json `degraded_to_user` true | `tests/orchestrator/test_escalation_router.py::test_level2_without_po_degrades_to_user` |
+| 7 | Given a Level-3 escalation When `route` Then approval request persisted, `approval_request_id` set on the row, `APPROVAL_REQUESTED` ledger present | `tests/orchestrator/test_escalation_router.py::test_level3_requests_user_approval` |
+| 8 | Given `debates=None` and a Level-1 escalation When `route` Then approval request created, no exception | `tests/orchestrator/test_escalation_router.py::test_no_opener_degrades_to_user` |
+| 9 | Given an already routed escalation When `route` again Then no second debate or approval | `tests/orchestrator/test_escalation_router.py::test_route_is_idempotent` |
+| 10 | Given a pending escalation approval and a BLOCKED story When approved with note "Use addressables" Then ACCEPTED decision owner USER outcome "Use addressables", `resolved_decision_id` set, story back in its `resume_state`, proposal SUPERSEDED | `tests/orchestrator/test_escalation_approval.py::test_approval_records_decision_and_unblocks` |
+| 11 | Given the same approval denied Then no ACCEPTED decision, proposal `REJECTED`, story still BLOCKED | `tests/orchestrator/test_escalation_approval.py::test_denial_rejects_proposal_and_keeps_blocked` |
+| 12 | Given an `approve` command for an approval of kind `tool` When consumed Then `resolve_escalation_approval` not called | `tests/orchestrator/test_escalation_approval.py::test_non_escalation_approvals_untouched` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: after a fake run proposes a Level-3 decision: `walk approvals --pending --json` shows `kind == "escalation"`; `walk approve APV-0001 --note "Keep current economy"`; `walk decisions list --json` shows the new `ACCEPTED` row with `owner == "USER"`; `walk work show STORY-0001` shows the item back in its previous state.
+
+#### Notes
+- INTERFACES §1.1 docstring ("1→DebateManager.open, 2→PO run, 3→ApprovalRequest(USER)"); Level 2 is realised as an arbitration-only debate so that the PO run is scheduled by the same mechanism as debate runs (E05-S04/S05) and appears in `walk debates list`.
+- `NEW NAME:` `walk.debate.participants` (`CATEGORY_COUNTERPART`, `select_participants`), `walk.orchestrator.escalation` (`DebateOpener`, `EscalationRouter`), `DefaultOrchestrator.resolve_escalation_approval`, `ApprovalRequest.kind == "escalation"`, escalation row json keys `routed_to/routed_at/debate_id/degraded_to_user`, `max_rounds=0` arbitration-only semantics (defined in E05-S03).
+- Pitfall: the router runs inside `DecisionManager.escalate` after the escalation's own transaction committed; it opens its own `UnitOfWork`s and never re-enters `escalate`.
+- Commit subject: `feat: route escalations to debate, po arbitration or user approval (E05-S02)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S03 — `DebateManager` and `debate_workflow` table
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §45, §46, §44, §6.7, §137 (Inv. 5, 8), §138 (Infinite Debate — round limit, budget)
+**Depends on:** E05-S01
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A `Debate` aggregate with persisted positions runs through the `debate_workflow v1.0` table (OPEN → IN_ROUND → CONSENSUS_CHECK → RESOLVED | next round | ESCALATED_PO | ESCALATED_USER | ABANDONED) with a configurable round limit (default 3) and a per-debate budget; a resolved debate records an ACCEPTED decision through `DecisionManager.record` — replacing the E04-S05 `NotSupported("E05-S03")` stub.
+
+#### Scope
+- In: `walk.debate` protocols/repository/service/errors/guards/consensus, `debate_workflow.yaml`, `DebatePolicy` loaded from `policies.yaml`, `DebatePosition.agrees_with_role`, debate-aware `record()`.
+- Out: scheduling debate runs and producing positions from agent output (E05-S04); PO/USER escalation handling, budget exhaustion and `ESCALATION_RAISED` for debates (E05-S05); CLI (E05-S09).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/debate/__init__.py` | modify `(verify: created by E01-S18 with models.py)` | re-exports |
+| `src/walk/debate/models.py` | modify | `DebatePosition.agrees_with_role: AgentRole \| None`, `DebatePolicy` |
+| `src/walk/debate/protocols.py` | create | `DebateManager` (INTERFACES §1.9 verbatim) |
+| `src/walk/debate/errors.py` | create | `DebateStateError`, `NotParticipant`, `DuplicatePosition` |
+| `src/walk/debate/repository.py` | create | `DebateRepository`, `DebatePositionRepository` |
+| `src/walk/debate/consensus.py` | create | `compute_agreement`, `leading_position` |
+| `src/walk/debate/guards.py` | create | `register_debate_guards`, guards listed below |
+| `src/walk/debate/state_machine.py` | create | `DebateStateMachine`, `DEBATE_TABLE_PATH`, `load_debate_table` |
+| `src/walk/debate/service.py` | create | `DefaultDebateManager` |
+| `src/walk/workflow/tables/debate_workflow.yaml` | create | — |
+| `src/walk/decisions/service.py` | modify | `DefaultDecisionManager.record` (debate path replaces `NotSupported("E05-S03")`) |
+| `src/walk/agents/policy_loader.py` | modify | `PolicyLoader.load_debate_policy` |
+| `src/walk/agents/defaults/policies.yaml` | modify | — (top-level `debate:` block) |
+| `src/walk/cli/composition.py` | modify | — (wires `DefaultDebateManager`; passes it as `debates` to `EscalationRouter` when E05-S02 is merged; `KernelHandle.debates`) |
+| `tests/debate/test_models.py` | create | — |
+| `tests/debate/test_consensus.py` | create | — |
+| `tests/debate/test_guards.py` | create | — |
+| `tests/debate/test_table.py` | create | — |
+| `tests/debate/test_service_lifecycle.py` | create | — |
+| `tests/debate/test_repository.py` | create | — |
+| `tests/decisions/test_service_record_debate.py` | create | — |
+| `tests/agents/test_policy_loader.py` | modify | — |
+
+#### Interface contract
+Protocol: `INTERFACES.md §1.9 DebateManager` verbatim. Table: `INTERFACES.md §3.5` plus two arbitration rows (Behavior 3). Deltas:
+```python
+# src/walk/debate/models.py
+class DebatePosition(WalkModel):            # DOMAIN-MODEL §4.8 fields +
+    agrees_with_role: AgentRole | None = Field(default=None, description="Participant whose position this one endorses; None = own distinct position")
+
+class DebatePolicy(WalkModel):
+    """Kernel defaults overridable by `.ai/agents/policies.yaml` top-level `debate:` block."""
+    max_rounds: int = Field(default=3, ge=0, le=10)
+    consensus_threshold: float = Field(default=0.75, ge=0.5, le=1.0)
+    cost_usd: float = Field(default=5.0, gt=0)
+
+# src/walk/debate/consensus.py
+def leading_position(positions: list[DebatePosition]) -> DebatePosition | None:
+    """Position with most endorsements (own + others' agrees_with_role == its role); ties → highest confidence, then earliest `at`."""
+def compute_agreement(positions: list[DebatePosition], participants: list[AgentRole]) -> float:
+    """(1 + number of positions whose agrees_with_role == leader.role) / len(participants); 0.0 when no positions."""
+
+# src/walk/debate/guards.py — registered via walk.workflow.guards.register_guard; names used by debate_workflow.yaml
+# participants_at_least_two, budget_available (reused from E01-S09), role_in_participants, round_matches, all_positions_in,
+# agreement_at_threshold, round_below_max, round_at_max, po_enabled, po_disabled, arbitration_only,
+# po_output_completed_with_decision, budget_exhausted_or_user
+def register_debate_guards() -> None: ...
+# payload keys read: agreement (float), po_enabled (bool), role, round, positions_in (int), output_status, has_decision, budget_ok, by_user
+
+# src/walk/debate/state_machine.py
+DEBATE_TABLE_PATH: Path            # TABLES_DIR / "debate_workflow.yaml"
+def load_debate_table() -> TransitionTable: ...
+class DebateStateMachine:          # the E01-S11 generic engine instantiated with DebateState (constructor verified by E05-X01 item 5)
+    def transition_for(self, state: DebateState, event: str, debate: Debate, ctx: TransitionContext) -> Transition: ...
+
+# src/walk/debate/service.py
+class DefaultDebateManager:
+    def __init__(self, repo: DebateRepository, positions: DebatePositionRepository, decisions: DecisionManager,
+                 budgets: BudgetManager, ledger: LedgerManager, hooks: HookManager, ids: IdFactory, clock: Clock,
+                 policy: DebatePolicy, po_enabled: Callable[[], bool]) -> None: ...
+    async def get(self, debate_id: DebateId) -> Debate: ...
+    async def list(self, *, states: list[DebateState] | None = None, work_item_id: WorkItemId | None = None) -> list[Debate]: ...
+    async def positions_for(self, debate_id: DebateId, round: int | None = None) -> list[DebatePosition]: ...
+
+# src/walk/agents/policy_loader.py
+def load_debate_policy(self) -> DebatePolicy: ...   # defaults block merged with project `debate:` block
+```
+`DebateRepository(Repository[Debate])` → table `debates` (columns + json); `DebatePositionRepository` → `debate_positions`; `by_state(states)`, `for_item(work_item_id)`, `for_round(debate_id, round)`.
+
+#### Behavior
+1. `open(topic, category, participants, *, opened_by, work_item_id, max_rounds=None)`: validates `len(set(participants)) >= 2` (`DebateStateError` otherwise, except Behavior 3); allocates `DBT-NNNN` (`IdFactory`, prefix `DBT`, width 4); `max_rounds = max_rounds if not None else policy.max_rounds`; `consensus_threshold = policy.consensus_threshold`; `BudgetManager.ensure(BudgetScope.TASK, debate.id, BudgetPolicy(per_task={REVIEW_LOOPS: max_rounds or 1, COST_USD: policy.cost_usd}))` → `budget_id`; persists OPEN; raises `start_round` → IN_ROUND, `round = 1`; in the same transaction ledger `DEBATE_OPENED{topic, category, participants, work_item_id, max_rounds}`; after commit fires `ON_DEBATE_OPENED` with payload `{"debate_id", "work_item_id", "participants"}`. Returns the IN_ROUND debate.
+2. `submit_position(position)`: debate must be IN_ROUND (`DebateStateError`), `position.role ∈ participants` (`NotParticipant`), `position.round == debate.round` (`DebateStateError`), no existing position for `(round, role)` (`DuplicatePosition`); `agrees_with_role` must be another participant or `None` (`DebateStateError`); `changed_from_previous` is computed by the service (`True` when the role's previous-round `position` text differs), never trusted from input; persists the row, ledger `DEBATE_POSITION{round, role, confidence, agrees_with_role}`, raises `position_submitted` (self-transition). When every participant has a position for the round → `close_round()` is invoked and its result returned.
+3. Arbitration-only debates (`max_rounds == 0`, opened by E05-S02 for Level 2): `open` persists OPEN then raises `escalate` directly: `OPEN → ESCALATED_PO` when `po_enabled()`, else `OPEN → ESCALATED_USER` (two extra table rows with guards `arbitration_only` + `po_enabled`/`po_disabled`); no positions are collected; `ON_ESCALATION` payload `{"debate_id", "to_level": 2|3, "category", "work_item_id"}`. The `ESCALATION_RAISED` ledger event for debate escalations is added in E05-S05.
+4. `close_round(debate_id)`: IN_ROUND → CONSENSUS_CHECK (`all_positions_in`), fires `ON_DEBATE_ROUND_COMPLETE{debate_id, round, agreement}`; `BudgetManager.consume(TASK, debate.id, REVIEW_LOOPS, 1)`; `agreement = compute_agreement(round positions, participants)`; then exactly one of: `consensus` (`agreement >= consensus_threshold`) → `resolve(outcome=leading.position, by=Actor(role=KERNEL), rationale=leading.reasoning)`; `next_round` (`round < max_rounds` and budget ok) → IN_ROUND with `round + 1`; `escalate` (`round >= max_rounds` or budget exhausted) → ESCALATED_PO when `po_enabled()` else ESCALATED_USER, firing `ON_ESCALATION` as in Behavior 3. `final_positions` is replaced by the latest round's positions on every `close_round`.
+5. `resolve(debate_id, outcome, *, by, rationale)`: allowed from CONSENSUS_CHECK (by KERNEL), ESCALATED_PO (by PRODUCT_OWNER) and ESCALATED_USER (by USER) — any other combination `DebateStateError`; builds `Decision(id="DEC-0000", category, status=PROPOSED, topic, participants, positions=[DecisionPosition(role, model_id, position, confidence) per final position], evidence_ids=union of positions' evidence_ids, outcome, owner=by.role, rationale, alternatives=[p.alternative for p in final_positions if p.alternative], affected_systems=[], related_work_items=[work_item_id] if set, autonomy_level=MULTI_AGENT|PO|USER by resolver, debate_id=debate.id)` → `decisions.record(decision, by=by)`; sets `decision_id`, `resolved_at`, state RESOLVED via `consensus`/`po_resolved`/`user_resolved`; ledger `DEBATE_RESOLVED{decision_id, resolved_by, rounds}`; fires `ON_DEBATE_RESOLVED{debate_id, decision_id, work_item_id}`.
+6. `abandon(debate_id, reason)`: any non-terminal state → ABANDONED (guard `budget_exhausted_or_user`: payload `by_user` or `budget_ok == False`); ledger `DEBATE_RESOLVED{outcome: "ABANDONED", reason}`; no decision; fires no `ON_DEBATE_RESOLVED`.
+7. `DefaultDecisionManager.record` (E04-S05 Behavior 1 extended): when `decision.debate_id` is set the actor must be `KERNEL`, `PRODUCT_OWNER` or `USER`; any other role → `AuthorityViolation`; `KERNEL` without `debate_id` → `AuthorityViolation` (epic planning decision).
+8. Every state change goes through `DebateStateMachine` + the table; `PHASE_TRANSITION`-style ledger events are not written for debates (`DEBATE_*` kinds only, ARCHITECTURE §4.3). The debate row (`state`, `round`, `json`), the position row and the ledger event are committed in one `UnitOfWork`; hooks fire after commit.
+9. `load_debate_table()` validates every guard name against the registry; `register_debate_guards()` is called at import of `walk.debate.service` and is idempotent.
+10. `policies.yaml` `debate:` block: `{max_rounds: 3, consensus_threshold: 0.75, cost_usd: 5.0}`; project values outside the field bounds → `ConfigError`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `debate_workflow.yaml` loads Then 13 rows: the 11 INTERFACES §3.5 rows plus `OPEN→ESCALATED_PO` and `OPEN→ESCALATED_USER` (`escalate`), version `1.0` | `tests/debate/test_table.py::test_debate_workflow_matches_interfaces_plus_arbitration_rows` |
+| 2 | Given a YAML row naming an unregistered guard When loaded Then `ConfigError` | `tests/debate/test_table.py::test_unknown_guard_rejected` |
+| 3 | Given positions A(own), B(agrees A), C(own) with participants [A,B,C] When `compute_agreement` Then `2/3`; leader A | `tests/debate/test_consensus.py::test_agreement_counts_endorsements_of_leader` |
+| 4 | Given two own positions with confidences 0.9/0.6 Then leader is the 0.9 one and agreement `0.5` | `tests/debate/test_consensus.py::test_tie_breaks_by_confidence` |
+| 5 | For each guard, Given payload true/false Then ok/not ok with reason (parametrised) | `tests/debate/test_guards.py::test_debate_guards_evaluate_payload_keys` |
+| 6 | When `open("ECS or MonoBehaviour", TECH, [LEAD_DEV, SENIOR_DEV], opened_by=SENIOR_DEV, work_item_id=STORY-0001)` Then `DBT-0001` IN_ROUND round 1, budget `TASK:DBT-0001:REVIEW_LOOPS` limit 3, `DEBATE_OPENED` written, `ON_DEBATE_OPENED` fired once | `tests/debate/test_service_lifecycle.py::test_open_starts_round_one_with_budget` |
+| 7 | When `open` with one participant Then `DebateStateError` and nothing persisted | `tests/debate/test_service_lifecycle.py::test_open_requires_two_participants` |
+| 8 | Given IN_ROUND When QC (not a participant) submits Then `NotParticipant`; wrong round Then `DebateStateError`; same role twice Then `DuplicatePosition` | `tests/debate/test_service_lifecycle.py::test_submit_position_validations` |
+| 9 | Given both participants submit, second agreeing with first When the second `submit_position` Then `close_round` ran: state RESOLVED, `DEBATE_RESOLVED` written, decision `ACCEPTED` with `debate_id`, `owner == KERNEL`, `autonomy_level == MULTI_AGENT`, `.ai/decisions/DEC-0001.md` exists, `ON_DEBATE_ROUND_COMPLETE` then `ON_DEBATE_RESOLVED` fired | `tests/debate/test_service_lifecycle.py::test_consensus_resolves_and_records_decision` |
+| 10 | Given both disagree in round 1 (max_rounds 3) When closed Then IN_ROUND round 2, `REVIEW_LOOPS` consumed 1, `final_positions` has 2 entries | `tests/debate/test_service_lifecycle.py::test_no_consensus_opens_next_round` |
+| 11 | Given disagreement at round == max_rounds and `po_enabled()` True When closed Then ESCALATED_PO and `ON_ESCALATION` payload `to_level == 2` | `tests/debate/test_service_lifecycle.py::test_round_limit_escalates_to_po` |
+| 12 | Given the same with `po_enabled()` False Then ESCALATED_USER and `to_level == 3` | `tests/debate/test_service_lifecycle.py::test_round_limit_escalates_to_user_without_po` |
+| 13 | Given `open(..., max_rounds=0)` with PO enabled Then state ESCALATED_PO immediately, no positions, `ON_ESCALATION` fired | `tests/debate/test_service_lifecycle.py::test_arbitration_only_debate_skips_rounds` |
+| 14 | Given ESCALATED_PO When `resolve(by=Actor(PRODUCT_OWNER))` Then RESOLVED, decision owner PRODUCT_OWNER level PO; `resolve(by=Actor(SENIOR_DEV))` Then `DebateStateError` | `tests/debate/test_service_lifecycle.py::test_resolve_authority_by_state` |
+| 15 | Given IN_ROUND When `abandon(reason="user")` with `by_user` Then ABANDONED, no decision, `DEBATE_RESOLVED` outcome ABANDONED | `tests/debate/test_service_lifecycle.py::test_abandon_without_decision` |
+| 16 | Given a position in round 2 whose text differs from the role's round-1 text Then stored `changed_from_previous == True` | `tests/debate/test_service_lifecycle.py::test_changed_from_previous_computed` |
+| 17 | Given a `Decision(debate_id="DBT-0001")` When `record(by=Actor(KERNEL))` Then ACCEPTED; `by=Actor(LEAD_DEV)` Then `AuthorityViolation`; no `debate_id` and `by=Actor(KERNEL)` Then `AuthorityViolation` | `tests/decisions/test_service_record_debate.py::test_record_debate_path_actors` |
+| 18 | Given repository round trips for `Debate` and `DebatePosition` Then equal after reload; `for_round` returns only that round | `tests/debate/test_repository.py::test_repository_roundtrip_and_round_filter` |
+| 19 | Given project `policies.yaml` with `debate: {max_rounds: 2}` When `load_debate_policy` Then `max_rounds == 2`, other fields default; `max_rounds: 99` Then `ConfigError` | `tests/agents/test_policy_loader.py::test_debate_policy_merge_and_bounds` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `walk ledger query --kind DEBATE_OPENED --kind DEBATE_POSITION --kind DEBATE_RESOLVED --json` after the lifecycle test fixture DB shows the three kinds for `DBT-0001`; `sqlite3 .ai/kernel.db "select id,state,round from debates"`.
+
+#### Notes
+- ADR-0010 D-3/D-4; INTERFACES §1.9, §3.5; DOMAIN-MODEL §4.8, §6.2 (`debates`, `debate_positions`); ARCHITECTURE §5.5 (`max_rounds` default 3). Epic planning decisions: debate budgets at `BudgetScope.TASK` with `scope_id = <DebateId>`; guards registered through `walk.workflow.guards.register_guard`; table under `src/walk/workflow/tables/`.
+- `NEW NAME:` `DebatePosition.agrees_with_role` (WBS §6 attributes it to E05-S04 — the field is added here so `close_round` is testable; E05-S04 produces it from agent output), `DebatePolicy` + `policies.yaml` `debate:` block + `PolicyLoader.load_debate_policy`, `walk.debate.{consensus,guards,state_machine}`, errors `DebateStateError`/`NotParticipant`/`DuplicatePosition`, id prefix `DBT` (DOMAIN-MODEL §2 has no `DebateId` row), extra table rows `OPEN --escalate--> ESCALATED_PO|ESCALATED_USER` with guard `arbitration_only`, `DefaultDebateManager.get/list/positions_for`.
+- Parallelism: this story and E05-S02 both modify `src/walk/cli/composition.py`; merge S02 first (WBS §8 set `{S01→S02} ∥ {S03→S04→S05}` holds for all other files).
+- Pitfall: `resolve` must call `record` inside the debate transaction's `UnitOfWork` only if `DecisionManager.record` accepts an outer unit of work; otherwise record first, then commit the debate state — never leave a RESOLVED debate without `decision_id`.
+- Commit subject: `feat: add debate manager with lifecycle table and consensus (E05-S03)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---

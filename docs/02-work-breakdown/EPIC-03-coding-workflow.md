@@ -518,3 +518,340 @@ class JiraWorkProvider:
 
 #### Evidence (filled by implementer)
 _pending_
+
+---
+
+### E03-S06 — Full MVP constitutions and task templates
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §10.1, §10.6, §10.7, §10.8, §12, §23, §63, §65, §126, §137 (Invariants 1, 4)
+**Depends on:** E01-S17, E01-S18
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The four MVP constitutions (ORCHESTRATOR, LEAD_DEV, SENIOR_DEV, QC) carry the complete §10 role content in ADR-0013 form, and the six coding-workflow task templates (`IMPLEMENT`, `REVIEW`, `QC`, `PLAN`, `DESIGN`, `TRIAGE`) tell each role exactly which `AgentOutput` fields the kernel flows of E03-S08…S17 consume.
+
+#### Scope
+- In: full front matter + body sections for the four MVP roles; `tool_permissions` mirroring ADR-0006 D-6; `forbidden_actions`; QC "Working Guidance" with the §65 investigation list; template bodies for the six purposes; template/constitution consistency tests.
+- Out: `DEBATE` (E05), `ANALYSIS`/`RETRO` (E07) templates; PRODUCT_OWNER/DESIGN_LEADER constitutions (E05-S06); context-first/stale-verification instructions (E04-S14); `TRIAGE` structured verdict field (E03-S15 adds it and amends the template).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/defaults/orchestrator.md` | modify | — |
+| `src/walk/agents/defaults/lead_dev.md` | modify | — |
+| `src/walk/agents/defaults/senior_dev.md` | modify | — |
+| `src/walk/agents/defaults/qc.md` | modify | — |
+| `src/walk/agents/templates/IMPLEMENT.md.j2` | modify | — |
+| `src/walk/agents/templates/REVIEW.md.j2` | modify | — |
+| `src/walk/agents/templates/QC.md.j2` | modify | — |
+| `src/walk/agents/templates/PLAN.md.j2` | modify | — |
+| `src/walk/agents/templates/DESIGN.md.j2` | modify | — |
+| `src/walk/agents/templates/TRIAGE.md.j2` | modify | — |
+| `src/walk/agents/templates/_output_contract.md.j2` | create | — (shared partial: how to write `.walk/output.json`, included by every template) |
+| `tests/agents/test_defaults.py` | modify | — |
+| `tests/agents/test_templates_e03.py` | create | — |
+
+#### Interface contract
+Constitution file format: ADR-0013 D-2 (front matter) and D-3 (body sections, in order). Template rendering: `AgentManager.render_instructions(agent, item, purpose)` (INTERFACES §1.2) with the Jinja context `{agent, item, purpose, feature_doc_id, bug_doc_id, required_evidence, status_options, handover}`.
+
+Constitution content fixed by this story (front matter values; body elaborates):
+
+| Role | `authority.decision_scope` | `max_autonomy_level` | `may_approve` | `may_create_work` | `tool_permissions` (ADR-0006 D-6) | `forbidden_actions` (minimum) |
+|---|---|---|---|---|---|---|
+| ORCHESTRATOR | `[PROCESS]` | 1 | `[]` | `[EPIC, FEATURE, STORY, TASK]` | ALLOW `jira.create_*`, `jira.transition`, `work.plan`; DENY all file write tools; REQUIRE_APPROVAL(USER) `permissions.alter` | "decide gameplay or architecture", "approve or reject implementations", "close a feature" |
+| LEAD_DEV | `[TECH]` | 1 | `[review.approve, ARCHITECTURE_DIRECTION]` | `[TASK, BUG]` | as SENIOR_DEV + ALLOW `review.approve`, `review.reject`, `jira.create_task`; DENY `jira.close_feature`; REQUIRE_APPROVAL(USER) `git.merge_protected` | "approve own implementation", "close a feature without QC acceptance", "merge to a protected branch without approval" |
+| SENIOR_DEV | `[]` | 0 | `[]` | `[]` | ALLOW file tools in worktree, `bash` build/test/graph commands, `git.commit`; DENY `git.merge_protected`, `git.push_protected`, `jira.close_feature`, `review.approve`, `rm -rf`, `git push --force`, network fetch | "declare own work complete", "edit `.ai/agents/**`", "modify tests to make them pass" |
+| QC | `[]` | 0 | `[qc.approve]` | `[BUG]` | ALLOW read tools, `bash` test/run commands, `jira.create_bug`, `jira.reopen`, `qc.approve`, `qc.reject`; DENY all file write tools | "fix code", "close a bug without reproduction evidence", "approve without evidence" |
+
+Template output requirements (what each template MUST instruct; verified by rendering tests):
+
+| Purpose | Status options | Mandatory output fields |
+|---|---|---|
+| `PLAN` (FEATURE/IDEA) | `COMPLETED`, `BLOCKED`, `NEEDS_INPUT` | `new_tasks`: ≥ 1 `WorkItemDraft(kind=STORY, parent_id=<feature>)` each with full `StoryContract` (`goal`, `acceptance_criteria`, `required_evidence ⊇ [AUTOMATED_TEST]`, `owner_role=SENIOR_DEV`, `reviewer_role=LEAD_DEV`, `complexity`); `context_updates` on `<FEAT-id>` sections `Intent`, `Design Goal` |
+| `DESIGN` (FEATURE/DESIGN) | `COMPLETED`, `BLOCKED`, `REJECTED` | `context_updates` on `<FEAT-id>` section `Architecture` (REPLACE) plus `Affected Systems`, `Relevant Files`; `decisions` proposals for TECH choices |
+| `IMPLEMENT` (STORY/TASK/BUG) | `COMPLETED`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT`, `FAILED` | `changes` matching the real diff; `evidence` ≥ 1 `AUTOMATED_TEST`; `context_updates` (`Implementation Notes`, `Relevant Files`; for BUG: `Root Cause`, `Fix`, `Regression Risk`); `handover` when `PARTIAL`; `escalations` when `BLOCKED`/`NEEDS_INPUT`; never run `git commit`/`push` (the kernel commits) |
+| `REVIEW` (READY_FOR_REVIEW) | `APPROVED`, `REJECTED` | `findings` (≥ 1 when `REJECTED`, each with `affected_files`); `context_updates` on the parent doc section `Implementation Notes` (APPEND) when `REJECTED`; no `changes` |
+| `QC` (QC) | `APPROVED`, `REJECTED` | `evidence` ≥ 1 `QC_REPORT` (plus `REPRODUCTION_PROOF` when verifying a BUG); `new_bugs` ≥ 1 when `REJECTED`; `context_updates` on the parent doc `QC Notes`; no `changes` |
+| `TRIAGE` (BUG/DISCOVERY) | `COMPLETED`, `NEEDS_INPUT` | severity + owner verdict (structured field added by E03-S15); `context_updates` on `<BUG-id>` sections `Problem`, `Hypotheses` |
+
+#### Behavior
+1. Every default constitution validates through `ConstitutionLoader` (E01-S17) with `version: "1.0"`, all ADR-0013 D-3 body sections present in order, and no provider/model name anywhere (ADR-0013 D-5 lint).
+2. `Constitution.tool_permissions` of each role equals the D-6 row for that role expressed as `PermissionRule`s with `role` set; `PermissionManager.rules_for(role, extra=constitution.tool_permissions)` yields no widening relative to `permissions/defaults.yaml` (E02-S10 narrowing check passes).
+3. `Constitution.preferred_evidence`: LEAD_DEV `[AUTOMATED_TEST, REPRODUCIBLE_BENCHMARK, PROFILER_RESULT]`; SENIOR_DEV `[AUTOMATED_TEST, LOG]`; QC `[QC_REPORT, GAMEPLAY_RECORDING, SCREENSHOT, REPRODUCTION_PROOF, AUTOMATED_TEST]`; ORCHESTRATOR `[PROJECT_DATA]`.
+4. QC body `## Working Guidance` contains the six §65 questions verbatim and the §10.8 sentence "QC identifies existence and severity of issues; the business decision whether to fix belongs to PO/Design/Lead Dev".
+5. LEAD_DEV body `## Professional Bias` contains the §10.6 "guard against over-engineering" clause; `## Forbidden Actions` includes approving own implementation (Invariant 4).
+6. Every template includes `_output_contract.md.j2`, which states: the last action of the run is writing `<worktree>/.walk/output.json` conforming to `AgentOutput`; `status` must be one of the template's status options; `no_context_change_reason` is required when `context_updates` is empty; thinking/reasoning is never written to the file.
+7. Each template renders deterministically (same inputs → identical text) and contains the field list of the table above; unknown purpose → `ConfigError` (unchanged from E01-S18).
+8. `REVIEW` and `QC` templates instruct the agent to inspect `git diff <base>...HEAD` / run tests inside the worktree only, and state that the verdict is applied by the kernel (ADR-0006 consequence) — the agent never transitions work items itself.
+9. `IMPLEMENT` renders the §22 handover continuation block ("continue from `handover.next_action`") only when `handover` is present in the render context.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the four default constitutions When loaded Then all validate, body sections appear in ADR-0013 D-3 order and `version == "1.0"` | `tests/agents/test_defaults.py::test_mvp_constitutions_full_sections_in_order` |
+| 2 | Given each role When `tool_permissions` compared with ADR-0006 D-6 rows Then exact match on `(tool, effect, approver)` | `tests/agents/test_defaults.py::test_tool_permissions_match_adr_0006` |
+| 3 | Given each constitution When merged via `rules_for(role, extra=…)` Then no rule widens `permissions/defaults.yaml` | `tests/agents/test_defaults.py::test_constitution_permissions_do_not_widen_defaults` |
+| 4 | Given the QC constitution Then `Working Guidance` contains all six §65 questions | `tests/agents/test_defaults.py::test_qc_working_guidance_contains_section_65_questions` |
+| 5 | Given all four constitutions When scanned with the provider-name lint Then zero hits | `tests/agents/test_defaults.py::test_constitutions_have_no_provider_names` |
+| 6 | For each purpose in the table When rendered for a sample item Then the text lists every mandatory field and the exact status options | `tests/agents/test_templates_e03.py::test_templates_list_mandatory_fields_and_statuses` |
+| 7 | Given any template When rendered twice with the same input Then byte-identical | `tests/agents/test_templates_e03.py::test_templates_render_deterministically` |
+| 8 | Given `IMPLEMENT` with and without `handover` Then the continuation block is present only with a handover | `tests/agents/test_templates_e03.py::test_implement_template_handover_block_conditional` |
+| 9 | Given every template Then it includes the output-contract partial mentioning `.walk/output.json` and `no_context_change_reason` | `tests/agents/test_templates_e03.py::test_output_contract_partial_included_everywhere` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `walk doctor --strict` on a bootstrapped repo → `constitutions: ok (4 roles, no provider names)`; paste the rendered `REVIEW` template for `STORY-0001` (first 40 lines) captured by `tests/agents/test_templates_e03.py`.
+
+#### Notes
+- ADR-0013 D-2–D-5, ADR-0006 D-6, ADR-0004 D-4 (prompt assembly is kernel-owned), WBS.md §3.9.
+- `NEW NAME:` template partial `_output_contract.md.j2`; `may_approve` value `qc.approve` for QC (ADR-0013 example lists `review.approve` only).
+- Also read: E01-S18 is not yet written in `EPIC-01-kernel-core.md`; template file names follow WBS.md §3.9 (`src/walk/agents/templates/<purpose>.md.j2`). If E01-S18 lands them elsewhere, update this Files table in the same commit and say so in the commit body.
+- Pitfall: constitutions must not reference `fake-codex`/`fake-claude` either; the lint pattern (E02-S15 `PROVIDER_NAME_PATTERN`) catches `codex|claude|gpt|anthropic|openai`.
+- Commit subject: `feat: complete mvp constitutions and coding task templates (E03-S06)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E03-S07 — `TaskRouter` full table, `can_run_parallel`, cross-model review enforcement
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §10.1, §23, §29, §60, §63, §137 (Invariant 4)
+**Depends on:** E01-S29, E03-S06
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`TaskRouter` resolves every INTERFACES §4 row for FEATURE/STORY/TASK/BUG from `scheduled_states.yaml` (including fallback roles and contract-driven roles), refuses to route a review or QC to the role that implemented the item, decides pairwise parallel safety per §60, and the scheduler enforces §23 cross-model review mechanically with a user-resolvable escape hatch.
+
+#### Scope
+- In: `DefaultTaskRouter.route/can_run_parallel` complete; `implementer_of`; `contract_paths`; `TaskProfile` construction incl. `implementer_model_id`; scheduler-side cross-model check; `ON_READY_FOR_QC` builtin; `RoutingDecision.rejected` entry for cross-model deferral.
+- Out: raising `start_review`/`start_fix` on admission (E03-S13/S15); scheduler ordering and worktree parallelism (E03-S18); PHASE/DEBATE routing rows (E05/E07).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/orchestrator/router.py` | modify | `DefaultTaskRouter.route`, `DefaultTaskRouter.can_run_parallel`, `DefaultTaskRouter.implementer_of`, `contract_paths` |
+| `src/walk/orchestrator/scheduler.py` | modify | `Scheduler.check_cross_model` |
+| `src/walk/orchestrator/errors.py` | modify | `CrossModelReviewUnsatisfiable(GuardRejected)` |
+| `src/walk/model_router/service.py` | modify | — (`DefaultModelRouter.select` appends `(model_id, "cross_model_review")` to `RoutingDecision.rejected` when the implementer model is deferred) |
+| `src/walk/hooks/builtins.py` | modify | `builtin.qc_cross_model` (on `ON_READY_FOR_QC`) |
+| `tests/orchestrator/test_router.py` | create | — |
+| `tests/orchestrator/test_cross_model.py` | create | — |
+| `tests/model_router/test_select_cross_model.py` | create | — |
+| `tests/hooks/test_builtins_ready_for_qc.py` | create | — |
+
+#### Interface contract
+See `INTERFACES.md` §1.1 `TaskRouter` (`route`, `can_run_parallel`) and §4 routing table; `RouteDecision`, `TaskProfile` (DOMAIN-MODEL §4.10). Additions:
+
+```python
+class DefaultTaskRouter:
+    def __init__(self, scheduled_states: Path, agents: AgentManager, runs: AgentRunRepository, workflow: WorkflowManager) -> None: ...
+    def route(self, item: WorkItem, state: WorkItemState) -> RouteDecision: ...
+    def can_run_parallel(self, a: WorkItem, b: WorkItem) -> bool: ...
+    async def implementer_of(self, item: WorkItem) -> tuple[AgentRole, ModelId] | None:
+        """(role, model_id) of the latest run with purpose IMPLEMENT on `item` (for FEATURE: over its children); None when no such run."""
+
+def contract_paths(item: WorkItem) -> set[str]:
+    """Repo-relative paths mentioned in contract.goal/acceptance_criteria/constraints/description matching PATH_PATTERN."""
+
+class Scheduler:
+    def check_cross_model(self, route: RouteDecision, routing: RoutingDecision) -> None:
+        """Raises CrossModelReviewUnsatisfiable when route.cross_model_review and routing.model_id == route.profile.implementer_model_id."""
+```
+
+`PATH_PATTERN = r"(?:Assets|Packages|ProjectSettings|src|tests)/[\w./-]+\.(?:cs|asmdef|prefab|unity|asset|json|yaml|md|py)"` (module constant in `router.py`).
+
+#### Behavior
+1. `route` reads `scheduled_states.yaml` (E01-S10): `role` literal, or `contract.owner_role` / `contract.reviewer_role` resolved from the item's `StoryContract`; `fallback_role` is used when the primary role is not in `AgentManager.list_roles()` (DISCOVERY → ORCHESTRATOR in MVP). `(kind, state)` without a row → `UnknownTransition`-like `ConfigError("no scheduled role for …")`.
+2. `RouteDecision.profile` = `TaskProfile(required_capabilities = purpose defaults {IMPLEMENT: [CODING, TOOL_USE], REVIEW: [REVIEW, CODING], QC: [REVIEW, TOOL_USE], PLAN: [PLANNING], DESIGN: [ARCHITECTURE], TRIAGE: [REVIEW]}, required_tools = RuntimePolicy.allowed_tools ∩ ToolRegistry, required_skills = contract.required_skills, estimated_context_tokens = 0, risk = item.risk, implementer_model_id = implementer_of(item)[1] for purposes REVIEW/QC else None)`. `RouteDecision.cross_model_review = RuntimePolicy(role).model_policy.cross_model_review`.
+3. Invariant 4: for purposes `REVIEW`/`QC`, if the resolved role equals `implementer_of(item)[0]` → `PermissionDenied("reviewer role equals implementer role")`; `route` is pure apart from the repository lookup and never mutates the item.
+4. `can_run_parallel(a, b)` is `False` when: `a.id == b.id`; `b.id ∈ a.contract.dependencies` or vice versa (transitively through one level of parents is not required); both have the same ancestor FEATURE and `contract_paths(a) ∩ contract_paths(b)` is non-empty; `a.branch == b.branch` (both non-None); either item is a BUG whose `related_feature_id` equals the other's ancestor FEATURE and the other is in `IMPLEMENTING` (a fix and a story on the same feature branch never run together). Otherwise `True`. Symmetric.
+5. `Scheduler.check_cross_model` runs after `ModelRouter.select` and before `AgentExecutor.start` for `REVIEW`/`QC` routes: same model as implementer and `cross_model_review=True` → `CrossModelReviewUnsatisfiable`. The scheduler then (a) writes telemetry counter `scheduler.cross_model_unsatisfiable`, (b) creates one `ApprovalRequest(kind="ESCALATION", approver=USER, payload={"reason": "cross_model_review_unsatisfiable", "work_item_id", "implementer_model_id"})` per `(item, state_version)` (idempotent via `schedule:` key suffix `:cross_model`), and (c) skips the item this tick. When that request is APPROVED, the next tick routes with `cross_model_review=False` for this item and the `start_review` guard receives `cross_model_review=False` (E03-S13). DENIED → item stays; user may `walk policy set-model`.
+6. `DefaultModelRouter.select` (INTERFACES §5.3 step 3): when the implementer model is deferred and another candidate wins, `RoutingDecision.rejected` contains `(implementer_model_id, "cross_model_review")` so the `MODEL_SELECTED` ledger payload documents the §23 preference.
+7. `builtin.qc_cross_model` (`ON_READY_FOR_QC`, required, priority 20): asserts `implementer_of(item)` resolves for STORY/TASK/BUG (fails closed with `HookFailed("no implementer run")`); for FEATURE it is a no-op when the feature has no child runs; writes payload key `implementer_model_id` into `ctx.payload` for diagnostics. It does not schedule anything (the scheduler does on the next tick).
+8. `implementer_of` for FEATURE returns the latest IMPLEMENT run across its child STORY/TASK items and related BUGs; the QC run for a feature therefore prefers a model different from the most recent implementer.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | For every FEATURE/STORY/TASK/BUG row of INTERFACES §4 When `route(item, state)` Then role and purpose match the table | `tests/orchestrator/test_router.py::test_route_matches_interfaces_routing_table` |
+| 2 | Given DESIGN_LEADER not in `list_roles()` When `route(FEATURE, DISCOVERY)` Then ORCHESTRATOR/DESIGN | `tests/orchestrator/test_router.py::test_route_uses_fallback_role_when_role_disabled` |
+| 3 | Given a STORY whose contract `owner_role=LEAD_DEV` and `reviewer_role=LEAD_DEV` with an IMPLEMENT run by LEAD_DEV When `route(READY_FOR_REVIEW)` Then `PermissionDenied` | `tests/orchestrator/test_router.py::test_route_refuses_reviewer_equal_to_implementer` |
+| 4 | Given an IMPLEMENT run with model `fake-codex/sim` When `route(QC)` Then `profile.implementer_model_id == "fake-codex/sim"` and `cross_model_review` from policy | `tests/orchestrator/test_router.py::test_route_profile_carries_implementer_model` |
+| 5 | Given two stories of one feature mentioning `Assets/Scripts/Jump.cs` in both contracts When `can_run_parallel` Then `False`; disjoint paths → `True` | `tests/orchestrator/test_router.py::test_can_run_parallel_overlapping_contract_paths` |
+| 6 | Given `b.id ∈ a.contract.dependencies` Then `False` both directions | `tests/orchestrator/test_router.py::test_can_run_parallel_dependency_edge_symmetric` |
+| 7 | Given two items with the same `branch` Then `False` | `tests/orchestrator/test_router.py::test_can_run_parallel_same_branch_false` |
+| 8 | Given `cross_model_review=True`, implementer `fake-codex/sim`, select returns `fake-codex/sim` When `check_cross_model` Then `CrossModelReviewUnsatisfiable`, one ESCALATION approval created, no run started | `tests/orchestrator/test_cross_model.py::test_unsatisfiable_cross_model_creates_escalation_and_skips` |
+| 9 | Given that approval APPROVED When next tick Then review run starts with the same model and `start_review` payload `cross_model_review=False` | `tests/orchestrator/test_cross_model.py::test_approved_escalation_allows_same_model_review` |
+| 10 | Given `cross_model_review=False` and same model Then no error and run starts | `tests/orchestrator/test_cross_model.py::test_disabled_cross_model_allows_same_model` |
+| 11 | Given two healthy candidates and `implementer_model_id` equal to the preferred one When `select` Then the other model is chosen and `rejected` contains `(preferred, "cross_model_review")` | `tests/model_router/test_select_cross_model.py::test_select_defers_implementer_model_and_records_reason` |
+| 12 | Given a STORY with no IMPLEMENT run When `fire(ON_READY_FOR_QC)` Then `HookFailed("no implementer run")`; with a run → OK and payload has `implementer_model_id` | `tests/hooks/test_builtins_ready_for_qc.py::test_qc_cross_model_hook_requires_implementer_run` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: on the E01 gate fixture with both fakes, `walk ledger query --kind MODEL_SELECTED --item STORY-0001 --json` shows the REVIEW run's payload `rejected: [["fake-codex/sim", "cross_model_review"]]`.
+
+#### Notes
+- INTERFACES §4, §5.1 steps 5–6, §5.3 step 3; ARCHITECTURE §3.2 "Concurrency" and §7 Invariant 4; ADR-0009 D-4.
+- `NEW NAME:` `DefaultTaskRouter.implementer_of`, `contract_paths`, `PATH_PATTERN`, `Scheduler.check_cross_model`, `CrossModelReviewUnsatisfiable`, builtin hook id `builtin.qc_cross_model`, approval payload reason `cross_model_review_unsatisfiable`, purpose → capability defaults table (Behavior 2).
+- Also read: E01-S29 is not yet written; `router.py`/`scheduler.py`/`errors.py` under `src/walk/orchestrator/` are the assumed E01-S29 file names (ARCHITECTURE §1.3 layout). Adjust the Files table if E01-S29 differs and say so in the commit body.
+- Pitfall: `can_run_parallel` is evaluated against every running item each tick — keep it free of I/O (contract paths are computed from the in-memory item).
+- Commit subject: `feat: complete task router and cross-model review enforcement (E03-S07)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E03-S08 — `OutputApplier` full: new tasks/bugs → work provider, change reconciliation, kernel commit
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §55, §59, §63, §90, §91, §126, §137 (Invariants 3, 4, 9)
+**Depends on:** E01-S27, E03-S02, E03-S01
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Every structured `AgentOutput` intent is executed by the kernel in the ARCHITECTURE §3.2 step-6 order — context updates, evidence, decisions (held as proposals), new work items into the work provider, escalations, reconciled file changes committed by the kernel — after which the workflow event implied by `(kind, state, purpose, status)` is raised from a data table, with every external write permission-checked against the acting role and idempotent.
+
+#### Scope
+- In: `DefaultOutputApplier.apply` complete; `output_events.yaml` + loader; `reconcile_changes`; `commit_changes`; guard payload keys of WBS.md §3.4 written by the applier; `ON_STATE_TRANSITION`/`ON_TASK_BLOCKED`/`ON_COMMIT` builtins syncing the work provider; `raise_event` hook payload pass-through.
+- Out: QC-specific bug flow and `QC_RESULT`/`BUG_CREATED` ledger (E03-S14); review-specific effects (E03-S13); triage verdict (E03-S15); feature PLAN/DESIGN effects (E03-S09); `DecisionManager.propose` (E04-S05) and `Orchestrator.handle_escalation` (E05-S02).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/output_applier.py` | modify | `DefaultOutputApplier.apply`, `DefaultOutputApplier.reconcile_changes`, `DefaultOutputApplier.commit_changes`, `DefaultOutputApplier.guard_payload` |
+| `src/walk/runtime/output_events.py` | create | `OutputEventTable`, `load_output_event_table`, `OUTPUT_EVENTS_PATH` |
+| `src/walk/runtime/tables/output_events.yaml` | create | — |
+| `src/walk/runtime/models.py` | modify | `ChangeDiscrepancy`, `OutputApplyReport` |
+| `src/walk/workflow/service.py` | modify | — (`raise_event` merges `ctx.payload` into the transition hooks' `HookContext.payload`; E01-S09 rule 3 widened) |
+| `src/walk/workflow/repository.py` | modify | `WorkflowRepository.set_external_ref` |
+| `src/walk/hooks/builtins.py` | modify | `BuiltinHookDeps.work`, `BuiltinHookDeps.integrations`, `BuiltinHookDeps.workflow`; hooks `builtin.work_provider_sync`, `builtin.task_blocked_sync`, `builtin.commit_comment` |
+| `src/walk/cli/composition.py` | modify | — (wires the new deps; constructs `DefaultOutputApplier` with `ToolInvoker`, `IntegrationManager`, `GitProvider`) |
+| `tests/runtime/test_output_applier_full.py` | create | — |
+| `tests/runtime/test_output_events.py` | create | — |
+| `tests/hooks/test_builtins_work_provider.py` | create | — |
+| `tests/workflow/test_service_transitions.py` | modify | — |
+
+#### Interface contract
+See `INTERFACES.md` §1.13 `OutputApplier.apply(run, output) -> AppliedEffects` and `AppliedEffects`. Additions:
+
+```python
+class ChangeDiscrepancy(FrozenModel):
+    path: str
+    declared: Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None   # None = changed on disk but not declared
+    observed: Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None   # None = declared but not changed on disk
+
+class OutputApplyReport(FrozenModel):
+    effects: AppliedEffects
+    discrepancies: list[ChangeDiscrepancy]
+    denied_intents: list[str]            # e.g. "jira.create_bug", recorded as findings on the run
+    guard_rejection: str | None          # reason when the implied event was rejected
+
+class OutputEventTable(FrozenModel):
+    version: str
+    def event_for(self, kind: WorkItemKind, state: WorkItemState, purpose: str, status: AgentOutputStatus) -> str | None: ...
+
+def load_output_event_table(path: Path = OUTPUT_EVENTS_PATH) -> OutputEventTable: ...   # every (kind, state, event) must exist in the workflow tables → ConfigError otherwise
+
+class DefaultOutputApplier:
+    async def apply(self, run: AgentRun, output: AgentOutput) -> AppliedEffects: ...          # protocol method; stores the OutputApplyReport on run.output metadata
+    async def reconcile_changes(self, run: AgentRun, output: AgentOutput) -> list[ChangeDiscrepancy]: ...
+    async def commit_changes(self, run: AgentRun, item: WorkItem, output: AgentOutput) -> Sha | None: ...
+    def guard_payload(self, run: AgentRun, output: AgentOutput, evidence_kinds: list[EvidenceKind]) -> JsonDict: ...
+```
+
+`output_events.yaml` (`NEW NAME:`; `version: "1.0"`):
+
+```yaml
+rows:
+  - {kind: [STORY, TASK, BUG], state: IMPLEMENTING,    purpose: IMPLEMENT, status: COMPLETED,   event: submit_for_review}
+  - {kind: [STORY, TASK, BUG], state: IMPLEMENTING,    purpose: IMPLEMENT, status: PARTIAL,     event: partial}
+  - {kind: [STORY, TASK, BUG], state: IMPLEMENTING,    purpose: IMPLEMENT, status: [BLOCKED, NEEDS_INPUT], event: block}
+  - {kind: [STORY, TASK, BUG], state: LEAD_DEV_REVIEW, purpose: REVIEW,    status: APPROVED,    event: review_approved}
+  - {kind: [STORY, TASK, BUG], state: LEAD_DEV_REVIEW, purpose: REVIEW,    status: REJECTED,    event: review_rejected}
+  - {kind: [STORY, TASK],      state: QC,              purpose: QC,        status: APPROVED,    event: qc_passed}
+  - {kind: [STORY, TASK],      state: QC,              purpose: QC,        status: REJECTED,    event: qc_rejected}
+  - {kind: BUG,                state: QC,              purpose: QC,        status: APPROVED,    event: verified}
+  - {kind: BUG,                state: QC,              purpose: QC,        status: REJECTED,    event: reopen}
+  - {kind: BUG,                state: DISCOVERY,       purpose: TRIAGE,    status: COMPLETED,   event: triaged}
+  - {kind: FEATURE,            state: IDEA,            purpose: PLAN,      status: COMPLETED,   event: start_discovery}
+  - {kind: FEATURE,            state: IDEA,            purpose: PLAN,      status: [BLOCKED, NEEDS_INPUT], event: block}
+  - {kind: FEATURE,            state: DISCOVERY,       purpose: DESIGN,    status: COMPLETED,   event: discovery_done}
+  - {kind: FEATURE,            state: DESIGN,          purpose: DESIGN,    status: COMPLETED,   event: design_approved}
+  - {kind: FEATURE,            state: DESIGN,          purpose: DESIGN,    status: [BLOCKED, REJECTED], event: block}
+  - {kind: FEATURE,            state: QC,              purpose: QC,        status: APPROVED,    event: qc_passed}
+  - {kind: FEATURE,            state: QC,              purpose: QC,        status: REJECTED,    event: qc_rejected}
+```
+`status: FAILED` has no row anywhere (the run fails; no workflow event).
+
+Kernel commit message format (`NEW NAME:`): `<prefix>(<ITEM-ID>): <first line of output.result, ≤ 60 chars>` with prefix `impl` (IMPLEMENT on STORY/TASK), `fix` (IMPLEMENT on BUG), `design` (DESIGN), `plan` (PLAN); trailer `Walk-Work-Item: <ITEM-ID>` added by `GitProvider.commit_all`.
+
+#### Behavior
+1. Order inside `apply` (ARCHITECTURE §3.2 step 6), each step isolated so a failure in step *n* is recorded and later steps still run, except steps 7–8 which abort on `BoundaryViolation`:
+   1. `context_updates` → `MemoryManager.apply_updates(updates, actor=Actor(run.role, run.model_id, run.id), head=git.head(worktree), branch=run.branch)`; `memory_docs` = returned paths. Empty updates with `no_context_change_reason is None` and `status != FAILED` → `Finding(severity=WARNING, "no context change reason")` and telemetry counter `output.no_context_reason`.
+   2. `evidence` → `EvidenceManager.record(draft, actor, work_item_id=item.id, phase_id=item.phase_id, commit=head)` each; `evidence_ids` collected. A draft whose `path_or_uri` is outside the worktree or missing → skipped with a `Finding(RISK)`.
+   3. `decisions` → kept as `DecisionProposal`s on `run.output` (status PROPOSED, Invariant 5); `decision_ids = []` until E04-S05 wires `DecisionManager.propose`.
+   4. `new_tasks` → for each draft: `ToolInvoker.authorize(ToolCallRequest(run_id, role=run.role, tool="jira.create_task", kind=KERNEL, arguments=draft, worktree_path))`; `DENY` → intent skipped, listed in `denied_intents`, `Finding(RISK, "denied: jira.create_task")` (the `TOOL_DENIED` ledger is written by `ToolInvoker`); `ALLOW` → `WorkflowManager.create(draft, actor=run.role, phase_id=item.phase_id)` with `parent_id` defaulting to the run's item (FEATURE) or its ancestor FEATURE, then `IntegrationManager.with_idempotency(f"work.create:{new.id}", "work.create", lambda: work.create(new, idempotency_key=…))` → `WorkflowRepository.set_external_ref(new.id, ref.external_ref)`; `work.link(new, parent, "PARENT", idempotency_key=f"work.link:{new.id}:{parent.id}:PARENT")`. Drafts with `contract.reviewer_role == contract.owner_role` → `ConfigError` recorded as `Finding(RISK)` and skipped (Invariant 4 at creation).
+   5. `new_bugs` → same authorisation with tool `jira.create_bug`; `WorkflowManager.create(BugDraft, …)` sets `related_feature_id` (draft value or the run item's ancestor FEATURE), `found_in_run_id=run.id`, `found_against_commit=head`; provider `create` + `link(bug, feature, "RELATES")`. The `triage` auto-event and `BUG_CREATED` ledger belong to E03-S14; here the bug is created in `IDEA` only.
+   6. `escalations` → stored on `run.output`; `escalation_ids = []` (routing arrives in E05-S02); payload key `escalations_non_empty=True`.
+   7. `changes` → `reconcile_changes`: observed = `git.status(worktree)` ∪ `git.diff_names(worktree, base=run_start_head)` mapped to ADDED/MODIFIED/DELETED/RENAMED; declared = `output.changes`; every mismatch → `ChangeDiscrepancy` + `Finding(WARNING, "changes mismatch")`; telemetry counter `output.change_discrepancy` with the count. Observed paths matching `forbidden_paths` → `BoundaryViolation` (defence in depth after E01-S27's audit) → run `FAILED_BOUNDARY`, `git checkout -- .` + `git clean -fd` in the worktree, no commit, no workflow event.
+   8. `commit_changes`: observed changes non-empty → `git.commit_all(worktree, message, trailer_work_item=item.id, idempotency_key=f"git.commit:{run.id}:{latest_checkpoint_seq}")` → `commit_sha`; `COMMIT` ledger is written by `GitCliProvider` (E01-S23) and `ON_COMMIT` fires. Clean worktree → `commit_sha=None`. Roles whose rules DENY `git.commit` (QC, ORCHESTRATOR) with observed changes → `BoundaryViolation` as in 7 (read-only roles must not change files).
+   9. `guard_payload` → `{output_status, has_commit, evidence_kinds_present (recorded ∪ EvidenceManager.for_item kinds), handover_present, escalations_non_empty, reproduction_evidence (REPRODUCTION_PROOF present), implementer_role, implementer_model_id (run role/model for IMPLEMENT purposes), run_id}` plus purpose-specific keys added by E03-S09/S13/S14/S15.
+   10. `event = OutputEventTable.event_for(kind, state, purpose, status)`; `None` → `workflow_event=None`; else `WorkflowManager.raise_event(item.id, event, TransitionContext(actor_role=run.role, source=AGENT, run_id=run.id, payload=guard_payload ∪ {"handover": output.handover.model_dump() if any}))`.
+2. `GuardRejected` from step 10: if a `block` row exists for `(kind, state)` → raise `block` with payload `{"escalations_non_empty": True, "blocked_reason": reason}` and a synthesized `EscalationRequest(to_level=PO, category=PROCESS, question=f"output rejected by guard: {reason}")` stored on the run; otherwise the run ends `FAILED` with `failure_reason=f"guard_rejected: {reason}"` and `ON_TASK_FAILED` fires (ledger `ERROR` by `AgentExecutor`). `OutputApplyReport.guard_rejection` records the reason either way; the item never silently stays schedulable with a stale `state_version`.
+3. `PermissionDenied` from step 10 (role not allowed for the event, e.g. a SENIOR_DEV output mapped to `review_approved` because the table was mis-edited) is a kernel defect: run `FAILED`, ledger `ERROR`, telemetry counter `output.permission_denied`, no retry.
+4. `partial` → the `handover` payload reaches `builtin.handoff_checkpoint_and_handover` (E02-S08) through the widened `raise_event` hook payload; a `PARTIAL` output without `handover` → `OutputInvalid` is already rejected by E01-S27 validation (re-tested here).
+5. `builtin.work_provider_sync` (`ON_STATE_TRANSITION`, required, priority 30): `IntegrationManager.with_idempotency(f"work.transition:{item.id}:{transition_seq}", "work.transition", lambda: work.transition(item, to_state, idempotency_key=…))`; provider "no-op when equal" makes external-origin transitions safe (E03-S03 Notes). `TransientError` from the provider → `HookFailed`? No: provider sync is `LOG_AND_CONTINUE` for transient errors (counter `work_sync.transient`, retried by `WorkPoller.reconcile`), `FAIL_CLOSED` for `PermanentError`.
+6. `builtin.task_blocked_sync` (`ON_TASK_BLOCKED`, required, priority 30): `work.transition(item, BLOCKED)` + `work.comment(item, f"BLOCKED: {blocked_reason}\n{escalation questions}", idempotency_key=f"work.comment:{item.id}:{ledger_seq}")`.
+7. `builtin.commit_comment` (`ON_COMMIT`, default, `required=False`, priority 60): `work.comment(item, f"commit {sha[:7]}: {message}", idempotency_key=f"work.comment:{item.id}:{ledger_seq}")`.
+8. Everything in steps 4–6 and the hooks goes through `IntegrationManager.with_idempotency`; replaying `apply` for the same run (recovery) creates no duplicate work items, links, comments or commits.
+9. `AppliedEffects` is returned with `created_work_items` in creation order; `AgentRun.output` persists the `OutputApplyReport` under `run.output` metadata (`runs show` prints discrepancies and denied intents).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given `output_events.yaml` When loaded Then every `(kind, state, event)` exists in the corresponding workflow table and `FAILED` maps to `None` everywhere | `tests/runtime/test_output_events.py::test_output_event_table_consistent_with_workflow_tables` |
+| 2 | Given a row with event `nope` When loaded Then `ConfigError` naming the row | `tests/runtime/test_output_events.py::test_output_event_table_rejects_unknown_event` |
+| 3 | Given a SENIOR_DEV IMPLEMENT run with `COMPLETED`, one context update, one AUTOMATED_TEST evidence and a dirty worktree When `apply` Then memory doc written, evidence recorded, kernel commit `impl(STORY-0001): …` with trailer, `COMMIT` ledger, story `READY_FOR_REVIEW`, `AppliedEffects.commit_sha` set | `tests/runtime/test_output_applier_full.py::test_apply_implement_completed_commits_and_submits_for_review` |
+| 4 | Given declared `changes` differing from `git status` When `apply` Then two `ChangeDiscrepancy` rows, `Finding(WARNING)` on run, commit still made | `tests/runtime/test_output_applier_full.py::test_reconcile_changes_records_discrepancies` |
+| 5 | Given an observed change under `.ai/agents/` When `apply` Then run `FAILED_BOUNDARY`, worktree reverted, no commit, no transition | `tests/runtime/test_output_applier_full.py::test_forbidden_path_change_fails_boundary_without_commit` |
+| 6 | Given a QC run whose worktree has file changes When `apply` Then `BoundaryViolation` (QC may not change files) | `tests/runtime/test_output_applier_full.py::test_read_only_role_changes_rejected` |
+| 7 | Given an ORCHESTRATOR PLAN run with two STORY drafts When `apply` Then two stories created (IDEA, `parent_id` = feature), provider rows with `walk:<id>` labels, PARENT links, `created_work_items` ordered | `tests/runtime/test_output_applier_full.py::test_new_tasks_created_in_provider_with_parent_links` |
+| 8 | Given a SENIOR_DEV run with `new_bugs` When `apply` Then `TOOL_DENIED` ledger for `jira.create_bug`, no bug created, `denied_intents == ["jira.create_bug"]` | `tests/runtime/test_output_applier_full.py::test_new_bugs_denied_for_senior_dev` |
+| 9 | Given a QC run with `new_bugs` When `apply` Then BUG created in IDEA with `related_feature_id`, `found_in_run_id`, `found_against_commit`, provider RELATES link | `tests/runtime/test_output_applier_full.py::test_new_bugs_created_by_qc_with_provenance` |
+| 10 | Given a draft with `reviewer_role == owner_role` When `apply` Then skipped with `Finding(RISK)` and no item created | `tests/runtime/test_output_applier_full.py::test_draft_with_same_reviewer_and_owner_rejected` |
+| 11 | Given `PARTIAL` with handover When `apply` Then `partial` raised, `ON_AGENT_HANDOFF` builtin received `handover`, `HO-0001.md` written, `HANDOFF` checkpoint | `tests/runtime/test_output_applier_full.py::test_partial_output_passes_handover_to_hooks` |
+| 12 | Given `COMPLETED` without AUTOMATED_TEST evidence When `apply` Then `submit_for_review` guard rejected → `block` raised with synthesized escalation, item `BLOCKED`, `guard_rejection` set | `tests/runtime/test_output_applier_full.py::test_guard_rejection_blocks_item_with_reason` |
+| 13 | Given a QC APPROVED output on a STORY without QC_REPORT evidence When `apply` Then run `FAILED` with `failure_reason` starting `guard_rejected:` and `ERROR` ledger (no `block` row in QC) | `tests/runtime/test_output_applier_full.py::test_guard_rejection_without_block_row_fails_run` |
+| 14 | Given `apply` already executed for a run When `apply` again (recovery replay) Then no duplicate items, links, comments or commits | `tests/runtime/test_output_applier_full.py::test_apply_is_idempotent_on_replay` |
+| 15 | Given a committed transition When `ON_STATE_TRANSITION` fires Then `work.transition` called once with key `work.transition:<id>:<seq>`; firing again with the same seq → no provider call | `tests/hooks/test_builtins_work_provider.py::test_state_transition_syncs_provider_idempotently` |
+| 16 | Given `block` with reason When `ON_TASK_BLOCKED` fires Then provider status BLOCKED and one comment starting `BLOCKED:` | `tests/hooks/test_builtins_work_provider.py::test_task_blocked_syncs_status_and_comment` |
+| 17 | Given provider raising `ProviderUnavailable` When `ON_STATE_TRANSITION` fires Then transition remains committed, counter `work_sync.transient`, no `HookFailed` | `tests/hooks/test_builtins_work_provider.py::test_transient_provider_error_does_not_fail_closed` |
+| 18 | Given `raise_event` with `payload={"handover": …}` When transition hooks fire Then `HookContext.payload` contains `from`, `to`, `event` and `handover` | `tests/workflow/test_service_transitions.py::test_transition_hooks_receive_caller_payload` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: after a fake IMPLEMENT run on the E01 gate fixture — `git log --format='%s%n%(trailers)' story/STORY-0001-… -1` shows `impl(STORY-0001): …` + `Walk-Work-Item: STORY-0001`; `walk work show STORY-0001` shows `READY_FOR_REVIEW`; `cat .walk/work/LOCAL-2.md` front matter `status: READY_FOR_REVIEW`; `walk runs show RUN-… --json` includes `discrepancies: []`.
+
+#### Notes
+- ARCHITECTURE §3.2 step 6, §4.1 (`ON_STATE_TRANSITION`, `ON_TASK_BLOCKED`, `ON_COMMIT` rows), §4.3, §5.4; ADR-0006 D-2 (kernel-executed side effects; permission evaluated against the acting role), ADR-0006 consequence ("`AgentOutput.changes` must match the real diff"); ADR-0005 D-6; WBS.md §3.4, §3.5.
+- Ownership fix: E02-S08 lists `ON_STATE_TRANSITION → WorkProvider.transition` and `ON_TASK_BLOCKED` under E03-S03, while E03-S03 Notes assign them to E03-S08. They are implemented **here** (E03-S03 has no `hooks/builtins.py` in its Files table). E03-S01 Scope already assigns `ON_COMMIT → WorkProvider.comment` to E03-S08.
+- `NEW NAME:` `output_events.yaml` / `OutputEventTable` / `load_output_event_table` / `OUTPUT_EVENTS_PATH`; `ChangeDiscrepancy`, `OutputApplyReport`; `DefaultOutputApplier.reconcile_changes/commit_changes/guard_payload`; `WorkflowRepository.set_external_ref`; builtin ids `builtin.work_provider_sync`, `builtin.task_blocked_sync`, `builtin.commit_comment`; idempotency key `work.link:{from}:{to}:{kind}` (ARCHITECTURE §5.4 has none for links); kernel commit message format `<prefix>(<ID>): <summary>`; `BuiltinHookDeps.work/integrations/workflow`; payload keys `implementer_role`, `implementer_model_id`, `run_id`, `blocked_reason` written by the applier (WBS §3.4 lists the scheduler as the writer of `implementer_*` — the applier writes them for IMPLEMENT runs so later REVIEW/QC guards can read them from the transition history).
+- Also read: E01-S27 is not yet written; `src/walk/runtime/output_applier.py` and `models.py` are the assumed file names. E01-S27's "OutputApplier core" presumably hard-codes the IMPLEMENT rows; this story replaces that with the YAML table — delete the hard-coded mapping in the same commit.
+- Pitfall: `with_idempotency` joins the active `UnitOfWork` (E03-S03 rule 5). Steps 4–5 must each open their own UoW so a provider failure for the second draft does not roll back the first item.
+- Commit subject: `feat: apply agent output effects via work provider and kernel commits (E03-S08)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
