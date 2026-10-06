@@ -530,7 +530,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E10-S03 | Kernel store `$WALK_HOME/.improvement/` and kernel DB migrations | feat | E10-X01 | MEDIUM | TODO |
 | E10-S04 | Candidates and risk-tier review, `walk improvement candidates` | feat | E10-S03, E05-S01 | HIGH | TODO |
 | E10-S05 | `BehaviorVersion` registry, `rollout_workflow`, pins, changelog | feat | E10-S04, E02-S04 | HIGH | TODO |
-| E10-S06 | Promotion and pattern/anti-pattern registries | feat | E10-S03 | MEDIUM | TODO |
+| E10-S06 | Promotion and pattern/anti-pattern registries | feat | E10-S01, E10-S03 | MEDIUM | TODO |
 | E10-S07 | Retrospectives with narrative and PROCESS_ARCHITECT constitution | feat | E10-S01, E07-S08 | MEDIUM | TODO |
 | E10-S08 | Experiments: A/B by work-item hash and shadow evaluation | feat | E10-S05 | HIGH | TODO |
 | E10-S09 | Improvement metrics and report | feat | E10-S02, E09-S02 | MEDIUM | TODO |
@@ -542,7 +542,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E11-S03 | RC build pipeline for all targets | feat | E11-S02, E03-S11 | MEDIUM | TODO |
 | E11-S04 | Final QC on RC and rejection bugs | feat | E11-S03, E03-S15 | MEDIUM | TODO |
 | E11-S05 | Store metadata as approved artifacts | feat | E11-S01, E02-S12 | MEDIUM | TODO |
-| E11-S06 | Publishing integrations behind `store.publish` | feat | E11-S05, E02-S11 | HIGH | TODO |
+| E11-S06 | Publishing integrations behind `store.publish` | feat | E11-S02, E11-S04, E11-S05, E02-S11 | HIGH | TODO |
 | E11-S07 | Polish phase template | feat | E11-X01, E07-S05 | LOW | TODO |
 | E11-S08 | Epic gate: RC1 reject → RC2 release (e2e) | feat | E11-S04, E11-S06, E11-S07 | MEDIUM | TODO |
 | E11-R01 | Review E11 | docs | E11-S08 | MEDIUM | TODO |

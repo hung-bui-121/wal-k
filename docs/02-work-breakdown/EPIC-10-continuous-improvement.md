@@ -95,12 +95,12 @@ Assumptions made at planning time (E01-S18…S31, E03-S06…S20, E05–E09 stori
 4. `walk.persistence.atomic_write` exists (E01-S04) for non-`.ai/` writes used by `KernelImprovementStore` (E10-S03).
 5. The E07-S08 phase retrospective lives in `DefaultImprovementManager.phase_retrospective`, writes `.ai/improvements/RETRO-PHASE-NN.md` and a `retrospectives` row, and the `RETRO.md.j2` template exists (E01-S18, §3.9) — E10-S07 depends on all three `(verify)`.
 6. `src/walk/hooks/builtins.py` holds the E04-S13 improvement callables and `BuiltinHookDeps.improvement` (E07-S05); E10-S02/S07/S08 add callables there.
-7. `DefaultTaskRouter` is in `src/walk/orchestrator/router.py`, `DefaultOutputApplier` in `src/walk/runtime/applier.py`, `DefaultAgentExecutor` in `src/walk/runtime/executor.py` (E01-S27, E03-S07/S08) — E10-S07 and E10-S08 modify them.
+7. `DefaultTaskRouter` is in `src/walk/orchestrator/router.py`, `DefaultOutputApplier` in `src/walk/runtime/output_applier.py`, `DefaultAgentExecutor` in `src/walk/runtime/executor.py` (E01-S27, E03-S07/S08) — E10-S07 and E10-S08 modify them.
 8. `ImprovementReportQuery` is in `src/walk/telemetry/reports.py` (E09-S02) and `METRIC_QUERIES`/`compute_metrics` in `src/walk/telemetry/metrics.py` (E01-S06, E09-S06) — E10-S09 extends both.
 9. `DefaultLedgerManager(behavior_versions=…)` stamping (E09-S05) is wired from `KernelVersionPins` in `src/walk/cli/composition.py`; E10-S08 replaces the callable with an experiment-aware one.
 10. `ToolInvoker.register_handler` (E01-S26) is the registration mechanism for KERNEL tools; E10-S04 registers `improvement.candidate`/`improvement.review` from the composition root (improvement may not import `tools`/`runtime`, ARCHITECTURE §2.2).
 11. `DecisionManager.record(..., category=PROCESS)` accepts kernel-actor records for improvement decisions (E05-S01/S03) — E10-S04 records one decision per review.
-12. Shared-file coordination with E11 (runs in parallel, WBS §7.1): E10-S07 and E11-S01 both modify `story_workflow.yaml`, `src/walk/workflow/guards.py`, `src/walk/orchestrator/router.py` and `src/walk/runtime/applier.py`; record the merge-order rule from E10-S07 Notes in both epic files.
+12. Shared-file coordination with E11 (runs in parallel, WBS §7.1): E10-S07 and E11-S01 both modify `story_workflow.yaml`, `src/walk/workflow/guards.py`, `src/walk/orchestrator/router.py` and `src/walk/runtime/output_applier.py`; record the merge-order rule from E10-S07 Notes in both epic files.
 13. Record the rollout payload keys of E10-S05 in WBS §3.4 and every `NEW NAME:` item of E10 (header table plus each story's Notes) in WBS §6.
 
 #### Acceptance criteria
@@ -853,7 +853,7 @@ _pending_
 **Status:** TODO
 **Type:** feat
 **Requirements:** §110, §111, §112, §113, §119, §6.11, §137 (Inv. 9, 13)
-**Depends on:** E10-S03
+**Depends on:** E10-S01, E10-S03
 **Effort:** MEDIUM   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
@@ -989,7 +989,7 @@ The §101 Process Architect exists as a kernel-default role (constitution, polic
 | `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `analysis_done`; version bump, see Notes) |
 | `src/walk/workflow/__init__.py` | modify | re-export `AnalysisStep`, `analysis_labels`, `analysis_step_of`, `analysis_subject_of` |
 | `src/walk/orchestrator/router.py` | modify | `ANALYSIS_ROUTES`, `DefaultTaskRouter.route` (analysis rows) |
-| `src/walk/runtime/applier.py` | modify | `DefaultOutputApplier.__init__` (`on_analysis_output` parameter); `analysis_done` implied event |
+| `src/walk/runtime/output_applier.py` | modify | `DefaultOutputApplier.__init__` (`on_analysis_output` parameter); `analysis_done` implied event |
 | `src/walk/improvement/retrospectives.py` | create | `narrative_from_output`, `metrics_from_report`, `retrospective_id_for`, `NARRATIVE_LEVELS` |
 | `src/walk/improvement/protocols.py` | modify | `ImprovementManager.retrospective`, `ImprovementManager.attach_narrative` |
 | `src/walk/improvement/service.py` | modify | `DefaultImprovementManager.retrospective`, `.phase_retrospective` (narrative carrier), `.attach_narrative` |
@@ -1023,7 +1023,7 @@ def analysis_step_of(item: WorkItem) -> AnalysisStep | None: ...    # one label 
 # src/walk/orchestrator/router.py
 ANALYSIS_ROUTES: dict[AnalysisStep, tuple[AgentRole, str]] = {AnalysisStep.RETRO: (AgentRole.PROCESS_ARCHITECT, "RETRO")}
 
-# src/walk/runtime/applier.py — DefaultOutputApplier constructor addition
+# src/walk/runtime/output_applier.py — DefaultOutputApplier constructor addition
 on_analysis_output: Callable[[WorkItem, AgentOutput], Awaitable[None]] | None = None
 
 # src/walk/improvement/retrospectives.py
@@ -1092,7 +1092,7 @@ CLI: `walk improvement retro SUBJECT_ID [--narrative] [--json]` — level inferr
 #### Notes
 - §101 "SHOULD support a specialized role"; ADR-0013 D-1–D-5, D-7; ADR-0008 D-7 (agents cannot write behaviour); Invariant 5 (`decision_scope: [PROCESS]` with `max_autonomy_level: 1` — PA proposes, never records accepted decisions alone).
 - Placement correction to the header `NEW NAME:` table: the label helpers live in `walk.workflow.analysis` (not `walk.improvement.retrospectives`) because `workflow.guards` and `runtime.applier` may not import `walk.improvement` (ARCHITECTURE §2.2); this mirrors E11-S01's `walk.workflow.release`.
-- Shared files with E11-S01 (parallel epic): `story_workflow.yaml`, `workflow/guards.py`, `workflow/__init__.py`, `orchestrator/router.py`, `runtime/applier.py`, `tests/workflow/test_tables.py`. Merge-order rule: whichever of E10-S07 / E11-S01 merges first sets `story_workflow` `version: "1.1"`; the second rebases, keeps both rows and sets `"1.2"` (one MINOR bump per added row, §105).
+- Shared files with E11-S01 (parallel epic): `story_workflow.yaml`, `workflow/guards.py`, `workflow/__init__.py`, `orchestrator/router.py`, `runtime/output_applier.py`, `tests/workflow/test_tables.py`. Merge-order rule: whichever of E10-S07 / E11-S01 merges first sets `story_workflow` `version: "1.1"`; the second rebases, keeps both rows and sets `"1.2"` (one MINOR bump per added row, §105).
 - Carrier-task pattern is the same as E11's (header "Carrier-task mechanism"): agent runs need a work item (`AgentExecutor.start(agent, item, purpose)`).
 - `NEW NAME:` kernel default constitution `process_architect.md`; module `walk.workflow.analysis` (`AnalysisStep`, `ANALYSIS_LABEL_PREFIX`, `ANALYSIS_STEP_LABEL_PREFIX`, `analysis_labels`, `analysis_subject_of`, `analysis_step_of`); guard `is_analysis_task`; `story_workflow` event `analysis_done`; `ANALYSIS_ROUTES`; `DefaultOutputApplier(on_analysis_output=…)`; module `walk.improvement.retrospectives` (`narrative_from_output`, `metrics_from_report`, `retrospective_id_for`, `NARRATIVE_LEVELS`); `ImprovementManager.retrospective(level, subject_id)`, `.attach_narrative`; `RETRO.md.j2` block `process_architect_duties`; `walk improvement retro SUBJECT_ID --narrative`.
 - Commit subject: `feat: add process architect and multi-level retrospectives (E10-S07)`.

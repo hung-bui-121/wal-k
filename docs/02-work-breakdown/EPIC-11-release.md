@@ -65,7 +65,7 @@ Refine protocol (WBS §1 `Exx-Xyy`, §2 rule 3): read `src/walk/` and `INTERFACE
 #### Behavior
 Assumptions made at planning time (E03-S06…S20, E05–E10 stories were not yet written) that this task must confirm or correct in the epic file:
 1. `TaskRouter` implementation lives in `src/walk/orchestrator/router.py` (E03-S07) and `route()` can be extended by label-based rows (S01).
-2. `OutputApplier` (`src/walk/runtime/applier.py`, E03-S08) chooses the implied workflow event from `(kind, state, output.status)`; S01 adds the `release_step_done` mapping there.
+2. `OutputApplier` (`src/walk/runtime/output_applier.py`, E03-S08) chooses the implied workflow event from `(kind, state, output.status)`; S01 adds the `release_step_done` mapping there.
 3. `LocalCiProvider` lives in `src/walk/integrations/ci.py` (E03-S11) and job names are strings; S03 assumes the form `build:<BuildTarget>` with `development=False` — confirm or rename.
 4. `UnityBatchProvider` is `src/walk/integrations/unity/provider.py` and the editor package file is `unity/com.walk.ci/Editor/WalkCI.cs` (E03-S10); `tests/fakes/fake_unity_provider.py` exists (WBS §3.6).
 5. `DefaultOrchestrator` has a single run-completion path where QC output is handled (E03-S14; ARCHITECTURE §4.3 `QC_RESULT`) — S04 hooks `ReleaseManager.on_run_completed` there.
@@ -126,7 +126,7 @@ The `UA_RELEASE` role exists as a kernel-default constitution, runtime policy an
 | `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `release_step_done`; `version: "1.1"`) |
 | `src/walk/workflow/__init__.py` | modify | re-export `ReleaseStep`, `release_step_of`, `rc_id_of` |
 | `src/walk/orchestrator/router.py` | modify | `DefaultTaskRouter.route` (release rows), `RELEASE_ROUTES` |
-| `src/walk/runtime/applier.py` | modify | — (`release_step_done` implied event for carrier tasks) |
+| `src/walk/runtime/output_applier.py` | modify | — (`release_step_done` implied event for carrier tasks) |
 | `src/walk/improvement/catalog.py` | modify | — (only if `WORKFLOW/story_workflow` version is hard-coded; E11-X01 item 7) |
 | `tests/agents/test_defaults_ua_release.py` | create | — |
 | `tests/permissions/test_defaults_ua_release.py` | create | — |
@@ -508,6 +508,485 @@ CLI: `walk rc qc RC_ID` — (re)opens the QC step of an RC in `QC`.
 - Release instructions are given in the carrier description (`release_step_brief`), not in `QC.md.j2`, so no `PROMPT` behaviour version changes in this story.
 - `NEW NAME:` `RELEASE_STEP_CONTRACTS`, `release_step_brief`, hook callable `release_bug_complete_next_rc`, `ReleaseManager.open_step/on_run_completed/on_bug_completed`, `QC_RESULT` payload key `rc_id`, `CommandConsumer` command `rc.qc`, `walk rc qc`.
 - Commit subject: `feat: add final qc and rejection loop for release candidates (E11-S04)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E11-S05 — Store metadata as approved artifacts
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §77, §33, §10.9, §137 (Inv. 4, 10)
+**Depends on:** E11-S01, E02-S12
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Store listing content (§77: title, descriptions, localized texts, release notes, keywords, screenshots, icons) lives as one typed `.ai/release/store-metadata.md` document, is validated against store field limits, is reviewed by the UA/Release role through a `ua-review` carrier task, and on approval becomes an `ApprovedArtifact` of the new kind `STORE_METADATA` whose hash protects it from silent drift (Inv. 10).
+
+#### Scope
+- In: `ApprovedArtifactKind.STORE_METADATA`; `MemoryDocType.STORE_METADATA`; models `StoreMetadata`, `LocalizedListing`; `STORE_METADATA_SECTIONS`; module `walk.memory.store_metadata` (path, document conversion, validation, `STORE_FIELD_LIMITS`); module `walk.orchestrator.store_metadata` (`StoreMetadataReview`: draft init, review request, review completion); run-completion dispatch for `ua-review` carriers; command group `walk store metadata init|show|review`.
+- Out: exporting metadata to a store and publishing (E11-S06); generating screenshots or creatives (assets are provided files; E08 art pipeline may produce them); UA participation before release for market feedback (§10.9 "MAY", not planned); RC existence checks for the review subject (the RC id is validated by format here and by E11-S06 at publish time, because this story does not depend on E11-S02).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/memory/models.py` | modify | `ApprovedArtifactKind.STORE_METADATA`, `MemoryDocType.STORE_METADATA` |
+| `src/walk/workflow/release.py` | modify | `StoreMetadata`, `LocalizedListing` |
+| `src/walk/memory/sections.py` | modify | `STORE_METADATA_SECTIONS` |
+| `src/walk/memory/store_metadata.py` | create | `STORE_METADATA_PATH`, `STORE_FIELD_LIMITS`, `store_metadata_document`, `store_metadata_from_document`, `validate_store_metadata` |
+| `src/walk/memory/__init__.py` | modify | re-exports |
+| `src/walk/orchestrator/store_metadata.py` | create | `StoreMetadataReview` |
+| `src/walk/orchestrator/service.py` | modify | — (run-completion path calls `StoreMetadataReview.on_review_completed` for `release_step_of(item) == UA_REVIEW`) `(verify)` |
+| `src/walk/cli/cmd_store.py` | create | `store_app` (`metadata init`, `metadata show`, `metadata review`) |
+| `src/walk/cli/app.py` | modify | — (registers `store_app`) |
+| `src/walk/cli/composition.py` | modify | — (constructs `StoreMetadataReview`) |
+| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§3 `ApprovedArtifactKind.STORE_METADATA`, `MemoryDocType.STORE_METADATA`; models) |
+| `docs/01-architecture/ARCHITECTURE.md` | modify | — (§8 `.ai/release/store-metadata.md`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§6 `walk store metadata …`) |
+| `tests/memory/test_store_metadata.py` | create | — |
+| `tests/orchestrator/test_store_metadata_review.py` | create | — |
+| `tests/cli/test_cmd_store_metadata.py` | create | — |
+
+#### Interface contract
+`ApprovedArtifact`, `MemoryManager.approve_artifact` per DOMAIN-MODEL §4.7 / INTERFACES §1.8; carrier labels per E11-S01; front matter per ARCHITECTURE §8.2.
+```python
+# src/walk/workflow/release.py — additions
+class LocalizedListing(WalkModel):
+    title: str
+    short_description: str
+    full_description: str
+    release_notes: str
+    keywords: list[str] = Field(default_factory=list)
+
+class StoreMetadata(WalkModel):
+    """§77 store listing content. Paths are repo-relative and must exist."""
+    default_locale: str = Field(description="BCP 47 tag, e.g. 'en-US'")
+    listings: dict[str, LocalizedListing] = Field(description="locale → listing; must contain default_locale")
+    screenshots: dict[str, list[str]] = Field(description="BuildTarget value or 'all' → image paths")
+    icons: list[str]
+
+# src/walk/memory/sections.py
+STORE_METADATA_SECTIONS = ("App Title", "Short Description", "Full Description", "Release Notes", "Keywords",
+                           "Screenshots", "Icons", "Review Notes")    # localized variants as '### <locale>' sub-sections
+
+# src/walk/memory/store_metadata.py
+STORE_METADATA_PATH: str = "release/store-metadata.md"      # relative to .ai/
+STORE_FIELD_LIMITS: dict[str, int] = {"title": 30, "short_description": 80, "full_description": 4000,
+                                      "release_notes": 500, "keywords": 100}   # characters; keywords = joined with ","
+def store_metadata_document(meta: StoreMetadata, *, title: str) -> MemoryDocument: ...
+def store_metadata_from_document(doc: MemoryDocument) -> StoreMetadata: ...
+def validate_store_metadata(meta: StoreMetadata, repo_root: Path) -> list[str]: ...     # [] when valid
+
+# src/walk/orchestrator/store_metadata.py
+class StoreMetadataReview:
+    def __init__(self, memory: MemoryManager, workflow: WorkflowManager, repo_root: Path, clock: Clock) -> None: ...
+    async def init_draft(self, *, actor: Actor) -> MemoryDocument: ...          # skeleton from ProjectContext; refuses to overwrite
+    async def request_review(self, rc_id: ReleaseCandidateId, *, actor: Actor) -> WorkItem: ...
+    async def on_review_completed(self, item: WorkItem, output: AgentOutput) -> ApprovedArtifact | None: ...
+```
+CLI: `walk store metadata init`; `walk store metadata show [--json]` (parsed model + validation problems); `walk store metadata review RC_ID` (prints the carrier id).
+
+#### Behavior
+1. `init_draft` writes `.ai/release/store-metadata.md` (`type: store_metadata`, `status: DRAFT`) through `MemoryManager.write`, prefilled from `ProjectContext` (title → `App Title`, summary → `Full Description`), one locale (`en-US` unless the project context names one); an existing file → `ConfigError` (never overwritten).
+2. `validate_store_metadata` reports: default locale missing from `listings`; any field over `STORE_FIELD_LIMITS` (per locale); empty title or descriptions; screenshot or icon path missing on disk; no icon. The validation lines name locale and field.
+3. `request_review(rc_id)`: `rc_id` must match `ReleaseCandidateId`; the draft must validate (`ConfigError` listing all problems, no carrier); creates (or returns the existing non-terminal) TASK carrier with labels `release_labels(rc_id, UA_REVIEW)`, `contract.owner_role = UA_RELEASE`, `required_evidence = []`, description = the parsed metadata summary + review checklist (§10.9 positioning, store listing, ASO, screenshots, release notes); state `READY` (routed to `(UA_RELEASE, "REVIEW")` by E11-S01).
+4. `on_review_completed`: output `APPROVED` and no `context_updates` targeting the metadata document → `MemoryManager.approve_artifact(ApprovedArtifact(kind=STORE_METADATA, title=f"Store metadata {rc_id}", scope=rc_id, payload_paths=[document, screenshots…, icons…], related_requirements=[]), actor=Actor(role=UA_RELEASE, run_id=…))`; the previous `STORE_METADATA` artifact, if any, is `SUPERSEDED` (E02-S12); the document status becomes `APPROVED`.
+5. Output `APPROVED` together with `context_updates` to the metadata document → treated as not approved (Inv. 4: a run that changed the content cannot approve it); the changes are kept, the status stays `DRAFT`, `Review Notes` records "changed by review; needs another review".
+6. Output `REJECTED` → findings are appended to `Review Notes`, status `CHANGE_REQUESTED`; no artifact.
+7. After approval, any write to the approved payload goes through E02-S12 rules (`ApprovedArtifactDrift` / change decision required); `verify_approved_artifacts` flags manual edits as `INVALID` (Inv. 10).
+8. Approval authority comes from the `UA_RELEASE` constitution `may_approve: [STORE_METADATA]` (E11-S01) or the user (`walk artifacts approve`, E02-S12); any other role → `ApprovalNotAuthorized`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a metadata model with 2 locales, screenshots for Android and `all`, 1 icon When converted to a document and back Then equal and sections equal `STORE_METADATA_SECTIONS` | `tests/memory/test_store_metadata.py::test_store_metadata_document_roundtrip` |
+| 2 | Given a 31-character title in `vi-VN` and a missing icon file When validated Then two problems naming `vi-VN title` and the icon path | `tests/memory/test_store_metadata.py::test_validation_limits_and_paths` |
+| 3 | Given no draft When `init_draft` Then `.ai/release/store-metadata.md` with status DRAFT; called again Then `ConfigError` | `tests/orchestrator/test_store_metadata_review.py::test_init_draft_once` |
+| 4 | Given an invalid draft When `request_review("RC-01")` Then `ConfigError` listing the problems and no carrier | `tests/orchestrator/test_store_metadata_review.py::test_review_requires_valid_draft` |
+| 5 | Given a valid draft When `request_review("RC-01")` twice Then one TASK with labels `walk-release:RC-01`, `walk-release-step:ua-review`, owner `UA_RELEASE`, `READY` | `tests/orchestrator/test_store_metadata_review.py::test_review_carrier_created_once` |
+| 6 | Given a fake UA_RELEASE run returning `APPROVED` without changes When completed Then an `ApprovedArtifact` of kind `STORE_METADATA`, `approved_by.role == UA_RELEASE`, payload includes screenshots and icon, `ARTIFACT_APPROVED` in the ledger | `tests/orchestrator/test_store_metadata_review.py::test_ua_approval_creates_store_metadata_artifact` |
+| 7 | Given a UA run returning `APPROVED` with a `context_updates` entry on the document When completed Then no artifact and status `DRAFT` with a review note | `tests/orchestrator/test_store_metadata_review.py::test_changed_content_cannot_be_approved_in_same_run` |
+| 8 | Given a UA run returning `REJECTED` with 2 findings When completed Then status `CHANGE_REQUESTED` and both findings in `Review Notes` | `tests/orchestrator/test_store_metadata_review.py::test_ua_rejection_records_findings` |
+| 9 | Given approved metadata When the screenshot file is edited and `verify_approved_artifacts` runs Then the artifact id is reported drifted | `tests/orchestrator/test_store_metadata_review.py::test_approved_metadata_drift_detected` |
+| 10 | Given a QC actor When approving `STORE_METADATA` Then `ApprovalNotAuthorized` | `tests/orchestrator/test_store_metadata_review.py::test_only_ua_or_user_may_approve` |
+| 11 | Given `walk store metadata init` then `walk store metadata show --json` Then exit 0 and a JSON object with `default_locale` and a `problems` list | `tests/cli/test_cmd_store_metadata.py::test_store_metadata_init_and_show` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the fixture repo: `walk store metadata init`, edit the draft, `walk store metadata show`, `walk store metadata review RC-01`, `walk run --once` with a scripted fake UA output, `walk artifacts list` showing the `STORE_METADATA` artifact.
+
+#### Notes
+- §33 approved artifacts; ADR-0003 D-4 (all `.ai/` writes through `MemoryManager`); E02-S12 payload hashing and drift; ADR-0013 (`may_approve`).
+- `StoreMetadata` lives in `walk.workflow.release` because both `walk.memory` and `walk.integrations` (E11-S06 publishers) must import it and `workflow` is the lowest package both may import (ARCHITECTURE §2.2).
+- `STORE_FIELD_LIMITS` are conservative common limits of the two stores named in §77; a store-specific stricter limit is enforced by the publisher's `validate` (E11-S06).
+- E11-X01 item 8 assumed this story writes `.walk/release/<rc>/store-metadata.json`; that export belongs to publishing and moves to E11-S06.
+- `NEW NAME:` `ApprovedArtifactKind.STORE_METADATA`, `MemoryDocType.STORE_METADATA`, `StoreMetadata`, `LocalizedListing`, `STORE_METADATA_SECTIONS`, module `walk.memory.store_metadata` (`STORE_METADATA_PATH`, `STORE_FIELD_LIMITS`, `store_metadata_document`, `store_metadata_from_document`, `validate_store_metadata`), `.ai/release/` folder, `StoreMetadataReview` (`walk.orchestrator.store_metadata`), document statuses `DRAFT`/`CHANGE_REQUESTED`/`APPROVED`, command group `walk store` (`metadata init|show|review`).
+- Commit subject: `feat: add store metadata review as approved artifact (E11-S05)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E11-S06 — Publishing integrations behind `store.publish`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §77, §92, §91, §90, §10.9, §137 (Inv. 7, 9, 14)
+**Depends on:** E11-S02, E11-S04, E11-S05, E02-S11
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A `PASSED` RC with approved store metadata is published to Google Play and/or App Store Connect only through the KERNEL tool `store.publish`, which is a protected action: the UA/Release run pauses until the user runs `walk approve`, the approval and the publish are in the ledger, the kernel (never the agent) holds the store credentials and performs the upload idempotently, and the RC becomes `RELEASED` through the approval-guarded `release` event.
+
+#### Scope
+- In: `StoreProvider` protocol, `StoreValidation`, `StorePublishResult`; `GooglePlayProvider` (Play Developer Publishing API over `httpx`), `AppStoreConnectProvider` (App Store Connect API + Transporter upload through `SubprocessRunner`); `IntegrationManager.stores`; tool specs `store.validate` / `store.publish`; handlers registered with `ToolInvoker.register_handler`; publish carrier (`publish` step) and `ReleaseManager.request_publish`; store-metadata JSON export; `release` event after a successful publish; `walk rc release`; `FakeStoreProvider`; live tests marked `@pytest.mark.integration`.
+- Out: producing an `.ipa` (E11-S03 Out — App Store publishing requires an `.ipa` `BUILD_ARTIFACT` provided outside the kernel; `store.validate` reports its absence); staged rollout percentages and review-status polling after submission (not planned); a direct USER publish path without the UA carrier (not planned; the protected-action approval is the user's control point).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/integrations/protocols.py` | modify | `StoreProvider`; `IntegrationManager.stores` |
+| `src/walk/integrations/models.py` | modify | `StoreValidation`, `StorePublishResult` |
+| `src/walk/integrations/store/__init__.py` | create | re-exports |
+| `src/walk/integrations/store/google_play.py` | create | `GooglePlayProvider`, `GOOGLE_PLAY_CREDENTIAL` |
+| `src/walk/integrations/store/app_store.py` | create | `AppStoreConnectProvider`, `APP_STORE_CREDENTIALS` |
+| `src/walk/integrations/service.py` | modify | — (`DefaultIntegrationManager` holds `stores`) `(verify E03-S03)` |
+| `src/walk/tools/defaults/tools.yaml` | modify | — (`store.validate`: KERNEL, provider `store`; `store.publish`: KERNEL, provider `store`, `protected_action: store.publish`) |
+| `src/walk/orchestrator/protocols.py` | modify | `ReleaseManager.request_publish` |
+| `src/walk/orchestrator/release.py` | modify | `store_tool_handlers`, `export_store_metadata`, `DefaultReleaseManager.request_publish`; `on_run_completed` handles the `publish` step |
+| `src/walk/orchestrator/commands.py` | modify | — (command `rc.release`) |
+| `src/walk/cli/cmd_rc.py` | modify | `rc_app` (`release`) |
+| `src/walk/cli/composition.py` | modify | — (builds store providers from `CredentialStore`; registers `store_tool_handlers` with `ToolInvoker.register_handler`) |
+| `tests/fakes/fake_store_provider.py` | create | `FakeStoreProvider` |
+| `docs/01-architecture/INTERFACES.md` | modify | — (new §2.7 `StoreProvider`; §1.12 `stores`; `ReleaseManager.request_publish`; §6 `walk rc release`) |
+| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§4.13 `StoreValidation`, `StorePublishResult`) |
+| `tests/integrations/test_store_google_play.py` | create | — |
+| `tests/integrations/test_store_app_store.py` | create | — |
+| `tests/integrations/test_store_live.py` | create | — |
+| `tests/orchestrator/test_release_publish.py` | create | — |
+| `tests/orchestrator/test_release_publish_approval.py` | create | — |
+| `tests/cli/test_cmd_rc_release.py` | create | — |
+
+#### Interface contract
+Protected actions: ARCHITECTURE §6 (`store.publish` default, approver USER), ADR-0006 D-2/D-3/D-4; approvals: INTERFACES §1.10, E02-S11; `KernelToolHandler` / `register_handler`: E01-S26; credentials: ADR-0009 D-8; `StoreMetadata`: E11-S05.
+```python
+# src/walk/integrations/models.py
+class StoreValidation(FrozenModel):
+    store: str
+    ok: bool
+    problems: list[str]
+
+class StorePublishResult(FrozenModel):
+    store: str
+    track: str
+    remote_ref: str            # Play edit id / version code; App Store build id
+    submitted_at: datetime
+    artifact_path: str
+    artifact_sha256: str
+
+# src/walk/integrations/protocols.py
+class StoreProvider(Protocol):
+    """§77 store publishing. Kernel-side only; credentials from CredentialStore."""
+    name: str                                                    # "google_play" | "app_store"
+    targets: frozenset[BuildTarget]                              # {ANDROID} | {IOS}
+    async def validate(self, artifact_path: str, metadata: StoreMetadata, *, track: str) -> StoreValidation: ...
+    async def publish(self, artifact_path: str, metadata: StoreMetadata, *, track: str) -> StorePublishResult: ...
+
+# src/walk/integrations/store/google_play.py
+GOOGLE_PLAY_CREDENTIAL: str = "google_play_service_account_json"
+class GooglePlayProvider:      # edits.insert → bundles.upload (.aab) → listings.update per locale → tracks.update → edits.commit
+    def __init__(self, credentials: CredentialStore, package_name: str, http: httpx.AsyncClient, clock: Clock) -> None: ...
+
+# src/walk/integrations/store/app_store.py
+APP_STORE_CREDENTIALS: tuple[str, ...] = ("app_store_connect_key_id", "app_store_connect_issuer_id", "app_store_connect_private_key")
+class AppStoreConnectProvider: # .ipa upload via Transporter (SubprocessRunner) + appStoreVersionLocalizations via API
+    def __init__(self, credentials: CredentialStore, app_id: str, http: httpx.AsyncClient, runner: SubprocessRunner, clock: Clock) -> None: ...
+
+# src/walk/orchestrator/release.py
+def store_tool_handlers(release: ReleaseManager, integrations: IntegrationManager, memory: MemoryManager,
+                        permissions: PermissionManager) -> dict[ToolName, KernelToolHandler]: ...
+    # "store.validate" args {rc_id, store, track} → StoreValidation JSON
+    # "store.publish"  args {rc_id, store, track} → StorePublishResult JSON (+ rc state)
+def export_store_metadata(rc: ReleaseCandidate, metadata: StoreMetadata, output_dir: Path) -> Path: ...   # <output_dir>/<RC-id>/store-metadata.json (atomic_write)
+
+# ReleaseManager addition
+async def request_publish(self, rc_id: ReleaseCandidateId, *, stores: list[str], track: str, actor: Actor) -> WorkItem: ...
+    """RC must be PASSED and an APPROVED, non-drifted STORE_METADATA artifact must exist; opens the publish carrier
+    (open_step(PUBLISH), E11-S04) whose description names stores, track and artifacts."""
+```
+CLI: `walk rc release RC_ID --store google_play|app_store [--store …] [--track internal|alpha|beta|production|testflight]` — opens the publish step and prints the carrier id; the actual publish waits for `walk approve`.
+
+#### Behavior
+1. `request_publish`: RC state must be `PASSED` (`GuardRejected`); the latest `STORE_METADATA` artifact must be `APPROVED` and pass `verify_approved_artifacts` (`ConfigError` naming the artifact otherwise); each requested store must be configured in `IntegrationManager.stores` (`ConfigError`); opens the `publish` carrier (routed to `(UA_RELEASE, "IMPLEMENT")`, E11-S01).
+2. `store.validate` (ALLOW for `UA_RELEASE`): resolves the artifact for the store's target from the RC `BUILD_ARTIFACT` evidence (`.aab` for Google Play; `.ipa` for App Store — absent → problem `ipa required`), loads the approved metadata (`store_metadata_from_document` of the approved payload), returns the provider's `StoreValidation`; no side effects.
+3. `store.publish` is `PermissionEffect.REQUIRE_APPROVAL(approver=USER)` for every role (protected action, ADR-0006 D-3: cannot be downgraded by project or constitution rules); the UA run pauses (`PAUSED_FOR_APPROVAL`), `APPROVAL_REQUESTED` is in the ledger with payload `{tool: store.publish, rc_id, store, track}`; nothing is uploaded before `walk approve`; `walk deny` → the tool returns `PermissionDenied` to the run and the RC stays `PASSED`.
+4. After approval the handler: re-checks rules 1–2 (state may have changed while paused); exports `store-metadata.json`; runs `provider.publish` inside `IntegrationManager.with_idempotency(f"store.publish:{rc_id}:{store}:{track}", …)` so a retried or resumed call returns the stored `remote_ref` without uploading again (§90); records the result as `PROJECT_DATA` evidence (`StorePublishResult` JSON); then, when every store requested by the carrier has a stored result, raises `ReleaseManager.event(rc, "release", actor=UA_RELEASE, extra={"approval_id": <approved request id>})` → guard `approval_user` → `RELEASED`.
+5. The approved request id is found through the approvals repository by `(run_id, tool == "store.publish")` with state `APPROVED` (`ConfigError` if none — defence in depth: the handler never runs without an approved request).
+6. Credentials are read only by the providers through `CredentialStore` (env var, then keyring); they never appear in tool arguments, results, the ledger, logs or `.ai/` (§91); provider HTTP errors become `ProviderUnavailable`/`PermanentError` with the store's message, the RC stays `PASSED`.
+7. `on_run_completed` for the `publish` step: output `COMPLETED` with the RC `RELEASED` → carrier `COMPLETE`; output `COMPLETED` while the RC is not `RELEASED` → `ERROR` ledger event and escalation to the user (the agent claimed success without a publish).
+8. `GooglePlayProvider` uses the documented edit flow (insert edit, upload bundle, update listings per locale, update track, commit) through an injected `httpx.AsyncClient`; `AppStoreConnectProvider` uploads with Transporter through `SubprocessRunner` and updates localizations through the API with a JWT signed from the key credentials. Unit tests use `httpx.MockTransport` and `FakeSubprocessRunner`; live calls exist only in `tests/integrations/test_store_live.py`, marked `@pytest.mark.integration` and skipped by default.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given an RC in `QC` When `request_publish` Then `GuardRejected`; given a `PASSED` RC without approved metadata Then `ConfigError` | `tests/orchestrator/test_release_publish.py::test_request_publish_preconditions` |
+| 2 | Given a `PASSED` RC and approved metadata When `request_publish(stores=["google_play"], track="internal")` Then one `publish` carrier for `UA_RELEASE` in `READY` | `tests/orchestrator/test_release_publish.py::test_request_publish_opens_carrier` |
+| 3 | Given the RC has only an iOS `.zip` artifact When `store.validate` for `app_store` Then `ok == False` with problem `ipa required` | `tests/orchestrator/test_release_publish.py::test_validate_reports_missing_ipa` |
+| 4 | Given a fake UA run calling `store.publish` When the tool is invoked Then an `ApprovalRequest(kind="PROTECTED_ACTION", approver=USER)` is PENDING, the run is paused, and `FakeStoreProvider.publish_calls == 0` | `tests/orchestrator/test_release_publish_approval.py::test_publish_pauses_for_user_approval` |
+| 5 | Given that pending request When `walk approve APV-… --note ok` Then the provider is called once, `store-metadata.json` exists, the RC is `RELEASED`, and the ledger holds `APPROVAL_REQUESTED`, `APPROVAL_DECIDED`, `TOOL_INVOKED(store.publish)`, `RC_TRANSITION(release)` in that order | `tests/orchestrator/test_release_publish_approval.py::test_approved_publish_releases_rc` |
+| 6 | Given a pending request When `walk deny` Then the provider is not called, the run receives `PermissionDenied`, the RC stays `PASSED` | `tests/orchestrator/test_release_publish_approval.py::test_denied_publish_keeps_rc_passed` |
+| 7 | Given a project `permissions.yaml` rule `UA_RELEASE store.publish ALLOW` When rules are merged Then `ConfigError` (protected action cannot be downgraded) | `tests/orchestrator/test_release_publish_approval.py::test_publish_approval_cannot_be_downgraded` |
+| 8 | Given a publish interrupted after the provider returned When the handler runs again with the same arguments Then no second provider call and the same `remote_ref` | `tests/orchestrator/test_release_publish.py::test_publish_idempotent` |
+| 9 | Given the handler invoked without an approved request for the run When executed Then `ConfigError` and no provider call | `tests/orchestrator/test_release_publish.py::test_handler_refuses_without_approved_request` |
+| 10 | Given a UA output `COMPLETED` while the RC is still `PASSED` When the carrier completes Then an `ERROR` event and a user escalation | `tests/orchestrator/test_release_publish.py::test_publish_step_claim_without_release_escalates` |
+| 11 | Given a `MockTransport` recording requests When `GooglePlayProvider.publish` Then the calls are edit insert, bundle upload, one listing update per locale, track update, commit — and no credential value appears in logs or the result | `tests/integrations/test_store_google_play.py::test_publish_edit_flow_and_secret_hygiene` |
+| 12 | Given a Play API 403 When publishing Then `PermanentError` with the store message | `tests/integrations/test_store_google_play.py::test_publish_maps_http_errors` |
+| 13 | Given `FakeSubprocessRunner` and `MockTransport` When `AppStoreConnectProvider.publish` with an `.ipa` Then Transporter is invoked with the ipa path and localizations are updated per locale | `tests/integrations/test_store_app_store.py::test_publish_uploads_ipa_and_localizations` |
+| 14 | Given real credentials in the environment When the integration test runs Then a Play `internal` track upload succeeds (skipped by default) | `tests/integrations/test_store_live.py::test_google_play_internal_track_upload` |
+| 15 | Given `walk rc release RC-02 --store google_play --track internal` Then exit 0 and the carrier id printed; for an RC in `QC` Then exit 2 | `tests/cli/test_cmd_rc_release.py::test_rc_release_opens_publish_step` |
+
+#### Evidence required
+- Quality gate output (integration tests skipped).
+- Demo on the fixture repo with `FakeStoreProvider`: `walk rc release RC-02 --store google_play --track internal`, `walk run --once` (UA run pauses), `walk approvals --pending`, `walk approve APV-… --note "ship"`, `walk rc show RC-02` (`RELEASED`), `walk ledger query --kind APPROVAL_REQUESTED --kind APPROVAL_DECIDED --kind RC_TRANSITION`.
+
+#### Notes
+- §92 "publish store build" protected; Invariant 7 and 14 (the user retains final authority); ADR-0006 D-2 (kernel executes side effects), D-3, D-4 (approval pauses the run); ADR-0009 D-8 (credentials); ARCHITECTURE §4.2 (KERNEL tools enforced at `ToolInvoker`).
+- Implementation-order note: this story uses `ReleaseManager` (E11-S02) and `open_step` (E11-S04), which WBS §5 does not list as dependencies of E11-S06 (only E11-S05, E02-S11); the header's parallel-set line also expects S06 after S02. E11-X01 must confirm E11-S02 and E11-S04 are merged first or add them as dependencies.
+- Store metadata JSON export moved here from E11-S05 (E11-X01 item 8).
+- `NEW NAME:` `StoreProvider` (INTERFACES §2.7), `StoreValidation`, `StorePublishResult`, package `walk.integrations.store` (`GooglePlayProvider`, `AppStoreConnectProvider`, `GOOGLE_PLAY_CREDENTIAL`, `APP_STORE_CREDENTIALS`), `IntegrationManager.stores`, tool specs `store.validate`/`store.publish` (provider `store`), `store_tool_handlers`, `export_store_metadata`, `.walk/release/<RC-id>/store-metadata.json`, `ReleaseManager.request_publish`, `CommandConsumer` command `rc.release`, `walk rc release`, `FakeStoreProvider`.
+- Commit subject: `feat: publish release candidates behind approved store.publish (E11-S06)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E11-S07 — Polish phase template
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §75, §66, §74, §52, §137 (Inv. 7, 14)
+**Depends on:** E11-X01, E07-S05
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+After functional GDD completion the user can create a dedicated polish phase from a data-declared template: `walk phase create --template polish` creates a `PLANNED` phase whose goal shifts from "Does it work?" to "Is it good?" and whose scope is one `Polish` epic with one `IDEA` feature per selected §75 focus area, ready for the normal phase start, planning and gate flow.
+
+#### Scope
+- In: phase-template data format and loader; `polish.yaml` with the twelve §75 areas; `instantiate_phase_template`; `walk phase create --template polish [--areas …]`; GDD-coverage warning (§74) when functional completion is not reached.
+- Out: decomposition of polish features into stories (the existing ORCHESTRATOR `PLAN` route, INTERFACES §4); release candidates (E11-S02); other phase templates (only `polish` ships; the format allows more).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/workflow/phase_templates.py` | create | `PhaseTemplate`, `PhaseTemplateArea`, `load_phase_template`, `PHASE_TEMPLATES_DIR` |
+| `src/walk/workflow/phase_templates/polish.yaml` | create | — (`version: "1.0"`, twelve areas, table below) |
+| `src/walk/workflow/__init__.py` | modify | re-exports |
+| `src/walk/orchestrator/phase_templates.py` | create | `instantiate_phase_template`, `PhaseTemplateResult` |
+| `src/walk/cli/cmd_phase.py` | modify | `phase_app` (`create --template NAME [--areas A…] [--ordinal N] [--name TEXT]`) `(verify whether E06/E07 added phase creation; modify that command if so)` |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§6 `walk phase create --template`) |
+| `tests/workflow/test_phase_templates.py` | create | — |
+| `tests/orchestrator/test_phase_templates_instantiate.py` | create | — |
+| `tests/cli/test_cmd_phase_create_template.py` | create | — |
+
+#### Interface contract
+`Phase`, `WorkItemDraft`, `StoryContract` per DOMAIN-MODEL §4.1; `WorkflowManager.create_phase` (E01-S11), `create`, `gdd_coverage` per INTERFACES §1.3.
+```python
+# src/walk/workflow/phase_templates.py
+PHASE_TEMPLATES_DIR: str = "workflow/phase_templates"          # package-relative
+
+class PhaseTemplateArea(WalkModel):
+    key: str                      # snake_case, unique
+    title: str
+    intent: str                   # feature description seed
+    acceptance_hints: list[str]   # become contract.acceptance_criteria seeds
+
+class PhaseTemplate(WalkModel):
+    name: str                     # "polish"
+    version: str                  # "MAJOR.MINOR"
+    phase_name: str               # "Polish"
+    goal: str                     # §75 "Does it work?" → "Is it good?"
+    epic_title: str
+    areas: list[PhaseTemplateArea]
+    requires_gdd_coverage: float = Field(ge=0.0, le=1.0, description="warn below this §74 coverage")
+
+def load_phase_template(name: str, *, root: Path | None = None) -> PhaseTemplate: ...
+
+# src/walk/orchestrator/phase_templates.py
+class PhaseTemplateResult(FrozenModel):
+    phase: Phase
+    epic_id: EpicId
+    feature_ids: list[FeatureId]
+    warnings: list[str]
+
+async def instantiate_phase_template(workflow: WorkflowManager, template: PhaseTemplate, *, project_key: ProjectKey,
+                                     ordinal: int | None, areas: list[str] | None, name: str | None) -> PhaseTemplateResult: ...
+```
+`polish.yaml` areas (§75 verbatim order): `game_feel`, `vfx`, `animation`, `sound`, `ux`, `pacing`, `clarity`, `balance`, `performance`, `stability`, `device_compatibility`, `technical_debt`; `goal: "Shift from 'Does it work?' to 'Is it good?' (§75)"`; `requires_gdd_coverage: 1.0`.
+
+CLI: `walk phase create --template polish [--areas game_feel,performance] [--ordinal N] [--name TEXT] [--json]`.
+
+#### Behavior
+1. `load_phase_template` validates: unique area keys; non-empty `areas`; `version` matches `^\d+\.\d+$`; unknown template name → `ConfigError` listing available names.
+2. `instantiate_phase_template`: `areas` default to all template areas; an unknown key → `ConfigError` before anything is created; `ordinal` defaults to max existing ordinal + 1; creates the phase via `create_phase(name or template.phase_name, ordinal, goal=template.goal, scope_epic_ids=[epic])`, one `EPIC` (`template.epic_title`) and one `FEATURE` per area in `IDEA` (`title` = area title, `description` = intent, `contract.acceptance_criteria` = acceptance hints), all in one `UnitOfWork`; ledger `WORK_ITEM_CREATED` per item from the workflow write point.
+3. Functional-completion check (§75 "after functional GDD completion"): when `gdd_coverage(project_key)` has any area below `requires_gdd_coverage`, the result carries a warning per area and the CLI prints them; creation is not blocked (§75 SHOULD; the user decides at the phase gate, Inv. 14).
+4. The created phase is `PLANNED`; starting it uses the existing `walk phase start` guards (`previous_phase_complete_or_first`, `scope_non_empty`); features are decomposed by the ORCHESTRATOR `PLAN` route once the phase is `ACTIVE`.
+5. Re-running with the same `ordinal` → `ConfigError` (unique ordinal, E01-S11 rule 1) and nothing created.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the shipped `polish.yaml` When loaded Then 12 areas in §75 order with non-empty intents | `tests/workflow/test_phase_templates.py::test_polish_template_matches_section_75` |
+| 2 | Given a template with duplicate area keys When loaded Then `ConfigError`; given name `bogus` Then `ConfigError` listing `polish` | `tests/workflow/test_phase_templates.py::test_template_validation` |
+| 3 | Given two completed phases When `instantiate_phase_template(polish)` Then phase `PHASE-03` `PLANNED` with the template goal, one EPIC and 12 FEATUREs in `IDEA` under it | `tests/orchestrator/test_phase_templates_instantiate.py::test_instantiate_all_areas` |
+| 4 | Given `areas=["performance", "stability"]` When instantiated Then exactly 2 features with those titles and acceptance hints as criteria | `tests/orchestrator/test_phase_templates_instantiate.py::test_instantiate_selected_areas` |
+| 5 | Given `areas=["bogus"]` When instantiated Then `ConfigError` and no phase or item created | `tests/orchestrator/test_phase_templates_instantiate.py::test_unknown_area_creates_nothing` |
+| 6 | Given GDD coverage 0.8 for area `Combat` When instantiated Then one warning naming `Combat` and the phase still created | `tests/orchestrator/test_phase_templates_instantiate.py::test_gdd_coverage_warning_not_blocking` |
+| 7 | Given `walk phase create --template polish --areas performance --json` Then exit 0 and JSON with `phase.id`, `epic_id`, one `feature_ids` entry; repeating with the same `--ordinal` Then exit 1 | `tests/cli/test_cmd_phase_create_template.py::test_phase_create_polish_cli` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the E07 gate fixture repo: `walk phase create --template polish --areas performance,stability`, `walk phase list`, `walk work list --phase PHASE-0N`.
+
+#### Notes
+- §75 lists polish focus areas; the template only seeds work, it adds no workflow state or guard (data, CONVENTIONS §4).
+- E11-X01 item 11 decides whether `walk phase create` already exists; this story then extends it with `--template` instead of adding a second command.
+- `NEW NAME:` module `walk.workflow.phase_templates` (`PhaseTemplate`, `PhaseTemplateArea`, `load_phase_template`, `PHASE_TEMPLATES_DIR`), data file `workflow/phase_templates/polish.yaml`, module `walk.orchestrator.phase_templates` (`instantiate_phase_template`, `PhaseTemplateResult`), `walk phase create --template`.
+- Commit subject: `feat: add polish phase template (E11-S07)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E11-S08 — Epic gate: RC1 reject → RC2 release (e2e)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §75, §76, §77, §92, §136 (`RELEASE CANDIDATE → FINAL QC → STORE / RELEASE`), §137 (Inv. 4, 7, 9, 10, 14)
+**Depends on:** E11-S04, E11-S06, E11-S07
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+One end-to-end scenario with fakes proves the release flow: a polish phase is created from the template, RC1 is built for all targets, final QC rejects it with a BLOCKER bug, the bug loop fixes it and the kernel creates and builds RC2, QC passes RC2, store metadata is approved by UA/Release, and publishing happens only after `walk approve` — ending `RELEASED` with a complete `RC_TRANSITION` and approval trail in the ledger.
+
+#### Scope
+- In: `tests/e2e/test_e11_gate.py`; fixture `e11_scenario` / model `E11Scenario`; scripted fake outputs for QC, SENIOR_DEV, LEAD_DEV and UA_RELEASE runs.
+- Out: production code (defects → `E11-Bxx` bugfix stories); real Unity or store calls (covered by `@pytest.mark.integration` tests of E11-S03/S06, skipped by default).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/e2e/test_e11_gate.py` | create | — |
+| `tests/e2e/conftest.py` | modify | `e11_scenario` fixture, `E11Scenario` `(verify: builds on the E07 scenario helpers)` |
+
+#### Interface contract
+Fixture `e11_scenario(tmp_game_repo) -> E11Scenario` (`WalkModel` in conftest): `handle: KernelHandle`, `project_key: ProjectKey` (`"DEMO"`), `polish_phase_id: PhaseId`, `store: FakeStoreProvider`, `unity: FakeUnityProvider`, `release_config: ReleaseConfig` (`targets: [Android, iOS]`). Settings: `UA_RELEASE` enabled; `.ai/release/store-metadata.md` valid with one locale, two screenshots and one icon committed in the temp repo; `FakeModelAdapter` scripts: QC run on RC1 → `REJECTED` with one `BLOCKER` `new_bugs` entry and a `QC_REPORT` evidence; bug-loop runs (triage, fix with commit, review, re-test) → pass; QC run on RC2 → `APPROVED` with a `QC_REPORT`; UA_RELEASE `ua-review` → `APPROVED` with no changes; UA_RELEASE `publish` → tool calls `store.validate` then `store.publish` (`google_play`, track `internal`), then `COMPLETED`. All other adapters, providers and the clock are fakes (WBS §3.6); real temporary git repository; `LocalWorkProvider`.
+
+#### Behavior
+Scenario steps (each a test, executed in order via the fixture's cached state):
+1. `walk phase create --template polish --areas performance,stability` creates a `PLANNED` polish phase with two `IDEA` features (E11-S07); it is not started in this scenario (release flow does not depend on it).
+2. `walk rc create` → `RC-01` `BUILDING`; the build runs for Android and iOS through the fake Unity provider; two `BUILD_ARTIFACT` evidence rows; RC-01 → `QC`; a `qc` carrier exists.
+3. The QC run rejects: one `BLOCKER` bug with `against_commit == RC-01.commit`; RC-01 → `REJECTED` with that bug as rejection bug; one `QC_RESULT` with `rc_id == "RC-01"`.
+4. The bug loop (E03-S15) completes the bug; the kernel raises `next_rc`: `RC-02` `BUILDING` at the new `main` HEAD (contains the fix commit), built, → `QC`.
+5. The QC run approves RC-02 → `PASSED` (`no_open_blocker_bugs` holds).
+6. `walk store metadata review RC-02` → UA review approves → `ApprovedArtifact` of kind `STORE_METADATA`.
+7. `walk rc release RC-02 --store google_play --track internal` → publish carrier → UA run calls `store.validate` (ok) then `store.publish` → run paused, one PENDING `PROTECTED_ACTION` approval for USER, `FakeStoreProvider.publish_calls == 0`.
+8. `walk approve APV-… --note ship` → publish executed once with the `.aab` of RC-02 and the approved metadata; RC-02 → `RELEASED`; the carrier `COMPLETE`.
+9. Ledger trail: `RC_TRANSITION` events in order `RC-01 create`, `RC-01 build_ok`, `RC-01 qc_reject`, `RC-01 next_rc` (successor RC-02 created in `BUILDING`), `RC-02 build_ok`, `RC-02 qc_pass`, `RC-02 release`; `APPROVAL_REQUESTED` before `APPROVAL_DECIDED` before `RC_TRANSITION(release)`; `ARTIFACT_APPROVED` for the store metadata before `APPROVAL_REQUESTED`.
+10. Invariants: no agent run wrote under `.ai/approved/` or used store credentials (no credential value in the ledger, logs or `.ai/`); `RELEASED` is unreachable without the approved request (asserted by replaying step 8 with `walk deny` on a fresh fixture copy → RC stays `PASSED`).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the fixture When `walk phase create --template polish --areas performance,stability` Then a `PLANNED` phase with 2 `IDEA` features | `tests/e2e/test_e11_gate.py::test_polish_phase_created_from_template` |
+| 2 | Given `walk rc create` When the build completes Then RC-01 `QC` with Android and iOS artifacts and a QC carrier | `tests/e2e/test_e11_gate.py::test_rc1_built_for_all_targets` |
+| 3 | Given the scripted QC rejection When applied Then RC-01 `REJECTED` with one BLOCKER rejection bug against its commit | `tests/e2e/test_e11_gate.py::test_rc1_rejected_with_blocker_bug` |
+| 4 | Given the bug loop completes the bug Then RC-02 is created automatically at the fix commit and reaches `QC` | `tests/e2e/test_e11_gate.py::test_rc2_created_after_bug_fixed` |
+| 5 | Given the scripted QC approval Then RC-02 `PASSED` | `tests/e2e/test_e11_gate.py::test_rc2_passes_final_qc` |
+| 6 | Given the UA review approval Then a `STORE_METADATA` approved artifact exists | `tests/e2e/test_e11_gate.py::test_store_metadata_approved_by_ua` |
+| 7 | Given `walk rc release RC-02` and the UA publish run Then a PENDING user approval and no store call | `tests/e2e/test_e11_gate.py::test_publish_waits_for_walk_approve` |
+| 8 | Given `walk approve` Then one store publish call and RC-02 `RELEASED` | `tests/e2e/test_e11_gate.py::test_release_after_approval` |
+| 9 | Given the ledger Then the `RC_TRANSITION` and approval events appear in the order of Behavior 9 | `tests/e2e/test_e11_gate.py::test_rc_transition_trail` |
+| 10 | Given a fresh copy denied at step 8 Then RC-02 stays `PASSED` and no store call; and no credential value appears in ledger, logs or `.ai/` | `tests/e2e/test_e11_gate.py::test_release_impossible_without_user_approval` |
+
+#### Evidence required
+- Quality gate output including `tests/e2e/test_e11_gate.py` (10 passed).
+- Demo transcript on the fixture repo: `walk rc create`, `walk rc list` after each step, `walk rc show RC-01`, `walk approvals --pending`, `walk approve APV-…`, `walk rc show RC-02`, `walk ledger query --kind RC_TRANSITION`.
+
+#### Notes
+- WBS §9 maps "Release" of §136 to this story; the gate scenario is the WBS §4 E11 gate extended with the polish template and store-metadata approval so every E11 story is exercised.
+- Any production change needed is a separate `bugfix` story; this commit touches tests only.
+- `NEW NAME:` `e11_scenario` fixture, `E11Scenario` (`tests/e2e/conftest.py`).
+- Commit subject: `feat: add epic 11 gate test for release flow (E11-S08)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E11-R01 — Review E11
+
+**Status:** TODO
+**Type:** docs
+**Requirements:** §137 (Inv. 4, 7, 9, 10, 14), §76, §77, §92
+**Depends on:** E11-S08
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** LeadDev   **Reviewer role:** QC
+
+#### Goal
+An independent agent instance (a different model than the E11 implementer where possible, §23) verifies every E11 story against the Definition of Done and the release invariants — publishing only after explicit user approval, kernel-held credentials, RC state changed only through `rc_workflow` — recording defects as `E11-Bxx` bugfix stories.
+
+#### Scope
+- In: stories E11-S01…S08 and their commits; `INTERFACES.md` (`ReleaseManager`, §2.7 `StoreProvider`, §3.2 row, §4 rows, §6), `DOMAIN-MODEL.md`, `ARCHITECTURE.md` (§8 `.ai/release/`) deltas; WBS §3.4/§6 entries from this epic; the shared-file merge with E10-S07; architecture tests listed below.
+- Out: fixing defects (each becomes `E11-Bxx`); production code.
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/02-work-breakdown/EPIC-11-release.md` | modify | — (review record appended; `E11-Bxx` stories appended if any) |
+| `docs/02-work-breakdown/WBS.md` | modify | — (§5 status rows, §6 register) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/ARCHITECTURE.md` | modify (only if drift found) | — |
+| `tests/architecture/test_release_boundaries.py` | create | — |
+
+#### Interface contract
+Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5, plus the checks under Behavior.
+
+#### Behavior
+1. For each story: `git show <sha>`; Files table equals changed files (extra files need commit-body justification); every acceptance-criterion test exists and passes; coverage ≥ 90 % for touched modules.
+2. Invariant 7 / §92: `store.publish` has `protected_action: store.publish` in `tools.yaml`; no code path calls a `StoreProvider.publish` except the `store.publish` handler; the handler refuses to run without an `APPROVED` request for the run.
+3. §91 / ADR-0009 D-8: store credentials are read only in `walk.integrations.store` through `CredentialStore`; no agent-facing tool argument or result contains a credential name's value; `walk.integrations.store` imports nothing from `walk.agents`, `walk.runtime`, `walk.orchestrator`.
+4. RC state changes only through `WorkflowManager.rc_event` / `create_rc`: no `UPDATE release_candidates` outside `walk.workflow`.
+5. Invariant 10: `STORE_METADATA` artifacts go through `MemoryManager.approve_artifact`; no module writes under `.ai/approved/` directly.
+6. `story_workflow.yaml` contains both `release_step_done` (E11-S01) and `analysis_done` (E10-S07) when E10 is merged, with the version set by the merge-order rule (E10-S07 Notes).
+7. `NEW NAME:` items of E11 (story Notes) are present in WBS §6 or listed in the review note for the architect; the dependency-order notes of E11-S06 are resolved in WBS §5.
+8. Defects → `E11-Bxx` stories using the template.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given each E11 story When the DoD checklist is applied Then every box is checked or an `E11-Bxx` story exists | manual checklist recorded in this story's Evidence |
+| 2 | Given `src/walk` When searching calls to `.publish(` on store providers Then only the `store.publish` handler in `walk.orchestrator.release` matches | `tests/architecture/test_release_boundaries.py::test_store_publish_single_call_site` |
+| 3 | Given `src/walk/integrations/store` When its imports are parsed Then none of `walk.agents`, `walk.runtime`, `walk.orchestrator` | `tests/architecture/test_release_boundaries.py::test_store_package_imports` |
+| 4 | Given `src/walk` When grepping `UPDATE release_candidates` Then matches only under `src/walk/workflow/` | `tests/architecture/test_release_boundaries.py::test_rc_state_changed_only_by_workflow` |
+| 5 | Given `tools.yaml` When loaded Then `store.publish.protected_action == "store.publish"` and the default protected-action list contains it with approver USER | `tests/architecture/test_release_boundaries.py::test_store_publish_is_protected` |
+| 6 | Given the quality gate on `main` Then green with overall coverage ≥ 85 % and `tests/e2e/test_e11_gate.py` passing | manual checklist recorded in this story's Evidence |
+
+#### Evidence required
+- Checklist per story (ID → DoD items → OK/defect id).
+- Quality gate output on `main` after the review commit.
+- List of `E11-Bxx` stories created (or "none").
+
+#### Notes
+- Tests 2–5 are architecture tests created by the reviewer (review tasks may add tests, never production code).
+- Commit subject: `docs: review epic 11 stories E11-S01..S08 (E11-R01)`.
 
 #### Evidence (filled by implementer)
 _pending_
