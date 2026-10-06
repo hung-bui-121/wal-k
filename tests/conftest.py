@@ -1,6 +1,7 @@
 """Shared fixtures."""
 
 import subprocess
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_id_factory import SequentialIdFactory
+from walk.persistence import Database, MigrationRunner
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -40,3 +42,12 @@ def fake_clock() -> FakeClock:
 def sequential_ids() -> SequentialIdFactory:
     """Deterministic ID factory."""
     return SequentialIdFactory()
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> Iterator[Database]:
+    """A project database at ``<tmp>/.ai/kernel.db`` migrated to the latest schema."""
+    database = Database(tmp_path / ".ai" / "kernel.db")
+    MigrationRunner(database, "project").apply_pending()
+    yield database
+    database.close()

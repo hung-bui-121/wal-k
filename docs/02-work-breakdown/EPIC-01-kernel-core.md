@@ -299,7 +299,7 @@ BLOCKED on 2026-10-06 (owner action required, not a planning gap):
 
 ### E01-S03 — SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §54, §81, §89, §137 (Inv. 9)
 **Depends on:** E01-S01
@@ -409,7 +409,40 @@ CLI: `walk db migrate` (exit 0, prints applied versions or `up to date`), `walk 
 - Commit: `feat: add sqlite database and migration runner with initial schema (E01-S03)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, SQLite 3.49.1):
+```
+36 files already formatted
+All checks passed!
+Success: no issues found in 33 source files
+Required test coverage of 85% reached. Total coverage: 99.24%
+69 passed in 2.31s
+```
+Touched modules: `persistence/database.py` 100%, `persistence/migrations.py` 97%, `cli/cmd_db.py` 100%, `cli/composition.py` 100%.
+
+Demo (Windows, run in an empty scratch dir):
+```
+$ walk db migrate --repo ./demo
+applied: 0001_init
+$ walk db migrate --repo ./demo
+up to date
+$ walk db backup ./demo/backup.db --repo ./demo
+backup written: demo\backup.db
+$ walk db backup ./x.db --repo ./nodb
+error: database does not exist: nodb\.ai\kernel.db      (exit 1)
+```
+Deviation from the Files table (no contract change):
+- `src/walk/persistence/migrations/__init__.py` is **not** created. A package directory `migrations/` with an `__init__.py` shadows the module `migrations.py` (CPython's path finder prefers the package), which would make `walk.persistence.migrations.MigrationRunner` unimportable. `migrations/` is a plain data folder holding `project/` and `kernel/` SQL files; hatchling ships it in the wheel because it sits inside `src/walk`.
+
+Level-0 decisions:
+- The four `BEFORE DELETE` triggers required by ADR-0002 D-3 but absent from DOMAIN-MODEL §6.2 are named `<table>_no_delete` and abort with `'immutable'`. The DDL is otherwise copied verbatim from §6.2; the `-- PK`/`-- K`/`-- dedup` placement markers were dropped.
+- Each migration runs as `executescript("BEGIN IMMEDIATE;" + sql)`, then the Python step, the `schema_migrations` row, `PRAGMA user_version`, `COMMIT`. `executescript()` silently commits an open transaction (verified on 3.12), so `BEGIN` has to be inside the script. Migration files must not contain transaction control.
+- `applied_at` uses `datetime.now(tz=UTC)`: the contract constructor `MigrationRunner(db, kind)` takes no `Clock`.
+- The backup before a Python-step migration is written to `<db>.pre-NNNN.bak` (NNNN = first pending version), overwriting an older one.
+- `discover()` also rejects a duplicate version, a `NNNN_<name>.py` without a matching `.sql`, and a missing kind folder (`ConfigError`); files that don't match `NNNN_<name>.(sql|py)` are ignored. The migration root is the private module constant `_MIGRATIONS_ROOT`, which tests monkeypatch.
+- `Database.connect()` also turns `OSError` (for example `.ai` exists as a file) and pragma failures (a read-only connection cannot switch a rollback-journal DB to WAL) into `ConfigError`. `check_same_thread` stays at its default; the async `UnitOfWork` (E01-S04) runs on the event-loop thread.
+- `open_database()` returns a connected `Database`, so a missing read-only DB fails at open time.
+- The global `--repo` is a root-callback option, which click only accepts before the subcommand. `walk db migrate` and `walk db backup` therefore also accept `--repo` after the subcommand (AC 12 syntax); the subcommand value wins, otherwise the global one is used. Errors print `error: <message>` to stderr and exit 1 (INTERFACES §6).
+- Also read: INTERFACES §6 (CLI exit codes), ARCHITECTURE §1.2/§2 (package rules, sqlite confinement).
 
 ---
 

@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from walk import __version__
+from walk.cli.cmd_db import db_app
 
 app = typer.Typer(
     name="walk",
@@ -13,6 +14,7 @@ app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
 )
+app.add_typer(db_app)
 
 
 def _version_callback(value: bool) -> None:
