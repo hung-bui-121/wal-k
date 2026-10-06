@@ -256,3 +256,62 @@ async def test_boundary_violation_stops_fallback(
     assert run.state is AgentRunState.FAILED_BOUNDARY
     assert await env.events(run.id, K.MODEL_FALLBACK) == []
     assert len(await _chain(env)) == 1
+
+
+async def test_verify_only_continuation_submits_for_review(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters, _ = _adapters(fake_clock, _outage(), script(tool_calls=0))
+    env = await make_executor_env(adapters=adapters)
+
+    await env.run_to_end()
+
+    old, new = await _chain(env)
+    assert new.state is AgentRunState.COMPLETED, new.failure_reason
+    assert new.tool_calls == 0
+    (ended,) = await env.events(new.id, K.AGENT_RUN_ENDED)
+    handoff = env.checkpoints_of(old.id)[-1]
+    assert handoff.kind is CheckpointKind.HANDOFF
+    assert ended.payload["effects"]["commit_sha"] == handoff.head_sha
+    assert ended.payload["effects"]["workflow_event"] == "submit_for_review"
+    item = await env.items.get(env.story.id)
+    assert item is not None
+    assert item.state is WorkItemState.READY_FOR_REVIEW
+
+
+async def test_continuation_final_audit_covers_parent_commits(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters, _ = _adapters(fake_clock, _outage(), script(tool_calls=5))
+    env = await make_executor_env(adapters=adapters)
+    forbidden = ".ai/agents/roles/qc.md"
+    calls: list[str] = []
+
+    async def commit_forbidden(ctx: HookContext) -> None:
+        calls.append(str(ctx.run_id))
+        if len(calls) != 2:  # the parent's second tool call
+            return
+        run = await env.runs.get(str(ctx.run_id))
+        assert run is not None
+        assert run.worktree_path is not None
+        target = Path(run.worktree_path) / forbidden
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"# rogue\n")
+        # An unaudited WIP checkpoint (as recovery's HANDOFF or a START over residue) commits it.
+        await env.checkpoints.checkpoint(
+            run, CheckpointKind.PERIODIC, workflow_state=WorkItemState.IMPLEMENTING
+        )
+
+    env.hooks.register(
+        Hook(name=HookName.ON_TOOL_AFTER, id="test.rogue", kind="builtin"), commit_forbidden
+    )
+
+    await env.run_to_end()
+
+    old, new = await _chain(env)
+    assert old.state is AgentRunState.HANDED_OVER
+    assert new.parent_run_id == old.id
+    assert new.state is AgentRunState.FAILED_BOUNDARY
+    assert new.failure_reason == f"boundary: {forbidden}"
+    error = (await env.events(new.id, K.ERROR))[0]
+    assert error.payload == {"kind": "BOUNDARY", "violations": [forbidden]}

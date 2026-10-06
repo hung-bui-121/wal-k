@@ -666,13 +666,46 @@ class DefaultAgentExecutor:
         except Exception as exc:  # noqa: BLE001 - every failure ends the run
             await self._fail_with(live, exc)
             return live.run
-        live.start_head = start.head_sha
+        live.start_head = await self._lineage_start_head(live.run, start.head_sha)
         ref = live.resume.provider_session if live.resume is not None else None
         stream = await self._open_resumed_stream(live, ref) if ref is not None else None
         self._live[live.run.id] = live
         live.task = asyncio.create_task(self._drive(live, stream), name=f"walk-run-{live.run.id}")
         self._tasks[live.run.id] = live.task
         return live.run
+
+    async def _lineage_start_head(self, run: AgentRun, own: Sha) -> Sha:
+        """Where the run's work is measured from: ``has_commit`` and the final audit (E01-B03).
+
+        A continuation (fallback, native resume, recovery) inherits its predecessors' commits,
+        so its start head is the START head of the root of its ``parent_run_id`` chain, or the
+        earliest START in the chain when the root has none; ``own`` otherwise.
+        """
+        chain: list[AgentRun] = []
+        parent_id = run.parent_run_id
+        while parent_id is not None and parent_id not in {r.id for r in chain}:
+            parent = await self._runs.get(parent_id)
+            if parent is None:
+                break
+            chain.append(parent)
+            parent_id = parent.parent_run_id
+        for ancestor in reversed(chain):  # root first
+            head = await self._start_head_of(ancestor.id)
+            if head is not None:
+                return head
+        return own
+
+    async def _start_head_of(self, run_id: RunId) -> Sha | None:
+        """HEAD of the run's START checkpoint, from its ``CHECKPOINT_CREATED`` event.
+
+        The event is written in the checkpoint's own transaction and carries its ``head_sha``.
+        """
+        for event in await self._ledger.query(
+            run_id=run_id, kinds=[LedgerEventKind.CHECKPOINT_CREATED]
+        ):
+            if event.payload.get("kind") == CheckpointKind.START.value:
+                return str(event.payload["head_sha"])
+        return None
 
     async def _open_resumed_stream(
         self, live: _Live, ref: ProviderSessionRef

@@ -5948,7 +5948,7 @@ b4ad281 chore: initial commit
 
 ### E01-B02 — Recovery re-creates a missing worktree and ends a failed recovery completely
 
-**Status:** DONE (pending)
+**Status:** DONE (434900a)
 **Type:** bugfix
 **Requirements:** §89, §90, §137 (Inv. 9, 12)
 **Depends on:** E01-R01
@@ -6048,7 +6048,7 @@ seq  at                         kind                actor       item        run 
 
 ### E01-B03 — A fallback or recovery continuation measures `has_commit` from the lineage start
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §21, §22, §132, §137 (Inv. 12)
 **Depends on:** E01-R01
@@ -6092,7 +6092,49 @@ No signature changes. `OutputApplier.apply(run, output, *, start_head)` (INTERFA
 - Commit subject: `bugfix: measure continuation commits from lineage start (E01-B03)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** `_launch` set `live.start_head` to the continuation's own START checkpoint head. A child run's START sits on its parent's HANDOFF WIP commit, so every commit the lineage made before the handover was invisible. `OutputApplier.apply` saw `head == start_head` (`has_commit` false), and the final boundary audit `diff_names(worktree, start_head)` never covered the parent's commits.
+
+**Fix** (`src/walk/runtime/executor.py`): `live.start_head = await self._lineage_start_head(run, start.head_sha)`.
+- For a run with `parent_run_id`, the chain of `parent_run_id` is walked to its root (cycle-safe). The start head is then the START head of the first run, root first, that has a START checkpoint (Behavior 1 and 3). If none has one, the run's own START head is used.
+- A parentless run keeps its own START head.
+- `_complete` uses `live.start_head` for both the final audit and `applier.apply`, so Behavior 2 follows from the same value.
+
+**Level-0 decision.** The START head is read from the run's `CHECKPOINT_CREATED` ledger event (`payload.kind == "START"`, `payload.head_sha`). That event is written in the checkpoint row's own transaction (`DefaultCheckpointManager.checkpoint`) and is immutable. `DefaultCheckpointManager`/`CheckpointRepository` expose only `latest`/`latest_for_item`. A "START checkpoint of run X" query would be a new public method in `checkpoints.py`/`repository.py`, which are outside this story's Files table. If such a query is wanted later (E04-S06 adds `CheckpointManager.open_handover_for`), `_start_head_of` is the single place to switch.
+
+**Reproduce first** (before the fix):
+- AC 1: continuation `FAILED`, `guard_rejected: 'submit_for_review' rejected for STORY-0001: has_commit: has_commit is false`.
+- AC 2: continuation `COMPLETED` although the parent's WIP commit holds `.ai/agents/roles/qc.md`.
+
+AC 2 commits the forbidden file with an unaudited WIP checkpoint during the parent's second tool call. It stands in for the real unaudited commit points: recovery's HANDOFF checkpoint, and a START checkpoint over adopted residue.
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.93%
+1013 passed, 2 deselected in 377.42s (0:06:17)
+src/walk/runtime/executor.py  99% (missing 689, 708)
+```
+
+**Demo** (AC 1 scenario kept with `pytest --basetemp=.../b03demo tests/runtime/test_executor_fallback.py::test_verify_only_continuation_submits_for_review`; filtered to run, checkpoint, handover and transition events):
+```
+$ walk ledger query --item STORY-0001 --repo <tmp>
+seq  at                         kind                  actor       item        run                             outcome
+2    2026-01-01T00:00:00+00:00  AGENT_RUN_STARTED     SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+6    2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK      (START)
+22   2026-01-01T00:00:00+00:00  HANDOVER_CREATED      SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+23   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK      (HANDOFF)
+25   2026-01-01T00:00:00+00:00  MODEL_FALLBACK        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+27   2026-01-01T00:00:00+00:00  AGENT_RUN_ENDED       SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  FAILED  (HANDED_OVER)
+29   2026-01-01T00:00:00+00:00  AGENT_RUN_STARTED     SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK
+33   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (START)
+35   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (END, 0 tool calls)
+37   2026-01-01T00:00:00+00:00  WORK_ITEM_TRANSITION  SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (submit_for_review)
+38   2026-01-01T00:00:00+00:00  AGENT_RUN_ENDED       SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK
+[exit 0]
+```
 
 ---
 
