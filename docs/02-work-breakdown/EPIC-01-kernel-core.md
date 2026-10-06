@@ -1879,7 +1879,7 @@ Level-0 decisions:
 
 ### E01-S14 — Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models
 
-**Status:** DONE (pending)
+**Status:** DONE (35f190d)
 **Type:** feat
 **Requirements:** §28, §29, §30, §91 (tool allowlist)
 **Depends on:** E01-S12
@@ -1993,7 +1993,7 @@ Also outside the Files table: `WBS.md` §6 gains the ADR-0019 register row that 
 
 ### E01-S15 — Permission policy core: `PermissionManager.decide/rules_for`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §31, §63, §91, §92, §137 (Inv. 4, 7)
 **Depends on:** E01-S14
@@ -2086,7 +2086,42 @@ class DefaultPermissionManager:
 - Commit: `feat: add permission evaluation core and approval persistence (E01-S15)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+138 files already formatted
+All checks passed!
+Success: no issues found in 136 source files
+Required test coverage of 85% reached. Total coverage: 99.92%
+493 passed in 24.72s
+```
+Touched modules: `permissions/*` 100%.
+
+Demo (no CLI in this story; inline rules, temporary database):
+```
+SENIOR_DEV bash                 pytest -q          -> ALLOW: allowed by rule 'bash'
+SENIOR_DEV bash                 git push --force   -> DENY: command matches deny pattern 'git push --force'
+SENIOR_DEV bash                 rm -rf /           -> DENY: command matches no allow pattern
+SENIOR_DEV git.commit                              -> ALLOW: allowed by rule 'git.*'
+SENIOR_DEV git.push                                -> DENY: kernel pushes
+LEAD_DEV   git.merge_protected                     -> REQUIRE_APPROVAL: protected action git.merge_protected requires USER approval
+QC         git.commit                              -> DENY: no matching rule
+APV-0001 PENDING -> APPROVED
+```
+
+Contract changes (small; see commit body):
+- `tool_pattern_specificity(pattern, tool)` takes the tool it scores against. The story declared `(pattern)` only, but acceptance 1 scores patterns against `git.commit`, which needs the tool.
+- INTERFACES §1.10 `request_approval(request: ToolCallRequest | WalkModel | JsonDict, …)`: `Escalation` lives in `walk.decisions`, which `permissions` may not import (ARCHITECTURE §2.2). An `Escalation` is still accepted, because it is a `WalkModel`; the payload is stored as `model_dump(mode="json")`. `rules_for(role, extra: Sequence[PermissionRule] = ())` replaces `list[...] = ()`, which does not type-check.
+- `DefaultPermissionManager.__init__` takes an extra keyword-only `project_key` for the ledger events and hook contexts. This is the same reason as E01-S13. `ApprovalRepository` exposes a read-only `db` property (as `LedgerRepository`/`HookExecutionRepository` do), because the contract constructor has no `Database` and writes need a `UnitOfWork`.
+
+Level-0 decisions:
+- Tool patterns: `*` (1), any prefix glob ending in `*` such as `git.*` or ADR-0006 D-6's `jira.create_*` (2), exact name (3). No other wildcards.
+- `decide` uses the constructor rule set (defaults merged with project rules by E02-S10); `extra` only affects `rules_for`.
+  - Steps: (1) collect the role's matching rules and keep the most specific group. (2) A DENY rule in the group denies the whole tool when it has no `command_patterns` or the request has no command. A DENY rule with patterns denies matching commands only. (3) Shell: deny patterns of every matching rule (any specificity) are searched first (`re.search`); then, unless the group requires approval, an ALLOW pattern of the group must match. An ALLOW rule without patterns allows no command (literal D-3). (4) Paths: each must resolve inside the worktree, including symlinks, junctions and `..`, case-insensitive on Windows. When the group's ALLOW (or approval) rules declare `path_patterns`, the worktree-relative POSIX path must `fnmatchcase` one of them. (5) Grant: protected action, then REQUIRE_APPROVAL, then ALLOW.
+  - "Pure" means no database, ledger or hook I/O. Resolving paths reads the filesystem.
+- **For owner attention:** a protected action turns ALLOW and REQUIRE_APPROVAL into REQUIRE_APPROVAL with the action's approver. A rule DENY, or no matching rule, stays DENY. The story says "regardless of rules", but turning a DENY into an approval request would widen permissions, so I kept DENY. `decide` cannot see `ToolSpec`, so protected actions are matched by tool name; the builtin catalogue has `protected_action == name`.
+- `rules_for(role, extra)`: the kernel rules of the role come first, then the role's `extra` rules. An extra rule is dropped, with a warning, when it is less restrictive than an overlapping kernel rule that denies the whole tool or requires approval. This covers ALLOW, and also REQUIRE_APPROVAL against a DENY. Rules repeating an earlier `(tool, effect)` are dropped, so the kernel rule wins. Extra rules for other roles are ignored.
+- Approvals: `request_approval` writes the row and `APPROVAL_REQUESTED` (actor = `requested_by`, payload `{approval_id, kind, approver}`) in one transaction. `ON_PROTECTED_ACTION_REQUESTED` fires after commit with the same payload. An unknown `kind` raises `ConfigError`. `decide_approval` raises `ConfigError` for an unknown id or a request that is no longer PENDING. It writes `APPROVAL_DECIDED` with actor = the approver's role (every `Approver` value is an `AgentRole`) and payload `{approval_id, kind, approver, state, decided_by}`. `pending` returns the oldest first.
+- `PermissionRule` validation: command patterns must compile, and REQUIRE_APPROVAL needs an `approver` ("Required when effect == REQUIRE_APPROVAL").
 
 ---
 

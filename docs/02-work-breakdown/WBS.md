@@ -400,8 +400,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S11 | Phases and release candidates: models, tables, `walk phase list/start/gate` | feat | E01-S09 | MEDIUM | DONE (7b73aef) |
 | E01-S12 | Budgets and cost: `BudgetManager`, `CostManager`, `walk cost` | feat | E01-S05, E01-S07 | HIGH | DONE (4b56802) |
 | E01-S13 | Effort resolution: `EffortManager` | feat | E01-S10, E01-S12 | MEDIUM | DONE (b5d5637) |
-| E01-S14 | Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models | feat | E01-S12 | MEDIUM | DONE (pending) |
-| E01-S15 | Permission policy core: `PermissionManager.decide/rules_for` | feat | E01-S14 | MEDIUM | TODO |
+| E01-S14 | Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models | feat | E01-S12 | MEDIUM | DONE (35f190d) |
+| E01-S15 | Permission policy core: `PermissionManager.decide/rules_for` | feat | E01-S14 | MEDIUM | DONE (pending) |
 | E01-S16 | Memory core: front matter, `MemoryDocument`, atomic `write`, `apply_updates`, handovers, index | feat | E01-S05, E01-S07 | HIGH | TODO |
 | E01-S17 | Constitutions and runtime policies: loaders, merge rules, MVP role defaults | feat | E01-S13, E01-S15 | HIGH | TODO |
 | E01-S18 | Agent execution contract: `AgentInput/AgentOutput/Handover`, templates, `instantiate` | feat | E01-S14, E01-S16, E01-S17, E01-S24 | HIGH | TODO |

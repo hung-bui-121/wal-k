@@ -518,7 +518,7 @@ class DebateManager(Protocol):
 class PermissionManager(Protocol):
     """§31, §92. Policy evaluation. Hosted by walk.permissions. Enforcement points: ADR-0006."""
 
-    def rules_for(self, role: AgentRole, extra: list[PermissionRule] = ()) -> list[PermissionRule]:
+    def rules_for(self, role: AgentRole, extra: Sequence[PermissionRule] = ()) -> list[PermissionRule]:
         """Kernel defaults + `.ai/agents/permissions.yaml` + `extra` (the constitution's tool_permissions, passed by AgentManager),
         de-duplicated; project/extra rules may only narrow (ADR-0013 D-4)."""
 
@@ -528,7 +528,7 @@ class PermissionManager(Protocol):
 
     async def request_approval(
         self,
-        request: ToolCallRequest | Escalation | JsonDict,
+        request: ToolCallRequest | WalkModel | JsonDict,  # Escalation is passed as a WalkModel (permissions may not import decisions)
         *,
         kind: str,
         approver: Approver,
