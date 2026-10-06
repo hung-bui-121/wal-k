@@ -202,7 +202,7 @@ For the owner / architect:
 
 ### E02-S02 — Environment preflight and `EnvironmentManifest`, `walk doctor` (basic)
 
-**Status:** DONE (pending)
+**Status:** DONE (bc1fcfe)
 **Type:** feat
 **Requirements:** §26, §27, §25, §139
 **Depends on:** E02-S01, E01-S14
@@ -390,7 +390,7 @@ Level-0 decisions:
 
 ### E02-S03 — `walk bootstrap`: Production Kit generation and `.ai/` initialisation
 
-**Status:** TODO
+**Status:** BLOCKED
 **Type:** feat
 **Requirements:** §24, §25, §123, §124, §34, §35, §36
 **Depends on:** E02-S02, E01-S16, E01-S17
@@ -508,6 +508,9 @@ CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY
 - `NEW NAME:` `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `.ai/project/production-kit.yaml`, `walk.memory.skeletons`, defaults files under `integrations/defaults/`.
 - Pitfall: repo without commits has no HEAD — use `Sha("0000000")` placeholder and document it in `MemoryManager.write` tests.
 - Commit subject: `feat: add bootstrap command generating the production kit (E02-S03)`.
+- **BLOCKING (implementer, 2026-10-07): `Bootstrapper` cannot live in `walk.integrations`.** The contract puts `Bootstrapper` in `src/walk/integrations/bootstrap.py` with a `memory: MemoryManager` parameter, and step (f) writes `walk.memory.skeletons` documents through it. ARCHITECTURE §2.2 forbids `integrations → memory` (`·`; `import-linter` contract "integrations: ARCHITECTURE 2.2 row" and `tests/test_import_contracts.py`). Allowing it would also make a package cycle, because `memory → integrations` (GitProvider protocol) is allowed. E02-S04 then modifies the same file to write pins from `walk.improvement`, and `integrations → improvement` is `·` as well. Neither import can be avoided by Level-0 means: the documents are `walk.memory.models.MemoryDocument`s built by `walk.memory.skeletons`, and type-checking-only imports count too (E01-B06). Also, the constructor names `work_repo: WorkflowRepository`, but the `projects` row needs `ProjectRepository`.
+  - Decision needed (architect/planner): where `Bootstrapper` lives. Recommended: `src/walk/orchestrator/bootstrap.py` (orchestrator may import every package, including `improvement` for E02-S04 and `IntegrationManager` for preflight), re-exported from `walk.orchestrator`. The `integrations/defaults/*` templates and `walk.memory.skeletons` stay where planned. Alternative: `src/walk/cli/bootstrap.py`, beside the composition root. Either way, update the Files tables of E02-S03, E02-S04 (`bootstrap.py` modify) and E03-S10 (`BootstrapResult.ci_package_version`), plus the WBS §6 register. Also fix the constructor parameter to `projects: ProjectRepository`, and allow an optional `git: GitProvider` for the HEAD/branch of step (f) (the contract gives no way to resolve HEAD).
+  - Implementation notes kept for the unblocked story: `work_provider` is UNKNOWN (not MISSING) before bootstrap writes `work-provider.yaml` (E02-S02 Evidence), so step (c) `preflight(REQUIRED_DEFAULT)` passes on a fresh repository. `src/walk/permissions/defaults.yaml` does not exist until E02-S10, so step (d) should write an empty narrowing file (`rules: []`, `protected_actions: []`, the E02-S10 `PermissionsFile` schema) rather than copy it.
 
 #### Evidence (filled by implementer)
 _pending_
