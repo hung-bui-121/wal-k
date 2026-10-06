@@ -2,7 +2,7 @@
 
 **Roadmap stage:** §135 Stage 5
 **Goal.** Constitutions with professional bias drive debates, authority and escalation; the PO resolves what agents cannot; every accepted decision is persisted and the §133 debate test passes with fake adapters producing scripted positions.
-**Requirements.** §6.7, §6.9, §10.2, §10.4, §12 (full), §44–§47, §50–§51, §93 (decisions override), §127 (optional roles), §133, §137 (Inv. 5, 7), §138 (Infinite Debate, Over-Engineering).
+**Requirements.** §6.4, §6.7, §6.9, §10.2, §10.3, §10.4, §11, §12 (full), §44–§47, §50–§51, §55, §58, §93 (decisions override), §127 (optional roles), §133, §137 (Inv. 5, 7), §138 (Infinite Debate, Over-Engineering).
 **Epic gate.** `tests/e2e/test_e05_gate.py` (§133): a feature requirement is challenged by fake LEAD_DEV (`REJECTED` with `debate_position`); a `Debate` opens with LEAD_DEV + DESIGN_LEADER (or ORCHESTRATOR), two rounds without consensus escalate to PO, PO resolves, `Decision` is `ACCEPTED`, persisted in SQLite and `.ai/decisions/DEC-NNNN.md`, linked to the feature context.
 **Branching.** `story/<ID>-<slug>` + worktree per story (COMMIT-POLICY §4); merge `--no-ff` after E05-R01.
 **Preconditions.** E01-R01…E04-R01 `DONE` with no `BLOCKER` bugfix stories; `main` green; E05-X01 committed before any E05 story starts (WBS §2 rule 3).
@@ -22,7 +22,9 @@
 | E05-S08 | Conflict detection → debate opening from review/design disagreement | E05-S04, E03-S13 | MEDIUM |
 | E05-S09 | `walk debates list/show`, `walk decisions override` | E05-S03, E05-S01 | LOW |
 | E05-S10 | Epic gate: §133 debate test (e2e) | E05-S05, E05-S07, E05-S08, E05-S09 | MEDIUM |
-| E05-R01 | Review E05 | E05-S10 | MEDIUM |
+| E05-S11 | SCRUM_MASTER constitution and periodic work-item hygiene sweep | E05-S02, E05-S06 | MEDIUM |
+| E05-S12 | Optional GAME_DIRECTOR constitution and DESIGN/ART escalation rung | E05-S05, E05-S06, E05-S11 | MEDIUM |
+| E05-R01 | Review E05 | E05-S10, E05-S11, E05-S12 | MEDIUM |
 
 ## Reading order for implementers
 
@@ -33,7 +35,7 @@
 5. `ARCHITECTURE.md` §4.1 rows `ON_DEBATE_*`, `ON_DECISION_RECORDED`, `ON_ESCALATION`; §4.3 write points `debate.DebateManager`, `decisions.DecisionManager`; §5.5 (debate circuit breaker); §7 Inv. 5, 7.
 6. Existing E04-S05 `walk.decisions` service (the `NotSupported("E05-S01")`/`("E05-S03")` stubs this epic replaces).
 
-Parallel sets (WBS §8): `{S01→S02} ∥ {S06→S07}`; `{S03→S04→S05} ∥ {S09}`.
+Parallel sets (WBS §8): `{S01→S02} ∥ {S06→S07}`; `{S03→S04→S05} ∥ {S09}`; S11 → S12 strictly sequential (shared `policies.yaml`, `participants.py`, `permissions/defaults.yaml`, `composition.py`); S11 is not concurrent with S03, S06 or S08 (shared `policies.yaml`, `policy_loader.py`, `composition.py`) and S12 is not concurrent with S08 (also `output_applier.py`).
 
 Planning decisions fixed for this epic (Autonomy Level 0 unless marked `NEW NAME:`):
 - Debate budgets use `BudgetScope.TASK` with `scope_id = <DebateId>` (dimensions `REVIEW_LOOPS` = `max_rounds`, `COST_USD` = `DebatePolicy.cost_usd`); no new `BudgetScope` member.
@@ -67,7 +69,7 @@ Every E05 story's Files table, interface references and dependencies are re-vali
 | `docs/02-work-breakdown/WBS.md` | modify | — (§5 status row E05-X01; §6 register additions) |
 
 #### Interface contract
-Checklist applied to every story E05-S01…S10 and E05-R01:
+Checklist applied to every story E05-S01…S12 and E05-R01:
 1. Every path in the Files table marked `modify` exists in `src/walk/` or `tests/`; every path marked `create` does not exist and is not created by an earlier story.
 2. Every `INTERFACES.md §x.y` / `DOMAIN-MODEL.md §x.y` reference resolves to a section that still defines the named symbol with the signature quoted in the story.
 3. Every `Depends on` ID is `DONE` in `WBS.md` §5 (or belongs to E05 and precedes the story).
@@ -85,7 +87,7 @@ Checklist applied to every story E05-S01…S10 and E05-R01:
 | 1 | Given every E05 story When the Files tables are checked Then every `modify` path exists in the repo and every `create` path is absent | manual check recorded in Evidence (no automated test; docs task) |
 | 2 | Given every E05 story When each `INTERFACES.md`/`DOMAIN-MODEL.md` reference is opened Then the referenced symbol and signature exist | manual check recorded in Evidence |
 | 3 | Given every E05 story When its `Depends on` list is compared with `WBS.md` §5 Then every dependency outside E05 is `DONE` | manual check recorded in Evidence |
-| 4 | Given the refined file When `grep -c "^### E05-"` Then 12 headings (X01, S01…S10, R01) and no ID renamed | manual check recorded in Evidence |
+| 4 | Given the refined file When `grep -c "^### E05-"` Then 14 headings (X01, S01…S12, R01) and no ID renamed | manual check recorded in Evidence |
 
 #### Evidence required
 - Refinement log (list of corrections, or "no corrections").
@@ -713,7 +715,7 @@ The two optional early roles (§127) exist as complete ADR-0013 constitutions wi
 
 #### Scope
 - In: `product_owner.md`, `design_leader.md` default constitutions (front matter + all D-3 body sections, arbitration guidance for PO); `policies.yaml` entries; `RuntimePolicy.enabled`; `DefaultAgentManager.list_roles/is_enabled`; composition wiring of `enabled_roles` / `po_enabled`.
-- Out: constitution narrowing on `escalation_rules`, D-3 rendering checks and the strict lint over project overrides (E05-S07); ART_DIRECTOR (E08-S01), PROCESS_ARCHITECT (E10-S07), UA_RELEASE (E11-S01); SCRUM_MASTER and GAME_DIRECTOR are not shipped by any epic (§127 lists them neither as MVP nor optional early roles).
+- Out: constitution narrowing on `escalation_rules`, D-3 rendering checks and the strict lint over project overrides (E05-S07); ART_DIRECTOR (E08-S01), PROCESS_ARCHITECT (E10-S07), UA_RELEASE (E11-S01); SCRUM_MASTER (E05-S11) and GAME_DIRECTOR (E05-S12) — §127 lists them neither as MVP nor optional early roles, so both ship disabled.
 
 #### Files
 | Path | Action | Public symbols |
@@ -1167,12 +1169,372 @@ _pending_
 
 ---
 
+### E05-S11 — SCRUM_MASTER constitution and periodic work-item hygiene sweep
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §10.3, §6.4, §55, §58, §57, §12, §127 (optional roles), §137 (Inv. 1, 7), §138 (Workflow Drift)
+**Depends on:** E05-S02, E05-S06
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The §10.3 Scrum Master exists as an optional kernel-default role (ADR-0013 constitution, runtime policy, permission rows, PROCESS debate counterpart) and, when enabled, a kernel-scheduled hygiene sweep checks every live work item for owner, blocker/dependency consistency, Definition of Ready (§58) on READY items, Definition of Done evidence on recently COMPLETE items and stale in-progress work — reporting each finding as a work-item comment and label through `WorkProvider` plus a ledger event, and transitioning nothing except `READY → BLOCKED` with a reason when the Definition of Ready fails.
+
+#### Scope
+- In: `scrum_master.md` default constitution; `policies.yaml` `SCRUM_MASTER` entry (`enabled: false`) and top-level `hygiene:` block; `permissions/defaults.yaml` SCRUM_MASTER rows; `CATEGORY_COUNTERPART[PROCESS]` routing entry; pure checks module `walk.workflow.hygiene`; `HygieneSweep` in `walk.orchestrator.hygiene` called from the orchestrator loop and `run_once`; `story_workflow` row `READY --block--> BLOCKED` (SCRUM_MASTER only, guard `dor_failed`); label persistence `WorkflowRepository.set_labels`; ledger kind `HYGIENE_FINDING`.
+- Out: LLM-authored hygiene judgement (the sweep is deterministic kernel code acting under the SCRUM_MASTER role; SM agent runs happen only as a PROCESS debate participant through E05-S04); automatic `unblock` (SM never unblocks — `walk work transition ID unblock` by USER/ORCHESTRATOR, unchanged); blocking FEATURE or BUG items (their READY rows already guard on readiness at admission; findings only); provider-side assignee repair (E03 providers own `assign`); GAME_DIRECTOR (E05-S12); constitution narrowing/lint (E05-S07 covers every default, this one included).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/defaults/scrum_master.md` | create | — |
+| `src/walk/agents/defaults/policies.yaml` | modify | — (`roles.SCRUM_MASTER`, top-level `hygiene:` block) |
+| `src/walk/agents/policy_loader.py` | modify | `PolicyLoader.load_hygiene_policy` |
+| `src/walk/permissions/defaults.yaml` | modify | — (SCRUM_MASTER rows, table below) |
+| `src/walk/debate/participants.py` | modify | `CATEGORY_COUNTERPART` (PROCESS entry) |
+| `src/walk/workflow/hygiene.py` | create | `HygieneFindingKind`, `HygieneFinding`, `HygienePolicy`, `IN_PROGRESS_STATES`, `HYGIENE_LABEL_PREFIX`, `HYGIENE_DOR_IGNORED_CHECKS`, `hygiene_label`, `kinds_from_labels`, `dor_failed_checks`, `check_hygiene`, `render_finding_comment` |
+| `src/walk/workflow/guards.py` | modify | `dor_failed` |
+| `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `READY --block--> BLOCKED`, see Interface contract) |
+| `src/walk/workflow/repository.py` | modify `(verify module name, E01-S08)` | `WorkflowRepository.set_labels` |
+| `src/walk/workflow/__init__.py` | modify | re-exports |
+| `src/walk/telemetry/models.py` | modify | `LedgerEventKind.HYGIENE_FINDING` |
+| `src/walk/orchestrator/hygiene.py` | create | `HygieneSweep`, `HygieneReport` |
+| `src/walk/orchestrator/service.py` | modify `(verify module name, E01-S29)` | `DefaultOrchestrator.__init__` (`hygiene` parameter), loop and `run_once` call the sweep |
+| `src/walk/cli/composition.py` | modify | — (builds `HygieneSweep` with `load_hygiene_policy()`, `running_item_ids` from the executor, `enabled=lambda: agent_manager.is_enabled(SCRUM_MASTER)`) |
+| `tests/agents/test_defaults_scrum_master.py` | create | — |
+| `tests/agents/test_policy_loader.py` | modify | — |
+| `tests/permissions/test_defaults_scrum_master.py` | create | — |
+| `tests/debate/test_participants.py` | modify | — |
+| `tests/workflow/test_hygiene.py` | create | — |
+| `tests/workflow/test_tables.py` | modify | — (story table row count) |
+| `tests/workflow/test_guards.py` | modify | — |
+| `tests/telemetry/test_models.py` | modify | — (expected `LedgerEventKind` list) |
+| `tests/orchestrator/test_hygiene_sweep.py` | create | — |
+| `tests/orchestrator/test_service.py` | modify | — |
+
+#### Interface contract
+Constitution schema ADR-0013 D-2/D-3; `AgentManager.is_enabled` / `RuntimePolicy.enabled` (E05-S06); `WorkflowManager.query/raise_event/check_definition_of_ready` (INTERFACES §1.3); `definition_of_ready_checks` check names (E01-S10); `WorkProvider.comment/update` (INTERFACES §2.2) through `IntegrationManager.with_idempotency` (INTERFACES §1.12); `EvidenceManager.for_item/satisfies` (INTERFACES §1.14). Deltas:
+```python
+# src/walk/workflow/hygiene.py  (pure; no I/O)
+class HygieneFindingKind(StrEnum):
+    MISSING_OWNER = "MISSING_OWNER"                    # no owner, or owner role not enabled
+    DANGLING_DEPENDENCY = "DANGLING_DEPENDENCY"        # contract.dependencies names an unknown id
+    DEPENDENCY_CANCELLED = "DEPENDENCY_CANCELLED"      # a dependency is CANCELLED while the item is live
+    DEPENDENCY_CYCLE = "DEPENDENCY_CYCLE"
+    DEPENDENCY_NOT_COMPLETE = "DEPENDENCY_NOT_COMPLETE"  # item in IN_PROGRESS_STATES while a dependency is not COMPLETE
+    BLOCKED_WITHOUT_REASON = "BLOCKED_WITHOUT_REASON"
+    DOR_FAILED = "DOR_FAILED"                          # READY item fails §58 checks (dependency progress ignored)
+    DOR_NOW_SATISFIED = "DOR_NOW_SATISFIED"            # BLOCKED by SM for DoR and the checks now pass (unblock is for USER/ORCHESTRATOR)
+    DOD_EVIDENCE_MISSING = "DOD_EVIDENCE_MISSING"      # COMPLETE item lacks required evidence / feature dimensions
+    STALE_IN_PROGRESS = "STALE_IN_PROGRESS"
+
+class HygieneFinding(FrozenModel):
+    work_item_id: WorkItemId
+    kind: HygieneFindingKind
+    detail: str                                        # one line, names the offending ids / checks / evidence kinds
+    owner_role: AgentRole | None                       # who should act (item owner), None when missing
+
+class HygienePolicy(WalkModel):
+    """Kernel defaults overridable by `.ai/agents/policies.yaml` top-level `hygiene:` block."""
+    interval_s: int = Field(default=900, ge=60)
+    stale_after_s: int = Field(default=86_400, ge=600)
+    dod_lookback_s: int = Field(default=604_800, ge=3_600)   # COMPLETE items with completed_at inside the window
+    block_on_dor_failure: bool = True
+    max_provider_writes: int = Field(default=50, ge=1)       # comment + label calls per sweep (Jira rate limits)
+
+IN_PROGRESS_STATES: frozenset[WorkItemState]   # IMPLEMENTING, READY_FOR_REVIEW, LEAD_DEV_REVIEW, INTEGRATION, QC, REWORK
+HYGIENE_LABEL_PREFIX = "walk-hygiene:"
+HYGIENE_DOR_IGNORED_CHECKS: frozenset[str] = frozenset({"dependencies_resolved"})
+def hygiene_label(kind: HygieneFindingKind) -> str: ...            # "walk-hygiene:dor_failed"
+def kinds_from_labels(labels: list[str]) -> set[HygieneFindingKind]: ...   # unknown suffixes ignored
+def dor_failed_checks(result: GuardResult) -> list[str]: ...        # failing check names from the reason minus HYGIENE_DOR_IGNORED_CHECKS
+def check_hygiene(items: list[WorkItem], *, by_id: dict[WorkItemId, WorkItem], dor: dict[WorkItemId, GuardResult],
+                  evidence_missing: dict[WorkItemId, list[str]], running_item_ids: set[WorkItemId],
+                  enabled_roles: list[AgentRole], now: datetime, policy: HygienePolicy) -> list[HygieneFinding]:
+    """Deterministic: sorted by (work_item_id, kind)."""
+def render_finding_comment(finding: HygieneFinding) -> str: ...     # Markdown, first line "[walk-hygiene] <KIND>: <detail>"
+
+# src/walk/workflow/guards.py
+# guard `dor_failed`: ok iff payload["dor_failed_checks"] is a non-empty list (written only by HygieneSweep)
+
+# src/walk/workflow/repository.py
+class WorkflowRepository:
+    async def set_labels(self, work_item_id: WorkItemId, labels: list[str]) -> None: ...   # no state_version / updated_at change
+
+# src/walk/orchestrator/hygiene.py
+class HygieneReport(FrozenModel):
+    findings: list[HygieneFinding]
+    raised: list[HygieneFinding]                      # new this sweep (label added)
+    cleared: list[tuple[WorkItemId, HygieneFindingKind]]
+    blocked: list[WorkItemId]
+    deferred: int                                     # findings left for the next sweep (max_provider_writes reached)
+
+class HygieneSweep:
+    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, evidence: EvidenceManager,
+                 integrations: IntegrationManager, ledger: LedgerManager, clock: Clock, *, policy: HygienePolicy,
+                 enabled: Callable[[], bool], enabled_roles: Callable[[], list[AgentRole]],
+                 running_item_ids: Callable[[], set[WorkItemId]], project_key: ProjectKey) -> None: ...
+    def due(self, now: datetime) -> bool: ...          # enabled() and (never ran or now - last_run >= interval_s)
+    async def run(self) -> HygieneReport: ...
+```
+`story_workflow.yaml` new row (INTERFACES §3.2 addition; table version stays `"1.0"`, see Notes): `{from: READY, event: block, to: BLOCKED, guards: [dor_failed], roles: [SCRUM_MASTER], hooks: [on_task_blocked]}`.
+
+`ledger` event `HYGIENE_FINDING` (actor_role `SCRUM_MASTER`, `work_item_id` set): payload `{"kind", "status": "raised" or "cleared", "detail", "owner_role"}`.
+
+Constitution front matter (ADR-0013 D-2):
+
+| Field | Value |
+|---|---|
+| `id` / `role` / `version` | `SCRUM_MASTER` / `SCRUM_MASTER` / `"1.0"` |
+| `identity` | Scrum Master |
+| `mission` | Protect workflow integrity. (§10.3) |
+| `responsibilities` | Jira hygiene, task status, owner, blocker, dependency, Definition of Ready, Definition of Done, workflow consistency |
+| `authority` | `decision_scope: []`, `max_autonomy_level: 0`, `may_approve: []`, `may_reject: []`, `may_create_work: []` |
+| `professional_bias` | Flow: work moves only when it is ready, owned, unblocked and evidenced; the recorded status must match reality. |
+| `core_beliefs` | "A status that does not match reality is a defect." · "Blocked work must say why." · "Done means evidenced, not asserted." |
+| `decision_principles` | "Flag, do not fix: report to the owner role." · "Block only on a failed Definition of Ready." · "Never change scope, design or architecture to make work ready." |
+| `risk_tolerance` | LOW |
+| `preferred_evidence` | `[PROJECT_DATA, QC_REPORT, AUTOMATED_TEST]` |
+| `conflict_behavior` | Neutral on product, design and technical content; disputes about workflow rules are PROCESS matters raised to the orchestrator. |
+| `escalation_rules` | `{condition: "workflow rule change", to_level: 3, category: PROCESS}` |
+| `tool_permissions` | `Read`, `Glob`, `Grep` ALLOW; `Edit`, `Write`, `bash`, `jira.transition`, `jira.create_*`, `review.approve`, `qc.approve` DENY |
+| `forbidden_actions` | "define gameplay", "define architecture", "change scope or acceptance criteria", "transition work items other than blocking a READY item whose Definition of Ready fails", "close or complete work items", "edit code or assets" |
+
+`permissions/defaults.yaml` SCRUM_MASTER rows: ALLOW `Read`, `Glob`, `Grep`; DENY `Edit`, `Write`, `bash`, `git.*`, `jira.transition`, `jira.create_*`, `review.approve`, `qc.approve`, `store.*`.
+
+`policies.yaml`: `roles.SCRUM_MASTER: {enabled: false, model_policy: {preferred: [claude/sonnet], fallback: [claude/opus], cross_model_review: false}, execution_strategy: review_only, max_parallel_runs: 1, allowed_tools: [Read, Glob, Grep]}` (ADR-0011 D-3 row); top-level `hygiene: {interval_s: 900, stale_after_s: 86400, dod_lookback_s: 604800, block_on_dor_failure: true, max_provider_writes: 50}`.
+
+`CATEGORY_COUNTERPART[DecisionCategory.PROCESS] = (AgentRole.PROCESS_ARCHITECT, AgentRole.SCRUM_MASTER, AgentRole.ORCHESTRATOR)`.
+
+#### Behavior
+1. `scrum_master.md` loads through `ConstitutionLoader` with all ADR-0013 D-3 body sections in order and no provider name; `## Professional Bias` lists the eight §10.3 responsibilities verbatim; `## Forbidden Actions` contains "SM SHOULD NOT define gameplay or architecture" (§10.3). Disabled by default: `list_roles()` excludes SCRUM_MASTER until a project sets `roles.SCRUM_MASTER.enabled: true`; `load_constitution(SCRUM_MASTER)` works while disabled (E05-S06 Behavior 8).
+2. Routing entry: `select_participants(from_role, PROCESS, enabled_roles)` prefers PROCESS_ARCHITECT, then SCRUM_MASTER when enabled, then ORCHESTRATOR (E05-S02 rule "first enabled counterpart != from_role" unchanged). The TaskRouter routes no work-item state to SCRUM_MASTER.
+3. `HygieneSweep.due(now)` is false while `enabled()` is false — a project without SCRUM_MASTER enabled sees no comment, label, ledger event or transition. `DefaultOrchestrator` calls `if hygiene and hygiene.due(clock.now()): await hygiene.run()` once per loop iteration **before** `tick()` (so a DoR block precedes admission) and once in `run_once` before its tick; any exception from `run` is logged with structured `extra`, counted (`hygiene.error`) and never stops the loop.
+4. Item set per sweep: `workflow.query(states=<every state except IDEA, COMPLETE, CANCELLED>)` plus `query(states=[COMPLETE])` filtered to `completed_at >= now - dod_lookback_s`; dependency lookups use one `by_id` map built from a single additional `query()` of the referenced ids; DoR results come from `workflow.check_definition_of_ready(item)` for READY items and for BLOCKED items whose `blocked_reason` starts with `"definition_of_ready:"`; `evidence_missing` from `EvidenceManager.satisfies(contract.required_evidence, for_item(id))` for COMPLETE STORY/TASK/BUG and from `applicable_dimensions` not `True` in `done_dimensions` for COMPLETE FEATURE.
+5. `check_hygiene` rules (one finding per `(item, kind)`): owner = `item.owner_role`, else `contract.owner_role` for kinds with a contract → `MISSING_OWNER` when `None` or not in `enabled_roles` (READY, BLOCKED and IN_PROGRESS_STATES only); `DANGLING_DEPENDENCY` / `DEPENDENCY_CANCELLED` / `DEPENDENCY_NOT_COMPLETE` per the enum comments; `DEPENDENCY_CYCLE` for every item on a cycle of `contract.dependencies` (iterative DFS, no recursion limit); `BLOCKED_WITHOUT_REASON` when BLOCKED and `blocked_reason` empty; `DOR_FAILED` when READY and `dor_failed_checks(dor[id])` non-empty (detail lists the checks); `DOR_NOW_SATISFIED` when BLOCKED with the DoR reason prefix and the checks now pass; `DOD_EVIDENCE_MISSING` when `evidence_missing[id]` non-empty; `STALE_IN_PROGRESS` when state in IN_PROGRESS_STATES, `now - updated_at >= stale_after_s` and the id is not in `running_item_ids`.
+6. Labels are the finding state. For each finding whose label is absent on the item → **raise**: when the item has `external_ref`, `integrations.with_idempotency(f"hygiene.comment:{id}:{kind}:{state_version}", "work.comment", ...)` posting `render_finding_comment`, then `with_idempotency(f"hygiene.labels:{id}:{kind}:add:{state_version}", "work.update", ...)` with `{"labels": item.labels + [label]}`; then, in one `UnitOfWork`, `set_labels` and the `HYGIENE_FINDING{status: "raised"}` ledger event. For each hygiene label present whose finding is absent → **clear**: provider `update` removing the label (no comment), then `set_labels` + `HYGIENE_FINDING{status: "cleared"}`. Findings already labelled produce nothing (no comment spam across sweeps).
+7. A provider error (`TransientError` or `PermanentError`) on an item leaves its local labels unchanged so the finding is retried next sweep; counter `hygiene.provider_error`; the sweep continues with the next item. After `max_provider_writes` provider calls the remaining raise/clear actions are counted in `HygieneReport.deferred` and wait for the next sweep. Items without `external_ref` are updated locally only.
+8. DoR block: for STORY/TASK findings of kind `DOR_FAILED` with `policy.block_on_dor_failure`, after the raise step the sweep calls `workflow.raise_event(id, "block", TransitionContext(actor_role=SCRUM_MASTER, source=KERNEL, run_id=None, payload={"dor_failed_checks": checks, "reason": "definition_of_ready: " + ", ".join(checks)}, phase=None))`; `blocked_reason` therefore starts with `"definition_of_ready:"` and `resume_state == READY` (E01-S09 Behavior 4). `GuardRejected`/`UnknownTransition` (item moved meanwhile) is logged and skipped. This is the only `raise_event` the sweep issues; `WORK_ITEM_TRANSITION` is written by `WorkflowManager` (ARCHITECTURE §4.3) and `ON_TASK_BLOCKED` fires from the row.
+9. The new story row accepts only SCRUM_MASTER: any other actor raising `block` from READY gets `PermissionDenied`; SCRUM_MASTER without a non-empty `dor_failed_checks` payload gets `GuardRejected`. No other table row gains SCRUM_MASTER.
+10. `set_labels` never changes `state_version` or `updated_at` (otherwise the sweep would reset its own staleness clock) and writes no ledger event; the `HYGIENE_FINDING` event is written by `HygieneSweep` inside the same unit of work.
+11. Ordering and determinism: items processed by `(priority, created_at, id)`; findings within an item by kind order of the enum; same DB state and clock → identical `HygieneReport`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the shipped defaults When `load_constitution(SCRUM_MASTER)` Then mission "Protect workflow integrity.", `decision_scope == []`, `max_autonomy_level == LOCAL`, D-3 sections in order, no provider name | `tests/agents/test_defaults_scrum_master.py::test_scrum_master_constitution_loads` |
+| 2 | Given the SM body Then `Professional Bias` contains the eight §10.3 responsibilities and `Forbidden Actions` contains "define gameplay" and "define architecture" | `tests/agents/test_defaults_scrum_master.py::test_scrum_master_body_bias_and_forbidden_actions` |
+| 3 | Given default policies When `list_roles()` Then SCRUM_MASTER absent; with project `SCRUM_MASTER.enabled: true` Then present and model policy preferred `claude/sonnet` fallback `claude/opus` | `tests/agents/test_defaults_scrum_master.py::test_scrum_master_disabled_by_default_and_policy` |
+| 4 | Given project `hygiene: {interval_s: 120}` When `load_hygiene_policy` Then 120 and other fields default; `interval_s: 10` Then `ConfigError` | `tests/agents/test_policy_loader.py::test_hygiene_policy_merge_and_bounds` |
+| 5 | Given SCRUM_MASTER When `decide(Edit)`, `decide(jira.transition)`, `decide(Read)` Then DENY, DENY, ALLOW | `tests/permissions/test_defaults_scrum_master.py::test_scrum_master_cannot_write_or_transition` |
+| 6 | Given enabled roles with SCRUM_MASTER but not PROCESS_ARCHITECT When `select_participants(LEAD_DEV, PROCESS, roles)` Then `[LEAD_DEV, SCRUM_MASTER]`; neither enabled Then `[LEAD_DEV, ORCHESTRATOR]` | `tests/debate/test_participants.py::test_process_counterpart_includes_scrum_master` |
+| 7 | Given a READY story whose role owner is ART_DIRECTOR (not enabled) When `check_hygiene` Then one `MISSING_OWNER` finding | `tests/workflow/test_hygiene.py::test_missing_owner_includes_disabled_owner_role` |
+| 8 | Given dependencies on an unknown id, a CANCELLED item, and an A→B→A cycle When `check_hygiene` Then `DANGLING_DEPENDENCY`, `DEPENDENCY_CANCELLED` and `DEPENDENCY_CYCLE` for both A and B | `tests/workflow/test_hygiene.py::test_dependency_consistency_findings` |
+| 9 | Given an IMPLEMENTING story whose dependency is READY Then `DEPENDENCY_NOT_COMPLETE`; a BLOCKED story with empty reason Then `BLOCKED_WITHOUT_REASON` | `tests/workflow/test_hygiene.py::test_status_and_blocker_consistency_findings` |
+| 10 | Given a READY story failing `acceptance_criteria` and `dependencies_resolved` When `dor_failed_checks` Then `["acceptance_criteria"]`; failing only `dependencies_resolved` Then `[]` and no `DOR_FAILED` | `tests/workflow/test_hygiene.py::test_dor_findings_ignore_dependency_progress` |
+| 11 | Given a COMPLETE story without its required `AUTOMATED_TEST` evidence and a COMPLETE feature with `TESTED` not done Then `DOD_EVIDENCE_MISSING` for both naming the missing kind/dimension | `tests/workflow/test_hygiene.py::test_dod_evidence_missing_findings` |
+| 12 | Given an IMPLEMENTING story updated 25 h ago and not running Then `STALE_IN_PROGRESS`; the same story with a running run Then none | `tests/workflow/test_hygiene.py::test_stale_in_progress_respects_running_runs` |
+| 13 | Given `hygiene_label(DOR_FAILED)` Then `"walk-hygiene:dor_failed"` and `kinds_from_labels` round-trips while ignoring `walk-hygiene:unknown` | `tests/workflow/test_hygiene.py::test_hygiene_label_roundtrip` |
+| 14 | Given `story_workflow.yaml` When loaded Then it contains `READY --block--> BLOCKED` with guard `dor_failed`, roles `[SCRUM_MASTER]`, hook `on_task_blocked`, version `"1.0"`, every earlier row unchanged | `tests/workflow/test_tables.py::test_story_workflow_scrum_master_block_row` |
+| 15 | Given payload `dor_failed_checks` `["acceptance_criteria"]` Then `dor_failed` ok; `[]` or missing Then not ok with reason | `tests/workflow/test_guards.py::test_dor_failed_guard_reads_payload` |
+| 16 | Given SCRUM_MASTER disabled When `due(now)` Then False and `run_once` writes no `HYGIENE_FINDING` | `tests/orchestrator/test_hygiene_sweep.py::test_sweep_inactive_when_role_disabled` |
+| 17 | Given SM enabled and a READY story with empty acceptance criteria and an `external_ref` When `run()` Then one provider comment starting `[walk-hygiene] DOR_FAILED`, label `walk-hygiene:dor_failed` locally and on the provider, one `HYGIENE_FINDING` raised event, story BLOCKED with `blocked_reason` starting `definition_of_ready:` and `resume_state == READY`, transition actor SCRUM_MASTER | `tests/orchestrator/test_hygiene_sweep.py::test_dor_failure_comments_labels_and_blocks` |
+| 18 | Given the same DB When `run()` twice Then the second sweep posts no comment and writes no ledger event | `tests/orchestrator/test_hygiene_sweep.py::test_sweep_is_idempotent_via_labels` |
+| 19 | Given a labelled `STALE_IN_PROGRESS` item that is running again When `run()` Then the label is removed locally and on the provider and one `cleared` event is written | `tests/orchestrator/test_hygiene_sweep.py::test_resolved_finding_is_cleared` |
+| 20 | Given a stale IMPLEMENTING story and a COMPLETE story missing evidence When `run()` Then both are labelled and neither changes state | `tests/orchestrator/test_hygiene_sweep.py::test_sweep_never_transitions_except_dor_block` |
+| 21 | Given the provider `comment` raising `TransientError` for one item When `run()` Then that item keeps its labels, the next item is processed, counter `hygiene.provider_error` is 1 | `tests/orchestrator/test_hygiene_sweep.py::test_provider_error_retries_next_sweep` |
+| 22 | Given 3 new findings and `max_provider_writes=2` When `run()` Then one finding raised (comment + label) and `deferred == 2` | `tests/orchestrator/test_hygiene_sweep.py::test_provider_write_cap_defers_findings` |
+| 23 | Given LEAD_DEV raising `block` on a READY story Then `PermissionDenied`; SCRUM_MASTER without `dor_failed_checks` Then `GuardRejected` | `tests/orchestrator/test_hygiene_sweep.py::test_ready_block_row_restricted_to_scrum_master` |
+| 24 | Given a running loop with SM enabled and `interval_s=900` When the `FakeClock` advances 899 s then 1 s Then `run` was called once then twice, always before `tick`; a `run` exception does not stop the loop | `tests/orchestrator/test_service.py::test_loop_runs_hygiene_when_due_before_tick` |
+
+#### Evidence required
+- Quality gate output.
+- Demo in a bootstrapped repo with `roles: {SCRUM_MASTER: {enabled: true}}` in `.ai/agents/policies.yaml` and a READY story whose acceptance criteria were emptied in `.walk/work/<ref>.md`: `walk run --once`; `walk ledger query --kind HYGIENE_FINDING --json` shows `status: "raised"`, `kind: "DOR_FAILED"`; `walk work show STORY-0001` shows `BLOCKED` with reason `definition_of_ready: acceptance_criteria` and label `walk-hygiene:dor_failed`.
+
+#### Notes
+- §10.3 "SM SHOULD NOT define gameplay or architecture" is enforced three ways: `decision_scope: []` with `max_autonomy_level: 0` (every SM proposal escalates, Inv. 5/7), DENY rows for write and transition tools, and a table row that lets SCRUM_MASTER raise only `block` from READY behind `dor_failed`. The `unblock` rows already list SCRUM_MASTER (INTERFACES §3.1/§3.2) — this story does not use them; SM never unblocks.
+- §58 "If not ready: BLOCKED rather than agent inventing high-impact requirements": dependency *progress* is not a DoR failure for READY items (`ready_items` waits on it, E01-S10 Behavior 3), hence `HYGIENE_DOR_IGNORED_CHECKS`; a dependency that can never complete is reported as `DEPENDENCY_CANCELLED`/`DANGLING_DEPENDENCY` instead.
+- §6.4 Implementation != Verification: the sweep reports missing DoD evidence on COMPLETE items but never reopens them — reopening is QC's (`regression_reopen`) or the user's call.
+- Table version: the new `story_workflow` row keeps `version: "1.0"`, following the pre-E10 precedent (E03-S16, E06-S02 and E08-S04 add or change rows without a bump). The E10-S07 / E11-S01 merge-order rule (`1.1` then `1.2`) assumes this baseline; if E05-X01 decides to bump instead, it must update both of those stories in the same commit.
+- Write point: `HYGIENE_FINDING` is written by `orchestrator.HygieneSweep` (new ARCHITECTURE §4.3 row); `WORK_ITEM_TRANSITION` for the DoR block stays with `WorkflowManager`.
+- `NEW NAME:` kernel default constitution `scrum_master.md` and its `escalation_rules` condition "workflow rule change"; `policies.yaml` `SCRUM_MASTER` entry and top-level `hygiene:` block; `PolicyLoader.load_hygiene_policy`; ADR-0006 D-6 row for SCRUM_MASTER (absent from the D-6 table); `CATEGORY_COUNTERPART[PROCESS]` gains SCRUM_MASTER; module `walk.workflow.hygiene` (`HygieneFindingKind`, `HygieneFinding`, `HygienePolicy`, `IN_PROGRESS_STATES`, `HYGIENE_LABEL_PREFIX`, `HYGIENE_DOR_IGNORED_CHECKS`, `hygiene_label`, `kinds_from_labels`, `dor_failed_checks`, `check_hygiene`, `render_finding_comment`); label family `walk-hygiene:<kind>`; guard `dor_failed` and payload key `dor_failed_checks`; `story_workflow` row `READY --block--> BLOCKED` (SCRUM_MASTER); `WorkflowRepository.set_labels`; `LedgerEventKind.HYGIENE_FINDING` and its write point; module `walk.orchestrator.hygiene` (`HygieneSweep`, `HygieneReport`); `DefaultOrchestrator(hygiene=…)`; telemetry counters `hygiene.*`.
+- Shares `policies.yaml`, `participants.py`, `permissions/defaults.yaml` and `composition.py` with E05-S12 — the two never run concurrently (E05-S12 depends on this story).
+- Commit subject: `feat: add scrum master role and work-item hygiene sweep (E05-S11)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S12 — Optional GAME_DIRECTOR constitution and DESIGN/ART escalation rung
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §11, §51, §50, §46, §6.12, §12, §127 (optional roles), §137 (Inv. 5, 7), §138 (Infinite Debate — authority)
+**Depends on:** E05-S05, E05-S06, E05-S11
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The §11 Game Director exists as an optional kernel-default role, disabled by default through `RuntimePolicy.enabled`; when a project enables it, it holds decision authority over creative-identity matters (`DESIGN`, `ART`) and becomes the rung between PRODUCT_OWNER and USER for debates of those categories (PO unresolved, or no PO enabled → GD arbitration → USER only if the GD cannot or may not decide); when it is disabled every escalation path is exactly the E05-S02/E05-S05 behaviour (straight to USER).
+
+#### Scope
+- In: `game_director.md` default constitution; `policies.yaml` `GAME_DIRECTOR` entry (`enabled: false`); `permissions/defaults.yaml` GAME_DIRECTOR rows; `DebateState.ESCALATED_GD` and five `debate_workflow` rows plus a `gd_not_applicable` guard on the three existing rows into ESCALATED_USER (two `escalate`, one `po_unresolved`); `GD_CATEGORIES`; GD arbitration turn scheduling, routing and output application; Level-2 escalations with PO disabled routed to a GD arbitration-only debate; `record()` accepting GAME_DIRECTOR on the debate path; orphan protection when the role is disabled mid-debate.
+- Out: Level-3 escalations raised directly from proposals (§51 list matches, project autonomy cap — they stay `ApprovalRequest(USER)`, Inv. 7, §6.12); GD participation as a regular debate participant (not in `CATEGORY_COUNTERPART`; GD is an arbiter only); GD approval of artifacts (`may_approve: []` — `ART_DIRECTION`/`GAMEPLAY_CONCEPT` approval stays with DESIGN_LEADER, ART_DIRECTOR (E08-S01) and USER); ART_DIRECTOR constitution (E08-S01); CLI changes (`walk debates list/show` already print any state, E05-S09).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/defaults/game_director.md` | create | — |
+| `src/walk/agents/defaults/policies.yaml` | modify | — (`roles.GAME_DIRECTOR`) |
+| `src/walk/permissions/defaults.yaml` | modify | — (GAME_DIRECTOR rows = the ADR-0006 D-6 PO/DL/AD row) |
+| `src/walk/debate/models.py` | modify | `DebateState.ESCALATED_GD` `(verify: DebateState placement, DOMAIN-MODEL §3 / E01-S18)` |
+| `src/walk/debate/participants.py` | modify | `GD_CATEGORIES`, `gd_applicable` |
+| `src/walk/debate/guards.py` | modify | `register_debate_guards` (guards `gd_applicable`, `gd_not_applicable`) |
+| `src/walk/workflow/tables/debate_workflow.yaml` | modify | — (rows in Interface contract) |
+| `src/walk/debate/service.py` | modify | `DefaultDebateManager.__init__` (`gd_enabled`), `.gd_unresolved`, `.resolve` (ESCALATED_GD by GAME_DIRECTOR) |
+| `src/walk/debate/scheduling.py` | modify | `pending_arbitration_turn`, `GD_ARBITRATION_KEY_SUFFIX` |
+| `src/walk/decisions/service.py` | modify | `DefaultDecisionManager.record` (debate actor GAME_DIRECTOR), `.escalate_from_debate` (`arbiter_role`) |
+| `src/walk/orchestrator/router.py` | modify | `DefaultTaskRouter.route_debate` (GAME_DIRECTOR in ESCALATED_GD) |
+| `src/walk/orchestrator/scheduler.py` | modify | — (`schedule_debate_turns` lists ESCALATED_GD; orphan rule, Behavior 8) |
+| `src/walk/orchestrator/escalation.py` | modify | `EscalationRouter.route` (Level-2 GD rung) |
+| `src/walk/runtime/output_applier.py` | modify | — (DEBATE branch for GAME_DIRECTOR runs in ESCALATED_GD) |
+| `src/walk/cli/composition.py` | modify | — (`gd_enabled=lambda: agent_manager.is_enabled(GAME_DIRECTOR)` into `DefaultDebateManager`) |
+| `tests/agents/test_defaults_game_director.py` | create | — |
+| `tests/debate/test_table.py` | modify | — (row count 18) |
+| `tests/debate/test_guards.py` | modify | — |
+| `tests/debate/test_participants.py` | modify | — |
+| `tests/debate/test_scheduling.py` | modify | — |
+| `tests/debate/test_service_game_director.py` | create | — |
+| `tests/decisions/test_service_record_debate.py` | modify | — |
+| `tests/orchestrator/test_escalation_router.py` | modify | — |
+| `tests/orchestrator/test_debate_arbitration.py` | modify | — |
+| `tests/runtime/test_applier_debate_gd.py` | create | — |
+
+#### Interface contract
+`DebateManager` (INTERFACES §1.9), `debate_workflow` (INTERFACES §3.5 + E05-S03 arbitration rows), E05-S05 `escalate_from_debate`/`pending_arbitration_turn`/PO applier branch, `RuntimePolicy.enabled`/`is_enabled` (E05-S06), `LEVEL3_CONDITIONS`/`matches_condition` (E05-S01). Deltas:
+```python
+# src/walk/debate/models.py
+class DebateState(StrEnum):            # DOMAIN-MODEL §3 members +
+    ESCALATED_GD = "ESCALATED_GD"      # between ESCALATED_PO and ESCALATED_USER, DESIGN/ART only, GAME_DIRECTOR arbitrates
+
+# src/walk/debate/participants.py
+GD_CATEGORIES: frozenset[DecisionCategory] = frozenset({DecisionCategory.DESIGN, DecisionCategory.ART})
+def gd_applicable(category: DecisionCategory, gd_enabled: bool) -> bool: ...    # gd_enabled and category in GD_CATEGORIES
+
+# src/walk/debate/guards.py — payload key `gd_applicable` (bool), computed by DefaultDebateManager on every escalate/po_unresolved
+# gd_applicable: ok iff payload["gd_applicable"] is True;  gd_not_applicable: ok iff it is False or missing
+
+# src/walk/debate/service.py
+class DefaultDebateManager:
+    def __init__(self, ..., po_enabled: Callable[[], bool], gd_enabled: Callable[[], bool] = lambda: False) -> None: ...
+    async def gd_unresolved(self, debate_id: DebateId, reason: str, *, recommendation: str | None = None) -> Debate:
+        """ESCALATED_GD -> ESCALATED_USER (event gd_unresolved); Level-3 escalation via escalate_from_debate(route=True);
+        `recommendation` (the GD's chosen outcome, if any) replaces the leading-position recommendation."""
+
+# src/walk/debate/scheduling.py
+GD_ARBITRATION_KEY_SUFFIX = "gd"       # idempotency key f"debate:{debate_id}:gd"
+def pending_arbitration_turn(debate: Debate, running_roles: set[AgentRole]) -> DebateTurn | None:
+    """E05-S05 + ESCALATED_GD -> GAME_DIRECTOR turn (round = debate.round) when work_item_id set and GD not running."""
+
+# src/walk/decisions/service.py
+class DefaultDecisionManager:
+    async def escalate_from_debate(self, request: EscalationRequest, *, debate_id: DebateId, work_item_id: WorkItemId | None,
+                                   route: bool, arbiter_role: AgentRole | None = None) -> Escalation: ...
+        # arbiter_role stored in the escalation row json and the ESCALATION_RAISED payload
+```
+`debate_workflow.yaml` rows added (file order: each new GD row directly before the matching "→ ESCALATED_USER" row, which gains guard `gd_not_applicable`):
+
+| From | Event | Guard(s) | To | Hooks | Who |
+|---|---|---|---|---|---|
+| CONSENSUS_CHECK | `escalate` | `round_at_max`, `po_disabled`, `gd_applicable` | ESCALATED_GD | ON_ESCALATION | KERNEL |
+| OPEN | `escalate` | `arbitration_only`, `po_disabled`, `gd_applicable` | ESCALATED_GD | ON_ESCALATION | KERNEL |
+| ESCALATED_PO | `po_unresolved` | `gd_applicable` | ESCALATED_GD | ON_ESCALATION | same roles as the existing `po_unresolved` row |
+| ESCALATED_GD | `gd_resolved` | `po_output_completed_with_decision` | RESOLVED | ON_DEBATE_RESOLVED | GAME_DIRECTOR |
+| ESCALATED_GD | `gd_unresolved` | — | ESCALATED_USER | ON_ESCALATION | GAME_DIRECTOR, KERNEL |
+
+Table: 18 rows, `version: "1.0"` (the table ships with E05; no released `1.0` exists before the epic merge).
+
+Constitution front matter (ADR-0013 D-2):
+
+| Field | Value |
+|---|---|
+| `id` / `role` / `version` | `GAME_DIRECTOR` / `GAME_DIRECTOR` / `"1.0"` |
+| `identity` | Game Director |
+| `mission` | Protect overall game vision and creative identity. (§11) |
+| `responsibilities` | game vision, creative identity, cross-discipline creative coherence, player fantasy and tone, arbitration of DESIGN and ART disputes the Product Owner could not resolve |
+| `authority` | `decision_scope: [DESIGN, ART]`, `max_autonomy_level: 2`, `may_approve: []`, `may_reject: []`, `may_create_work: []` |
+| `professional_bias` | Coherence of the whole game over the local optimum of one discipline; one recognisable vision across design, art and feel. |
+| `core_beliefs` | "A game is remembered for its identity, not its feature count." · "Every feature must serve the player fantasy." |
+| `decision_principles` | "Decide for coherence across disciplines." · "Name the vision pillar each decision protects." · "Leave cost and schedule trade-offs to the Product Owner." |
+| `risk_tolerance` | MEDIUM |
+| `preferred_evidence` | `[PLAYTEST, GAMEPLAY_RECORDING, SCREENSHOT, PLAYER_TELEMETRY]` |
+| `conflict_behavior` | Arbitrates DESIGN and ART disputes after the Product Owner; defers product value and schedule to the Product Owner and final product authority to the user. |
+| `escalation_rules` | `{condition: "core gameplay change", to_level: 3, category: DESIGN}`, `{condition: "major art direction change", to_level: 3, category: ART}` |
+| `tool_permissions` | ADR-0006 D-6 PO/DL/AD row: read tools ALLOW; file write tools DENY; `monetization.change` REQUIRE_APPROVAL(USER) |
+| `forbidden_actions` | "edit code or assets", "decide a Level-3 matter without the user", "override a user decision", "decide technical architecture", "decide product cost or schedule trade-offs", "resolve a debate outside arbitration" |
+
+`policies.yaml`: `roles.GAME_DIRECTOR: {enabled: false, model_policy: {preferred: [claude/opus], fallback: [codex/default]}, execution_strategy: review_only, max_parallel_runs: 1}`.
+
+#### Behavior
+1. `game_director.md` loads through `ConstitutionLoader` with all D-3 sections in order, no provider name; `## Working Guidance` states the arbitration contract: "When a debate is ESCALATED_GD, read every final position and the Product Owner's unresolved reason, choose one outcome, and return `status: COMPLETED` with exactly one `decisions` entry whose `category` equals the debate category, `position` is the chosen outcome and `rationale` names the vision pillar it protects; for a §51 Level-3 matter still return your recommended outcome — the kernel forwards it to the user; return `NEEDS_INPUT` when the options lack the information to choose." Disabled by default; `load_constitution(GAME_DIRECTOR)` works while disabled.
+2. `DefaultDebateManager` computes `gd_applicable = gd_applicable(debate.category, gd_enabled())` into the payload of every `escalate` and `po_unresolved` event. With GD disabled (or category not DESIGN/ART) the guard `gd_not_applicable` keeps every E05-S03/E05-S05 path unchanged: PO enabled → ESCALATED_PO → (unresolved) ESCALATED_USER; PO disabled → ESCALATED_USER.
+3. With GD enabled and a DESIGN/ART debate: `CONSENSUS_CHECK --escalate-->` ESCALATED_PO when PO is enabled, else ESCALATED_GD; `ESCALATED_PO --po_unresolved-->` ESCALATED_GD; an arbitration-only debate (`max_rounds == 0`) with PO disabled opens directly into ESCALATED_GD. Entering ESCALATED_GD calls `decisions.escalate_from_debate(request(to_level=PO), route=False, arbiter_role=GAME_DIRECTOR)` (E05-S05 Behavior 1 pattern; one `ESCALATION_RAISED`, one `ON_ESCALATION`, no approval request). The `AutonomyLevel` IntEnum is unchanged: the GD rung is recorded as level `PO` with `arbiter_role` / decision `owner` GAME_DIRECTOR.
+4. Scheduling: `schedule_debate_turns` also lists ESCALATED_GD debates; `pending_arbitration_turn` yields one GAME_DIRECTOR `DEBATE` turn (key `debate:<id>:gd`); `route_debate` accepts GAME_DIRECTOR only when the debate is ESCALATED_GD (otherwise `PermissionDenied`, Invariant: arbiters are never participants).
+5. Applier, `run.role == GAME_DIRECTOR` and debate ESCALATED_GD (mirror of E05-S05 Behavior 3): the first `output.decisions` proposal with `category == debate.category` and `output.status == COMPLETED` is the arbitration. When neither the debate topic nor the proposal position `matches_condition` any `LEVEL3_CONDITIONS` entry → `debates.resolve(debate_id, outcome=proposal.position, by=Actor(GAME_DIRECTOR, run.model_id, run.id), rationale=proposal.rationale)` (event `gd_resolved`; decision ACCEPTED, `owner == GAME_DIRECTOR`, `autonomy_level == PO`, `debate_id` set; the proposal is not passed to `propose`). When it matches a Level-3 condition → `gd_unresolved(reason="level 3 matter", recommendation=proposal.position)` (§6.12, §51: the user decides, the GD's choice becomes the approval's recommendation). `NEEDS_INPUT`, `BLOCKED`, no matching proposal or a run `FAILED` after retries → `gd_unresolved(reason=...)` without recommendation.
+6. `resolve` accepts ESCALATED_GD only with `by.role == GAME_DIRECTOR` (`DebateStateError` otherwise); `DefaultDecisionManager.record` accepts `GAME_DIRECTOR` as actor when `decision.debate_id` is set (E05-S03 Behavior 7 list becomes KERNEL, PRODUCT_OWNER, GAME_DIRECTOR, USER); a GAME_DIRECTOR record without `debate_id` follows the normal authority check (`decision_scope [DESIGN, ART]`, max level PO).
+7. Level-2 escalations (E05-S02 Behavior 3): PO enabled → unchanged; PO disabled and `gd_applicable(category, GAME_DIRECTOR in enabled_roles())` and `from_role != GAME_DIRECTOR` → `debates.open(topic, category, [from_role, GAME_DIRECTOR], opened_by=from_role, work_item_id, max_rounds=0)`, row json `routed_to: "GD_DEBATE"`; otherwise degrade to USER as today. Level-1 and Level-3 routing is unchanged.
+8. Orphan protection (E05-S05 Behavior 8): when `schedule_debate_turns` finds an ESCALATED_GD debate while GAME_DIRECTOR is not enabled, or one without `work_item_id`, it calls `gd_unresolved(reason="game director not available")` once — the debate always has a scheduled actor or reaches the user.
+9. User resolution of a debate that passed through the GD (ESCALATED_USER) is the unchanged E05-S05 Behavior 4 path; the approval's `recommendation` is the GD's choice when one was given.
+10. `walk.debate` still imports none of `permissions`, `agents`, `runtime`, `orchestrator` (E05-R01 Behavior 5): role enablement reaches it only through the injected `gd_enabled` callable.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the shipped defaults When `load_constitution(GAME_DIRECTOR)` Then mission equals §11, `decision_scope == [DESIGN, ART]`, `max_autonomy_level == PO`, `may_approve == []`, D-3 sections in order, no provider name | `tests/agents/test_defaults_game_director.py::test_game_director_constitution_loads` |
+| 2 | Given the GD body Then `Working Guidance` contains "exactly one `decisions` entry", "ESCALATED_GD" and "NEEDS_INPUT" | `tests/agents/test_defaults_game_director.py::test_game_director_arbitration_contract` |
+| 3 | Given default policies When `list_roles()` Then GAME_DIRECTOR absent; project `GAME_DIRECTOR.enabled: true` Then present; `rules_for(GAME_DIRECTOR)` never wider than defaults and `monetization.change` requires USER | `tests/agents/test_defaults_game_director.py::test_game_director_disabled_by_default_and_permissions` |
+| 4 | Given `gd_applicable(DESIGN, True)`, `(ART, True)`, `(TECH, True)`, `(DESIGN, False)` Then True, True, False, False | `tests/debate/test_participants.py::test_gd_applicable_only_design_art_when_enabled` |
+| 5 | When `debate_workflow.yaml` loads Then 18 rows, version `"1.0"`, the five GD rows present and the three existing rows into ESCALATED_USER carry `gd_not_applicable` | `tests/debate/test_table.py::test_debate_workflow_has_game_director_rung` |
+| 6 | For `gd_applicable` and `gd_not_applicable`, Given payload true/false/missing Then ok/not ok with reason (parametrised) | `tests/debate/test_guards.py::test_gd_guards_evaluate_payload_key` |
+| 7 | Given GD disabled, PO enabled and a DESIGN debate at round limit When closed and the PO output is `NEEDS_INPUT` Then ESCALATED_PO then ESCALATED_USER, exactly as E05-S05 | `tests/debate/test_service_game_director.py::test_gd_disabled_keeps_po_then_user_path` |
+| 8 | Given GD enabled, PO enabled, a DESIGN debate in ESCALATED_PO When `po_unresolved` Then ESCALATED_GD, one escalation with `to_level=2` and json `arbiter_role == "GAME_DIRECTOR"`, no approval request | `tests/debate/test_service_game_director.py::test_po_unresolved_design_goes_to_gd` |
+| 9 | Given GD enabled and PO disabled When a DESIGN debate hits the round limit Then ESCALATED_GD; a TECH debate Then ESCALATED_USER | `tests/debate/test_service_game_director.py::test_no_po_design_goes_to_gd_tech_to_user` |
+| 10 | Given ESCALATED_GD When `resolve(by=Actor(GAME_DIRECTOR))` Then RESOLVED, decision owner GAME_DIRECTOR level PO; `by=Actor(PRODUCT_OWNER)` Then `DebateStateError` | `tests/debate/test_service_game_director.py::test_resolve_in_escalated_gd_only_by_game_director` |
+| 11 | Given ESCALATED_GD When `gd_unresolved(reason, recommendation="Keep cel shading")` Then ESCALATED_USER and the pending USER approval's escalation `recommendation == "Keep cel shading"` | `tests/debate/test_service_game_director.py::test_gd_unresolved_forwards_recommendation_to_user` |
+| 12 | Given an ESCALATED_GD debate with work item When `pending_arbitration_turn` Then a GAME_DIRECTOR turn keyed `debate:<id>:gd`; GD running Then `None` | `tests/debate/test_scheduling.py::test_arbitration_turn_for_escalated_gd` |
+| 13 | Given `Decision(debate_id="DEB-0001")` When `record(by=Actor(GAME_DIRECTOR))` Then ACCEPTED; `by=Actor(SENIOR_DEV)` Then `AuthorityViolation` | `tests/decisions/test_service_record_debate.py::test_record_debate_path_accepts_game_director` |
+| 14 | Given a GD output COMPLETED with an ART proposal "Painterly outlines" for an ART debate When applied Then debate RESOLVED, decision ACCEPTED owner GAME_DIRECTOR with `debate_id`, no PROPOSED decision created | `tests/runtime/test_applier_debate_gd.py::test_gd_arbitration_resolves_debate` |
+| 15 | Given a GD output choosing "major art direction change to pixel art" When applied Then ESCALATED_USER, debate not resolved, approval recommendation equals that position | `tests/runtime/test_applier_debate_gd.py::test_gd_level3_matter_goes_to_user_with_recommendation` |
+| 16 | Given a GD output `NEEDS_INPUT` When applied Then ESCALATED_USER and a Level-3 approval pending | `tests/runtime/test_applier_debate_gd.py::test_gd_needs_input_escalates_to_user` |
+| 17 | Given a Level-2 DESIGN escalation, PO disabled, GD enabled When `route` Then `open` called with `[from_role, GAME_DIRECTOR]` and `max_rounds=0`, json `routed_to == "GD_DEBATE"`; GD disabled Then USER approval with `degraded_to_user` | `tests/orchestrator/test_escalation_router.py::test_level2_without_po_uses_game_director_rung` |
+| 18 | Given an ESCALATED_GD debate and GAME_DIRECTOR disabled When `tick` Then no GD run, debate ESCALATED_USER, one approval pending | `tests/orchestrator/test_debate_arbitration.py::test_escalated_gd_without_game_director_goes_to_user` |
+| 19 | Given an ESCALATED_GD debate on STORY-0001 When `tick` twice Then exactly one GAME_DIRECTOR run with purpose `DEBATE` | `tests/orchestrator/test_debate_arbitration.py::test_gd_turn_scheduled_once` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the E05-S05 arbitration fixture with `GAME_DIRECTOR: {enabled: true}` and a DESIGN debate whose scripted PO output is `NEEDS_INPUT`: `walk debates show DEB-0001 --json` shows `ESCALATED_GD`; after one `walk run --once` with a scripted GD decision, `walk decisions list --json` shows the ACCEPTED decision with `owner == "GAME_DIRECTOR"` and `debate_id == "DEB-0001"`; the same fixture with GD disabled ends in a pending `kind == "escalation"` approval (`walk approvals --pending --json`).
+
+#### Notes
+- §11 "For small projects, user may directly fulfill this responsibility" is the disabled default (§127 lists GD neither as MVP nor optional early role). §6.12 / §51: the GD never decides a Level-3 list matter and never answers a direct Level-3 escalation — it narrows what reaches the user, it does not replace the user.
+- Design choice: a separate `ESCALATED_GD` state (instead of reusing ESCALATED_PO with another arbiter) keeps `walk debates list`, routing rows and the E05-R01 "terminal or scheduled actor" check readable; the `AutonomyLevel` IntEnum is left untouched (GD rung recorded as `PO` + `arbiter_role`/`owner`) because §51 defines exactly four levels and E05-S01 `classify` compares levels numerically.
+- The `gd_resolved` row reuses guard `po_output_completed_with_decision` (it reads only payload keys `output_status`, `has_decision`); no new guard name for the same predicate.
+- `NEW NAME:` kernel default constitution `game_director.md` (escalation conditions reuse the §51 wording); `policies.yaml` `GAME_DIRECTOR` entry; ADR-0006 D-6 row extended to GAME_DIRECTOR; `DebateState.ESCALATED_GD` (DOMAIN-MODEL §3, ADR-0010 D-3); `debate_workflow` events `gd_resolved`/`gd_unresolved` and the five rows above (INTERFACES §3.5); guards `gd_applicable`/`gd_not_applicable` and payload key `gd_applicable`; `GD_CATEGORIES`, `gd_applicable()` in `walk.debate.participants`; `DefaultDebateManager(gd_enabled=…)`, `.gd_unresolved`; `GD_ARBITRATION_KEY_SUFFIX`; `escalate_from_debate(arbiter_role=…)` and escalation row json key `arbiter_role`; escalation `routed_to: "GD_DEBATE"`; INTERFACES §4 routing row `DEBATE | ESCALATED_GD | GAME_DIRECTOR | DEBATE`; INTERFACES §1.1 `handle_escalation` docstring gains "2→PO run, or GD arbitration for DESIGN/ART when no PO".
+- Depends on E05-S11 only to serialise the shared files (`policies.yaml`, `participants.py`, `permissions/defaults.yaml`, `composition.py`).
+- Commit subject: `feat: add optional game director escalation rung (E05-S12)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
 ### E05-R01 — Review E05
 
 **Status:** TODO
 **Type:** docs
-**Requirements:** §137 (Inv. 5, 7), §23, §44–§46, §51, §138 (Infinite Debate)
-**Depends on:** E05-S10
+**Requirements:** §137 (Inv. 5, 7), §23, §44–§46, §51, §10.3, §11, §138 (Infinite Debate)
+**Depends on:** E05-S10, E05-S11, E05-S12
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC
 
@@ -1180,7 +1542,7 @@ _pending_
 An independent agent instance (different model than the E05 implementer where possible, §23) verifies every E05 story against the Definition of Done and Invariants 5 and 7, recording defects as `bugfix` stories.
 
 #### Scope
-- In: stories E05-S01…S10 and their commits; `INTERFACES.md` / `DOMAIN-MODEL.md` / ADR-0010 / ADR-0013 deltas; WBS §6 register entries introduced by E05.
+- In: stories E05-S01…S12 and their commits; `INTERFACES.md` / `DOMAIN-MODEL.md` / ADR-0010 / ADR-0013 deltas; WBS §6 register entries introduced by E05.
 - Out: fixing defects (each becomes `E05-Bxx`).
 
 #### Files
@@ -1201,10 +1563,10 @@ Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
 3. Invariant 7 (bounded autonomy): every `Decision` and `Escalation` row carries an `autonomy_level`/`to_level`; `classify` consults `project_autonomy_max` on every call; every Level-3 escalation has an `ApprovalRequest(approver=USER)` (query over the E05 gate DB).
 4. §46/§138: `debate_workflow.yaml` is loaded data (no state literal comparisons for debate transitions outside `walk/debate/state_machine.py`); `max_rounds` default 3 and configurable; every debate in the gate DB is terminal or has a scheduled actor.
 5. Import table (ARCHITECTURE §2.2): `walk.debate` imports none of `permissions`, `agents`, `runtime`, `orchestrator`; `walk.decisions` does not import `walk.debate`; `import-linter` green. The `HookManager` constructor dependency of `DefaultDecisionManager` (E04-S05) and `DefaultDebateManager` (E05-S03) is checked against the import-linter contract as configured in E01-S01; a violation is a defect against those stories.
-6. ADR-0013: all six shipped constitutions pass `missing_body_sections` and `provider_name_hits`; narrowing table covers every ADR-0013 D-4 field.
+6. ADR-0013: all eight shipped constitutions (four MVP + PRODUCT_OWNER, DESIGN_LEADER, SCRUM_MASTER, GAME_DIRECTOR) pass `missing_body_sections` and `provider_name_hits`; narrowing table covers every ADR-0013 D-4 field; SCRUM_MASTER and GAME_DIRECTOR are disabled by default and, when disabled, no `HYGIENE_FINDING` event and no `ESCALATED_GD` debate exists in the gate DB.
 7. Debate id prefix: code and docs use `DEB-` (DOMAIN-MODEL §2); any remaining `DBT` reference is a defect.
 8. `NEW NAME:` items of E05 are present in WBS §6 or listed in the review note for the architect.
-9. Defects → `E05-Bxx` stories using the template; commit `docs: review epic 05 stories E05-S01..S10 (E05-R01)`.
+9. Defects → `E05-Bxx` stories using the template; commit `docs: review epic 05 stories E05-S01..S12 (E05-R01)`.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
@@ -1222,7 +1584,7 @@ Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
 
 #### Notes
 - Tests 2–3 are architecture tests created by the reviewer (review tasks may add tests, never production code).
-- Commit subject: `docs: review epic 05 stories E05-S01..S10 (E05-R01)`.
+- Commit subject: `docs: review epic 05 stories E05-S01..S12 (E05-R01)`.
 
 #### Evidence (filled by implementer)
 _pending_

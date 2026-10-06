@@ -123,7 +123,7 @@ The `UA_RELEASE` role exists as a kernel-default constitution, runtime policy an
 | `src/walk/permissions/defaults.yaml` | modify | — (`UA_RELEASE` rows, table below) |
 | `src/walk/workflow/release.py` | create | `ReleaseStep`, `RELEASE_LABEL_PREFIX`, `RELEASE_STEP_LABEL_PREFIX`, `release_labels`, `rc_id_of`, `release_step_of` |
 | `src/walk/workflow/guards.py` | modify | `is_release_step`, `output_status_is_verdict` |
-| `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `release_step_done`; `version: "1.1"`) |
+| `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `release_step_done`; `version` per the merge-order rule in Notes) |
 | `src/walk/workflow/__init__.py` | modify | re-export `ReleaseStep`, `release_step_of`, `rc_id_of` |
 | `src/walk/orchestrator/router.py` | modify | `DefaultTaskRouter.route` (release rows), `RELEASE_ROUTES` |
 | `src/walk/runtime/output_applier.py` | modify | — (`release_step_done` implied event for carrier tasks) |
@@ -157,7 +157,7 @@ RELEASE_ROUTES: dict[ReleaseStep, tuple[AgentRole, str]] = {
     ReleaseStep.PUBLISH: (AgentRole.UA_RELEASE, "IMPLEMENT"),
 }
 ```
-`story_workflow.yaml` new row (INTERFACES §3.2 addition, table version `1.1`): `READY | release_step_done | is_release_step, output_status_is_verdict, required_evidence_present | COMPLETE | ON_TASK_COMPLETE | KERNEL`.
+`story_workflow.yaml` new row (INTERFACES §3.2 addition; table version `"1.1"` if this story merges before E10-S07, `"1.2"` if after — merge-order rule in Notes): `READY | release_step_done | is_release_step, output_status_is_verdict, required_evidence_present | COMPLETE | ON_TASK_COMPLETE | KERNEL`.
 
 Constitution front matter (ADR-0013 D-2): `id: UA_RELEASE`, `role: UA_RELEASE`, `version: "1.0"`, `identity: UA / Release Manager`, `mission: Protect market readiness and release quality.` (§10.9), `responsibilities: [positioning, store listing, ASO, screenshots, creatives, release notes, publishing, release validation]`, `authority: {decision_scope: [RELEASE], max_autonomy_level: 1, may_approve: [STORE_METADATA], may_reject: [review.reject], may_create_work: [TASK]}`, `risk_tolerance: VERY_LOW`, `preferred_evidence: [BUILD_ARTIFACT, QC_REPORT, SCREENSHOT, PLAYTEST]`, `escalation_rules: [{condition: "publishing a store build", to_level: 3, category: RELEASE}, {condition: "release date, pricing or monetization change", to_level: 3, category: PRODUCT}]`, `tool_permissions: [{tool: store.validate, effect: ALLOW}, {tool: store.publish, effect: REQUIRE_APPROVAL, approver: USER}, {tool: Edit, effect: DENY}, {tool: Write, effect: DENY}]`, `forbidden_actions: ["publish without user approval", "edit game code or assets", "change approved store metadata"]`. Body sections per ADR-0013 D-3 with one paragraph each derived from §10.9.
 
@@ -177,7 +177,7 @@ Constitution front matter (ADR-0013 D-2): `id: UA_RELEASE`, `role: UA_RELEASE`, 
 3. `DefaultTaskRouter.route(item, state)`: when `item.kind == TASK`, `state in {READY, REWORK}` and `release_step_of(item)` is set → `RouteDecision(role, purpose)` from `RELEASE_ROUTES`, `cross_model_review=False`; otherwise the E03-S07 table applies unchanged. A release task whose `contract.owner_role` differs from the routed role raises `ConfigError`.
 4. `is_release_step(item, ctx)` is true iff `release_step_of(item)` is not `None`; `output_status_is_verdict` is true iff `ctx.payload["output_status"] ∈ {APPROVED, REJECTED, COMPLETED}`.
 5. `DefaultOutputApplier` raises `release_step_done` (instead of the regular `(kind, state, status)` mapping) when `release_step_of(run item)` is set; the payload carries `output_status` and `evidence_kinds_present` (WBS §3.4) so `required_evidence_present` checks `contract.required_evidence`.
-6. The `story_workflow` table loads as version `1.1` with exactly one more row than `1.0`; `TransitionTable` validation (E01-S09) still passes; non-release tasks cannot take `release_step_done` (guard `is_release_step` rejects).
+6. The `story_workflow` table loads with the version set by the merge-order rule (Notes: `1.1` when E11-S01 merges before E10-S07, `1.2` when after) and exactly one more row than the table on `main` before this story; `TransitionTable` validation (E01-S09) still passes; non-release tasks cannot take `release_step_done` (guard `is_release_step` rejects).
 7. `PermissionManager.decide` for `UA_RELEASE` + `store.publish` → `REQUIRE_APPROVAL(approver=USER)`; for `Edit` → `DENY`; for `store.validate` → `ALLOW`; a project `permissions.yaml` granting `UA_RELEASE Edit ALLOW` → `ConfigError` (E02-S10 narrowing).
 
 #### Acceptance criteria
@@ -188,7 +188,7 @@ Constitution front matter (ADR-0013 D-2): `id: UA_RELEASE`, `role: UA_RELEASE`, 
 | 3 | Given `UA_RELEASE` When `decide(store.publish)` Then `REQUIRE_APPROVAL` approver USER; `decide(Edit)` DENY; `decide(store.validate)` ALLOW | `tests/permissions/test_defaults_ua_release.py::test_ua_release_rule_effects` |
 | 4 | Given a project rule `UA_RELEASE Edit ALLOW` When merged Then `ConfigError` | `tests/permissions/test_defaults_ua_release.py::test_ua_release_cannot_be_widened` |
 | 5 | Given labels from `release_labels("RC-01", QC)` on a TASK When parsed Then `rc_id_of == "RC-01"`, `release_step_of == QC`; given only one label Then `ConfigError` | `tests/workflow/test_release_labels.py::test_release_labels_roundtrip_and_partial_rejected` |
-| 6 | Given `story_workflow.yaml` When loaded Then version `1.1`, contains `READY --release_step_done--> COMPLETE` with the three guards, and all `1.0` rows unchanged | `tests/workflow/test_tables.py::test_story_workflow_release_row` |
+| 6 | Given `story_workflow.yaml` When loaded Then version is `1.1` if merged before E10-S07 or `1.2` if after (merge-order rule), it contains `READY --release_step_done--> COMPLETE` with the three guards, and all rows present before this story are unchanged | `tests/workflow/test_tables.py::test_story_workflow_release_row` |
 | 7 | Given a TASK with step `qc` in READY When `route` Then `(QC, "QC")`; step `ua-review` → `(UA_RELEASE, "REVIEW")`; step `publish` → `(UA_RELEASE, "IMPLEMENT")`; all with `cross_model_review False` | `tests/orchestrator/test_router_release.py::test_release_steps_route_by_label` |
 | 8 | Given a plain TASK in READY When `route` Then the E03-S07 result is unchanged | `tests/orchestrator/test_router_release.py::test_non_release_task_routing_unchanged` |
 | 9 | Given a release task whose `contract.owner_role` is SENIOR_DEV When `route` Then `ConfigError` | `tests/orchestrator/test_router_release.py::test_release_task_owner_mismatch_rejected` |
@@ -202,7 +202,8 @@ Constitution front matter (ADR-0013 D-2): `id: UA_RELEASE`, `role: UA_RELEASE`, 
 
 #### Notes
 - ADR-0013 D-1–D-5, D-7 (optional roles use the same schema); ADR-0006 D-3/D-6 (role row pattern); Invariant 7 (`store.publish` remains USER-approved regardless of role rows).
-- `story_workflow` `1.0 → 1.1` is a `BehaviorVersion kind=WORKFLOW` MINOR bump (§105); the version string lives in the YAML `version` field.
+- The `story_workflow` version change is a `BehaviorVersion kind=WORKFLOW` MINOR bump (§105); the version string lives in the YAML `version` field.
+- Shared files with E10-S07 (parallel epic): `src/walk/workflow/tables/story_workflow.yaml`, `src/walk/workflow/guards.py`, `src/walk/workflow/__init__.py`, `src/walk/orchestrator/router.py`, `src/walk/runtime/output_applier.py` and `tests/workflow/test_tables.py`. Merge-order rule (same as E10-S07 Notes): whichever of E10-S07 / E11-S01 merges first sets `story_workflow` `version: "1.1"`; the second rebases, keeps both rows and sets `"1.2"` (one MINOR bump per added row, §105). Baseline: `1.0` already contains the row additions and changes made before E10 without a bump (E03-S16, E05-S11, E06-S02, E08-S04); the X01 refine task of whichever epic starts first confirms the version on `main` and, if it is not `1.0`, the same rule applies from that value (first merge +0.1, second +0.2).
 - `NEW NAME:` module `walk.workflow.release` (`ReleaseStep`, `RELEASE_LABEL_PREFIX`, `RELEASE_STEP_LABEL_PREFIX`, `release_labels`, `rc_id_of`, `release_step_of`); guards `is_release_step`, `output_status_is_verdict`; `story_workflow` event `release_step_done` (INTERFACES §3.2 row); routing rows keyed by release step (INTERFACES §4 rows); `RELEASE_ROUTES`; kernel default constitution `ua_release.md`; `ApprovedArtifactKind.STORE_METADATA` is referenced here and introduced by E11-S05 (the `may_approve` string is validated only when used).
 - Commit subject: `feat: add ua release role and release task routing (E11-S01)`.
 

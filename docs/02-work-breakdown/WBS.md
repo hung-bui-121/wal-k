@@ -246,7 +246,7 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 
 ### E05 — Multi-Agent Reasoning (§135 Stage 5)
 **Goal.** Constitutions with professional bias drive debates, authority and escalation; PO resolves; §133 debate test passes.
-**Requirements.** §6.7, §6.9, §10.2, §12 (full), §44–§47, §50–§51, §127 (optional roles), §133, §137 (Inv. 5, 7), §138 (Infinite Debate, Over-Engineering).
+**Requirements.** §6.4, §6.7, §6.9, §10.2, §10.3, §11, §12 (full), §44–§47, §50–§51, §55, §58, §127 (optional roles), §133, §137 (Inv. 5, 7), §138 (Infinite Debate, Over-Engineering).
 **Epic gate.** `tests/e2e/test_e05_gate.py` (§133): a feature requirement is challenged by fake LEAD_DEV (`REJECTED` with `debate_position`); a `Debate` opens with LEAD_DEV + DESIGN_LEADER (or ORCHESTRATOR), two rounds without consensus escalate to PO, PO resolves, `Decision` is `ACCEPTED`, persisted in SQLite and `.ai/decisions/DEC-NNNN.md`, linked to the feature context.
 
 | ID | Title | One-line goal |
@@ -262,6 +262,8 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E05-S08 | Conflict detection → debate opening from review/design disagreement | §6.7 Orchestrator initiates debates |
 | E05-S09 | `walk debates list/show`, `walk decisions override` | CLI for §44, §93 |
 | E05-S10 | Epic gate: §133 debate test (e2e) | Gate scenario above |
+| E05-S11 | SCRUM_MASTER constitution and periodic work-item hygiene sweep | §10.3 workflow integrity: owner/blocker/dependency/DoR/DoD/stale findings as comments, labels, ledger; DoR-only block |
+| E05-S12 | Optional GAME_DIRECTOR constitution and DESIGN/ART escalation rung | §11 creative identity: PO → GD → USER for DESIGN/ART debates when enabled; straight to USER when disabled |
 | E05-R01 | Review E05 | DoD + invariants 5, 7 |
 
 ### E06 — GDD Compiler (§135 Stage 6)
@@ -481,7 +483,9 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E05-S08 | Conflict detection → debate opening | feat | E05-S04, E03-S13 | MEDIUM | TODO |
 | E05-S09 | `walk debates list/show`, `walk decisions override` | feat | E05-S03, E05-S01 | LOW | TODO |
 | E05-S10 | Epic gate: §133 debate test (e2e) | feat | E05-S05, E05-S07, E05-S08, E05-S09 | MEDIUM | TODO |
-| E05-R01 | Review E05 | docs | E05-S10 | MEDIUM | TODO |
+| E05-S11 | SCRUM_MASTER constitution and periodic work-item hygiene sweep | feat | E05-S02, E05-S06 | MEDIUM | TODO |
+| E05-S12 | Optional GAME_DIRECTOR constitution and DESIGN/ART escalation rung | feat | E05-S05, E05-S06, E05-S11 | MEDIUM | TODO |
+| E05-R01 | Review E05 | docs | E05-S10, E05-S11, E05-S12 | MEDIUM | TODO |
 | E06-X01 | Refine E06 against codebase | docs | E05-R01 | LOW | TODO |
 | E06-S01 | GDD ingestion: Markdown parsing to `GddRef` index and areas | feat | E06-X01 | MEDIUM | TODO |
 | E06-S02 | GDD readiness analysis run and findings | feat | E06-S01, E05-S01 | HIGH | TODO |
@@ -634,7 +638,7 @@ Rule: two stories may run concurrently only when their Files tables are disjoint
 | E02 | {S05→S06→S07} ∥ {S08→S09} ∥ {S10→S11→S12} after S03; {S01} ∥ {S05}; {S13} ∥ {S14} |
 | E03 | {S01} ∥ {S02→S03} ∥ {S06} ∥ {S10→S11}; {S04→S05} ∥ {S07→S08→S09}; {S13} ∥ {S14→S15→S16} ∥ {S17} ∥ {S18} |
 | E04 | {S01→S02} ∥ {S05} ∥ {S06→S07} ∥ {S11} ∥ {S13}; {S09} ∥ {S10} ∥ {S12} after S08 |
-| E05 | {S01→S02} ∥ {S06→S07}; {S03→S04→S05} ∥ {S09} |
+| E05 | {S01→S02} ∥ {S06→S07}; {S03→S04→S05} ∥ {S09}; S11 → S12 sequential; S11 not concurrent with S03/S06/S08, S12 not with S08 (shared `policies.yaml`, `policy_loader.py`, `composition.py`, `output_applier.py`) |
 | E06 | {S01→S02} ∥ {S03→S05→S06}; {S04} ∥ {S05} |
 | E07 | {S01} ∥ {S02→S03→S04→S05}; {S06} ∥ {S07} ∥ {S08} ∥ {S09} |
 | E08 | {S01} ∥ {S02→S03} ∥ {S08}; {S05} ∥ {S06} |
