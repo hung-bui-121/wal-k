@@ -31,21 +31,28 @@ AGENT_ENV_ALLOWLIST: tuple[str, ...] = (
 )
 """Environment keys an agent subprocess may see; a trailing ``*`` matches a key prefix."""
 
+WINDOWS_AGENT_ENV_ALLOWLIST: tuple[str, ...] = ("APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC")
+"""Extra keys on Windows: npm-installed CLIs read their config under ``APPDATA``/``LOCALAPPDATA``;
+Node and Rust process spawning (shells, ``.cmd`` children) needs ``PATHEXT`` and ``COMSPEC``."""
+
 _SLUG_MAX: Final = 30
 _NON_SLUG: Final = re.compile(r"[^a-z0-9]+")
 
 _PostCreate = Callable[[AgentRun, WorkItem, str], Awaitable[None]]
 
 
-def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
+def scrubbed_env(os_env: Mapping[str, str], *, platform: str = sys.platform) -> dict[str, str]:
     """Keys equal to an allowlist entry or matching a trailing-`*` glob; values copied verbatim.
 
-    Keys compare case-sensitively on POSIX and case-insensitively on Windows, where
-    environment variable names are case-insensitive.
+    `AGENT_ENV_ALLOWLIST` applies everywhere; `WINDOWS_AGENT_ENV_ALLOWLIST` is added when
+    ``platform == "win32"``. Keys compare case-sensitively on POSIX and case-insensitively on
+    Windows (``ComSpec`` and ``SystemRoot`` match), where environment variable names are
+    case-insensitive; the key spelling of ``os_env`` is kept.
     """
-    fold = sys.platform == "win32"
-    exact = {_fold(e, fold=fold) for e in AGENT_ENV_ALLOWLIST if not e.endswith("*")}
-    prefixes = tuple(_fold(e[:-1], fold=fold) for e in AGENT_ENV_ALLOWLIST if e.endswith("*"))
+    fold = platform == "win32"
+    entries = AGENT_ENV_ALLOWLIST + (WINDOWS_AGENT_ENV_ALLOWLIST if fold else ())
+    exact = {_fold(e, fold=fold) for e in entries if not e.endswith("*")}
+    prefixes = tuple(_fold(e[:-1], fold=fold) for e in entries if e.endswith("*"))
     return {
         key: value
         for key, value in os_env.items()

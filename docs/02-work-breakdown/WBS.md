@@ -445,8 +445,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S15 | `walk doctor --fix --strict` | feat | E02-S07, E02-S14, E02-S04 | MEDIUM | TODO |
 | E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | feat | E02-S15, E02-S13, E02-S12, E02-S09 | MEDIUM | TODO |
 | E02-R01 | Review E02 | docs | E02-S16 | MEDIUM | TODO |
-| E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | bugfix | E02-S02 | MEDIUM | DONE (pending) |
-| E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | bugfix | E02-S01 | LOW | TODO |
+| E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | bugfix | E02-S02 | MEDIUM | DONE (1960027) |
+| E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | bugfix | E02-S01 | LOW | DONE (pending) |
 | E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | bugfix | E02-S01, E02-B02 | LOW | TODO |
 | E03-S01 | `GitCliProvider` remote operations: push, PR, merge, `squash_wip` | feat | E01-S23, E02-S14 | HIGH | TODO |
 | E03-S02 | `LocalWorkProvider` and work-provider contract test suite | feat | E01-S23, E01-S04 | HIGH | TODO |

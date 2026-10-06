@@ -2138,7 +2138,7 @@ _pending_
 
 ### E02-B01 — Subprocess runner resolves Windows `.cmd`/`.bat` shims
 
-**Status:** DONE (pending)
+**Status:** DONE (1960027)
 **Type:** bugfix
 **Requirements:** §26, §27, §91
 **Depends on:** E02-S02
@@ -2251,7 +2251,7 @@ File outside the Files table (named in the commit body): `tests/model_router/ada
 
 ### E02-B02 — Agent environment allowlist keeps the Windows variables provider CLIs need
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §91, §139
 **Depends on:** E02-S01
@@ -2310,7 +2310,26 @@ def scrubbed_env(os_env: Mapping[str, str], *, platform: str = sys.platform) -> 
 - Commit subject: `bugfix: keep windows system variables in agent environment (E02-B02)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12.11):
+```
+364 files already formatted
+All checks passed!
+Success: no issues found in 362 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1146 passed, 5 deselected in 422.80s (0:07:02)
+```
+Touched module: `runtime/sandbox.py` 100 % in the full suite. AC 1–4 pass. AC 5 (`test_provider_clis_start_with_scrubbed_env_on_windows`, parametrized `[claude]` and `[codex]`) is `integration` + `skipif(sys.platform != "win32")`. It is deselected by the gate and collects correctly (`pytest --collect-only -m integration -k windows` lists both cases).
+
+**AC 5 transcript: not run in this batch.** This batch's instructions forbid running real provider CLIs, and AC 5 runs `claude --version` and `codex --version`. On this host `claude` is installed (`~/.local/bin/claude.exe`) and `codex` is not, so `[codex]` would skip as not installed. The owner runs `uv run pytest -m integration tests/runtime/test_sandbox_env.py -k windows -v` to close this evidence item.
+
+Level-0 decisions:
+- **`platform` default.** The contract fixes `platform: str = sys.platform`, which is evaluated once at import. That is correct at run time, because the platform never changes. The E02-S01 test `test_scrubbed_env_case_rules_follow_platform` patched `sys.platform` after import, so it now passes `platform="win32"` / `platform="linux"` instead. Its assertions are unchanged.
+- **Codex env test.** `test_codex_subprocess_env_is_scrubbed` checks that every key the launcher receives is allowlisted. On win32 its allowed set now also includes `WINDOWS_AGENT_ENV_ALLOWLIST`. Equality with `scrubbed_env(os.environ)` and the absence of the sentinel secrets are still asserted.
+- **AC 4 matching.** Each entry of both lists is matched, upper-cased and with `fnmatch` semantics, against every `CREDENTIAL_NAMES` entry and the bare words `KEY`, `TOKEN`, `SECRET`, `PASSWORD`. No entry text may contain those words. In addition, every credential name passed through `scrubbed_env` on `win32` and `linux` comes out empty.
+- **AC 5 runner.** The test resolves the CLI against the scrubbed `PATH` (`resolve_executable`, E02-B01) and skips when it is absent. It runs `<cli> --version` through `AsyncioSubprocessRunner` with `env=scrubbed_env(os.environ)` and a 60 s timeout.
+
+For the owner / architect: the existing glob `UNITY_*` (E02-S01, kept unchanged because Behavior 1 freezes the POSIX output) lets through any `UNITY_`-prefixed variable. That includes the Unity CI licensing secrets `UNITY_PASSWORD`, `UNITY_SERIAL` and `UNITY_LICENSE` (the game-ci convention). AC 4 passes as specified, because it matches entries against credential *names*. Behavior 3's wider wording ("a name containing ... PASSWORD") is not true of the glob, though. Narrowing the glob, or adding a credential-word deny filter, changes the POSIX output and needs a story decision. E02-S14 (security hardening) is the natural place.
 
 ---
 

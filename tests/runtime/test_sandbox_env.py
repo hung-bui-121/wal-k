@@ -1,4 +1,6 @@
+import fnmatch
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,8 +10,10 @@ from tests.fakes.fake_codex_launcher import FakeCodexProcessLauncher
 from tests.fakes.fake_model_adapter import fake_descriptor
 from tests.runtime.executor_env import CODEX_MODEL, EnvFactory
 from walk.agents import AgentInput
+from walk.integrations import CREDENTIAL_NAMES, AsyncioSubprocessRunner
+from walk.integrations.subprocess import resolve_executable
 from walk.model_router.adapters.codex import CodexAdapter
-from walk.runtime.sandbox import AGENT_ENV_ALLOWLIST, scrubbed_env
+from walk.runtime.sandbox import AGENT_ENV_ALLOWLIST, WINDOWS_AGENT_ENV_ALLOWLIST, scrubbed_env
 
 CODEX_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "codex"
 
@@ -32,14 +36,13 @@ def test_scrubbed_env_glob_matches_prefix_only() -> None:
     assert "UNITY_*" in AGENT_ENV_ALLOWLIST
 
 
-def test_scrubbed_env_case_rules_follow_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrubbed_env_case_rules_follow_platform() -> None:
     env = {"Path": "C:/bin", "unity_editor": "u", "SystemRoot": "C:/Windows", "Secret": "s"}
 
-    monkeypatch.setattr("sys.platform", "win32")
-    assert scrubbed_env(env) == {"Path": "C:/bin", "unity_editor": "u", "SystemRoot": "C:/Windows"}
+    kept = scrubbed_env(env, platform="win32")
+    assert kept == {"Path": "C:/bin", "unity_editor": "u", "SystemRoot": "C:/Windows"}
 
-    monkeypatch.setattr("sys.platform", "linux")
-    assert scrubbed_env(env) == {}
+    assert scrubbed_env(env, platform="linux") == {}
 
 
 async def test_codex_subprocess_env_is_scrubbed(
@@ -71,7 +74,71 @@ async def test_codex_subprocess_env_is_scrubbed(
     assert "ANTHROPIC_API_KEY" not in captured
     assert "JIRA_API_TOKEN" not in captured
     assert captured["UNITY_EDITOR_PATH"] == "/opt/unity"
-    allowed = {entry for entry in AGENT_ENV_ALLOWLIST if not entry.endswith("*")}
+    windows = WINDOWS_AGENT_ENV_ALLOWLIST if sys.platform == "win32" else ()
+    allowed = {entry for entry in (*AGENT_ENV_ALLOWLIST, *windows) if not entry.endswith("*")}
     assert all(key.upper() in allowed or key.upper().startswith("UNITY_") for key in captured), (
         sorted(captured)
     )
+
+
+WINDOWS_ENV = {
+    "APPDATA": "C:/Users/u/AppData/Roaming",
+    "LOCALAPPDATA": "C:/Users/u/AppData/Local",
+    "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+    "ComSpec": "C:/Windows/system32/cmd.exe",
+    "SystemRoot": "C:/Windows",
+    "PATH": "C:/bin",
+}
+CREDENTIAL_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+
+
+def test_scrubbed_env_keeps_windows_system_variables_on_win32() -> None:
+    assert scrubbed_env(WINDOWS_ENV, platform="win32") == WINDOWS_ENV
+
+
+def test_scrubbed_env_posix_ignores_windows_list() -> None:
+    kept = scrubbed_env(WINDOWS_ENV, platform="linux")
+
+    assert kept == {"PATH": "C:/bin"}
+    for name in ("APPDATA", "LOCALAPPDATA", "PATHEXT", "ComSpec"):
+        assert name not in kept
+
+
+def test_scrubbed_env_drops_secrets_on_win32() -> None:
+    secrets = {
+        "ANTHROPIC_API_KEY": "sk-ant",
+        "JIRA_API_TOKEN": "jira",
+        "OPENAI_API_KEY": "sk-openai",
+        "GITHUB_TOKEN": "ghp",
+    }
+
+    kept = scrubbed_env({**WINDOWS_ENV, **secrets}, platform="win32")
+
+    assert kept == WINDOWS_ENV
+    assert not set(secrets) & set(kept)
+
+
+def test_allowlist_never_matches_a_credential_name() -> None:
+    entries = (*AGENT_ENV_ALLOWLIST, *WINDOWS_AGENT_ENV_ALLOWLIST)
+    candidates = (*CREDENTIAL_NAMES, *CREDENTIAL_WORDS)
+
+    for entry in entries:
+        assert not any(word in entry.upper() for word in CREDENTIAL_WORDS), entry
+        for name in candidates:
+            assert not fnmatch.fnmatchcase(name.upper(), entry.upper()), (entry, name)
+    for name in CREDENTIAL_NAMES:
+        assert scrubbed_env({name: "secret"}, platform="win32") == {}
+        assert scrubbed_env({name: "secret"}, platform="linux") == {}
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows provider CLIs")
+@pytest.mark.parametrize("cli", ["claude", "codex"])
+async def test_provider_clis_start_with_scrubbed_env_on_windows(cli: str) -> None:
+    env = scrubbed_env(os.environ)
+    if resolve_executable(cli, env) is None:
+        pytest.skip(f"{cli} is not installed")
+
+    result = await AsyncioSubprocessRunner().run([cli, "--version"], env=env, timeout_s=60)
+
+    assert result.exit_code == 0, result.stderr
