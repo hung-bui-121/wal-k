@@ -5589,7 +5589,7 @@ Observations for E01-R01 (behaviour seen in the gate, not changed here):
 
 ### E01-R01 — Review E01
 
-**Status:** DONE (pending)
+**Status:** DONE (e364f24)
 **Type:** docs
 **Requirements:** §6.1, §21–§23, §31, §41, §54, §81, §86, §89, §90, §125, §126, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12)
 **Depends on:** E01-S31
@@ -5842,7 +5842,7 @@ started 0 run(s)
 
 ### E01-B01 — Release or adopt a finished run's worktree so the item's next run can start
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §60, §6.1, §137 (Inv. 4)
 **Depends on:** E01-R01
@@ -5863,6 +5863,9 @@ started 0 run(s)
 | `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `AgentExecutor`/`SandboxManager` docstrings: worktree lifecycle) |
 | `tests/runtime/test_executor_worktree.py` | create | — |
 | `tests/orchestrator/test_scheduler.py` | modify | — |
+| `tests/runtime/test_executor.py` | modify | — (added in implementation: drops the manual `sandbox.remove` workaround; see Evidence) |
+| `tests/runtime/test_executor_fallback.py` | modify | — (added in implementation: git reads move off the removed worktree; see Evidence) |
+| `tests/e2e/test_e01_gate.py` | modify | — (added in implementation: git reads move off the removed worktree; see Evidence) |
 
 #### Interface contract
 No signature changes. `SandboxManager.remove(run, keep_branch=True)` and `SandboxManager.adopt(run, previous, item)` (INTERFACES §1.13) are used as they are. `AgentRunRepository.for_item(work_item_id)` returns the item's runs oldest first.
@@ -5881,7 +5884,7 @@ No signature changes. `SandboxManager.remove(run, keep_branch=True)` and `Sandbo
 | 2 | Given a COMPLETED run of STORY-0001 now in READY_FOR_REVIEW, When a REVIEW run of the same item starts, Then it reaches `COMPLETED`, has its own `.walk/worktrees/<run_id>` on the same branch, and has no `prepare:` failure | `tests/runtime/test_executor_worktree.py::test_next_run_after_completed_run_starts` |
 | 3 | Given a FAILED run whose worktree holds an uncommitted file, When a new run of the item starts without a parent, Then it adopts that worktree path and the file is present at its first tool call | `tests/runtime/test_executor_worktree.py::test_next_run_after_failed_run_adopts_kept_worktree` |
 | 4 | Given `sandbox.remove` raising at the end of a COMPLETED run, Then the run stays `COMPLETED`, `AGENT_RUN_ENDED` outcome is `OK`, and a warning is logged | `tests/runtime/test_executor_worktree.py::test_worktree_removal_failure_does_not_fail_run` |
-| 5 | Given a story that completed its IMPLEMENT run and a LEAD_DEV reviewer policy, When a second `tick()` runs, Then a REVIEW run is started and is not `FAILED` | `tests/orchestrator/test_scheduler.py::test_second_tick_starts_review_run_on_same_branch` |
+| 5 | Given a story that completed its IMPLEMENT run and whose review was rejected (REWORK), When a second `tick()` runs, Then the rework run is started on the same branch and is not `FAILED` (amended, Level 0: E01 does not admit READY_FOR_REVIEW; see Evidence) | `tests/orchestrator/test_scheduler.py::test_second_tick_starts_rework_run_on_same_branch` |
 
 #### Evidence required
 - Quality gate output.
@@ -5894,7 +5897,52 @@ No signature changes. `SandboxManager.remove(run, keep_branch=True)` and `Sandbo
 - Commit subject: `bugfix: release or adopt finished run worktrees (E01-B01)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** `DefaultAgentExecutor._complete` never released the run's worktree (E01-S27 rule 10), and `_prepare` called `SandboxManager.create` for every parentless run. git checks a branch out in one worktree only, so `git worktree add` refused the item's branch for every later run (REVIEW, REWORK, retry after FAILED).
+
+**Fix** (`src/walk/runtime/executor.py`):
+- `_complete` calls `_release_worktree` after `AGENT_RUN_ENDED` and `ON_AGENT_END`, before `on_run_finished`: `sandbox.remove(run, keep_branch=True)`. Any exception is logged as the warning `worktree removal failed` (run id, path, error), and the run stays COMPLETED.
+- `_prepare` asks `_worktree_owner(run)`. A child run gets its parent (unchanged). A parentless run gets the newest run of the item (`for_item`, reversed) that is not the run itself, is not in `_ACTIVE_STATES` (PENDING/RUNNING/PAUSED_*), has a `worktree_path` and whose directory still exists. It is adopted with `sandbox.adopt(new_run, previous, item)`, so the uncommitted residue stays. Otherwise `sandbox.create`, as before.
+- No `--force` add, no branch deletion. `cancel`/`pause` unchanged. INTERFACES §1.13 (`AgentExecutor.start`, `SandboxManager.create/adopt/remove`) describes the lifecycle.
+
+**Level-0 decisions** (recorded here):
+- "Terminal" in Behavior 2 = not in the executor's `_ACTIVE_STATES`. PENDING is excluded as well: a PENDING row is a run being prepared, never a leftover.
+- **AC 5 amended.** The story's AC 5 asks a second `tick()` to start a REVIEW run. That cannot happen in E01: `Scheduler.ADMISSION_EVENTS` admits only STORY/TASK READY and REWORK, and `test_tick_skips_states_without_admission_event` pins READY_FOR_REVIEW as "not admitted". REVIEW admission, with the `start_review` guard payload (`implementer_role`, `reviewer_model_id`, ...), is E03 scope (ADMISSION_EVENTS docstring: "E03 adds REVIEW/QC/TRIAGE/PLAN/DESIGN"). Adding it here would change the admission set, which is not Level 0 and is outside this story's Files table. AC 5 therefore proves the same defect through the scheduler on the path E01 admits:
+  1. tick 1 runs IMPLEMENT to COMPLETED.
+  2. The test raises `start_review` (KERNEL) and `review_rejected` (LEAD_DEV) → REWORK.
+  3. Tick 2 starts the rework IMPLEMENT run on the same branch in a new worktree.
+
+  The test is renamed `test_second_tick_starts_rework_run_on_same_branch`. Before the fix it failed with `prepare: git command failed`. The REVIEW-run case is covered at the executor level by AC 2. When E03 adds READY_FOR_REVIEW admission, it should add the REVIEW variant of this scheduler test.
+
+**Files outside the Files table** (rows added above, also in the commit body):
+- `tests/runtime/test_executor.py`: `test_start_allowed_when_assigned_run_is_terminal` called `env.sandbox.remove(first)` by hand. That was a workaround for this defect, and it now fails because the executor already removed the worktree. The line is dropped. The test still asserts that a new run starts while the assigned run is terminal.
+- `tests/runtime/test_executor_fallback.py::test_fallback_run_adopts_worktree` and `tests/e2e/test_e01_gate.py::test_continuation_does_not_depend_on_session`: both ran git with `cwd` = the completed run's worktree, which is now removed. They now read the same objects from the main checkout (`ls-tree <branch>` / `ls-tree <handoff sha>`, `log <branch>`). The assertions are unchanged. This corrects E01-R01's note that the gate was unaffected: it inspected commits *through* the completed run's directory.
+
+**Reproduce first** (before the fix): all five AC tests failed. AC 1 and AC 4: the worktree was still on disk and `remove` was never called. AC 2, AC 3 and AC 5: run `FAILED`, `failure_reason = "prepare: git command failed"`.
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.97%   (runtime/executor.py 100 %)
+1008 passed, 2 deselected in 355.49s      (incl. tests/e2e/test_e01_gate.py, all green)
+```
+
+**Demo** (AC 2 scenario kept with `pytest --basetemp=.../b01demo tests/runtime/test_executor_worktree.py::test_next_run_after_completed_run_starts`; IMPLEMENT run then REVIEW run, both COMPLETED):
+```
+$ git -C <repo> worktree list
+C:/Users/CPU12432-local/AppData/Local/Temp/b01demo/test_next_run_after_completed_0/game  b4ad281 [main]
+
+$ git -C <repo> log --oneline feat/story-0001-player-jump-double-jump
+2a296d8 wip(STORY-0001): checkpoint 2      (REVIEW run, END checkpoint)
+9d7861e wip(STORY-0001): checkpoint 2      (IMPLEMENT run, END checkpoint)
+b4ad281 chore: initial commit
+```
+
+**For E02 / E03:**
+- E02-S06 `post_create` projections run on `create` and on an `adopt` that re-adds the worktree. A worktree adopted from a FAILED run keeps its projections.
+- FAILED/BLOCKED_* worktrees are never garbage-collected. They are kept for diagnosis and reused by the item's next run (Scope Out: E03-S16).
 
 ---
 

@@ -699,7 +699,12 @@ class AgentExecutor(Protocol):
     ) -> AgentRun:
         """ARCHITECTURE.md §3.2 steps 3–7. Returns immediately with RUNNING run; completion wakes the orchestrator.
         E01-S27: `routing`/`effort_resolution` are the scheduler's decisions; the executor is their ledger write point
-        (MODEL_SELECTED, EFFORT_SET). A preparation failure returns the run FAILED instead of raising."""
+        (MODEL_SELECTED, EFFORT_SET). A preparation failure returns the run FAILED instead of raising.
+        E01-B01 worktree lifecycle: a child run (`parent_run_id`) adopts its parent's worktree; a run without a parent
+        adopts the newest worktree directory an ended run of the item left on disk (FAILED/BLOCKED_*/HANDED_OVER keep
+        theirs for diagnosis), else `SandboxManager.create`. A COMPLETED run calls `SandboxManager.remove(keep_branch=True)`
+        after AGENT_RUN_ENDED and ON_AGENT_END (a removal failure is logged; the run stays COMPLETED). `cancel` removes
+        the worktree, `pause` keeps it."""
 
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
         """Same model, provider-side session resume (ModelAdapter.resume). E01-S28: raises NotResumable when the session
@@ -748,13 +753,17 @@ class SandboxManager(Protocol):
 
     async def create(self, run: AgentRun, item: WorkItem) -> str:
         """`git worktree add <repo>/.walk/worktrees/<run_id> <branch>` (branch = item.branch or feat/<id>-<slug>); installs guard hooks;
-        writes projections; returns path."""
+        writes projections; returns path. Fails while another worktree has the branch checked out: the executor adopts
+        a leftover worktree instead (E01-B01)."""
 
     async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str:
         """Child run (fallback / recovery / native resume) reuses previous.worktree_path unchanged; re-adds it on previous.branch
-        with guard hooks when the directory is missing. Never `create` for a child run (one branch, one worktree). E01-S28."""
+        with guard hooks when the directory is missing. Never `create` for a child run (one branch, one worktree). E01-S28.
+        E01-B01: also used for a parentless run that takes over the worktree an ended run of the item left behind."""
 
-    async def remove(self, run: AgentRun, *, keep_branch: bool = True) -> None: ...
+    async def remove(self, run: AgentRun, *, keep_branch: bool = True) -> None:
+        """`git worktree remove --force` + prune; the branch is deleted only when `keep_branch` is false and it is not
+        protected. Called by the executor when a run is COMPLETED or CANCELLED (E01-B01)."""
 
 
 class BoundaryAuditor(Protocol):

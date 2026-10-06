@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Final, Literal
 
 from walk.agents.models import AgentInput, AgentInstance, AgentOutput, Handover
@@ -276,7 +277,10 @@ class DefaultAgentExecutor:
         A failure while preparing the run (worktree, input, session) ends it FAILED and returns
         it; a failing ``ON_AGENT_START`` hook ends it FAILED_HOOK before the adapter is called.
 
-        A child run (``parent_run_id`` of a run with a worktree) adopts that worktree.
+        A child run (``parent_run_id`` of a run with a worktree) adopts that worktree. A run
+        without a parent adopts the worktree an earlier, ended run of the item left behind
+        (FAILED, BLOCKED_*, ...: kept for diagnosis), else gets a new one. A COMPLETED run
+        releases its worktree (the branch keeps its commits) so the item's next run can start.
 
         Raises:
             ConfigError: Unknown purpose or model, or the item already has an active run.
@@ -503,10 +507,10 @@ class DefaultAgentExecutor:
         handover: Handover | None,
         debate: Debate | None,
     ) -> _Live:
-        parent = await self._runs.get(run.parent_run_id) if run.parent_run_id else None
-        if parent is not None and parent.worktree_path is not None:
-            worktree = await self._sandbox.adopt(run, parent, item)
-            branch = parent.branch or branch_name_for(item)
+        previous = await self._worktree_owner(run)
+        if previous is not None:
+            worktree = await self._sandbox.adopt(run, previous, item)
+            branch = previous.branch or branch_name_for(item)
         else:
             worktree = await self._sandbox.create(run, item)
             branch = branch_name_for(item)
@@ -558,6 +562,25 @@ class DefaultAgentExecutor:
             subject=subject,
             degraded_from=str(degraded) if degraded is not None else None,
         )
+
+    async def _worktree_owner(self, run: AgentRun) -> AgentRun | None:
+        """The run whose worktree ``run`` adopts; None when it needs a new one.
+
+        A child run adopts its parent's. A run without a parent adopts the newest worktree an
+        ended run of the item left on disk: git checks a branch out in one worktree only.
+        """
+        if run.parent_run_id is not None:
+            parent = await self._runs.get(run.parent_run_id)
+            return parent if parent is not None and parent.worktree_path is not None else None
+        for earlier in reversed(await self._runs.for_item(run.work_item_id)):
+            if (
+                earlier.id != run.id
+                and earlier.state not in _ACTIVE_STATES
+                and earlier.worktree_path is not None
+                and _is_dir(earlier.worktree_path)
+            ):
+                return earlier
+        return None
 
     async def _prepare_failed(self, run: AgentRun, exc: Exception) -> AgentRun:
         _LOG.warning(
@@ -949,7 +972,26 @@ class DefaultAgentExecutor:
             "checkpoint_id": end.id,
         }
         await self._fire_safely(HookName.ON_AGENT_END, live, end_payload)
+        await self._release_worktree(live)
         await self._notify_finished(live)
+
+    async def _release_worktree(self, live: _Live) -> None:
+        """Remove a COMPLETED run's worktree, keeping the branch (E01-B01).
+
+        The END checkpoint committed every change, so nothing is lost; a failure is logged and
+        the run stays COMPLETED (the item's next run then adopts the leftover directory).
+        """
+        try:
+            await self._sandbox.remove(live.run, keep_branch=True)
+        except Exception as exc:  # noqa: BLE001 - the run's end state stands
+            _LOG.warning(
+                "worktree removal failed",
+                extra={
+                    "run_id": live.run.id,
+                    "worktree": live.run.worktree_path,
+                    "error": _message(exc),
+                },
+            )
 
     # ---- failure paths -------------------------------------------------------------------
 
@@ -1253,6 +1295,10 @@ class DefaultAgentExecutor:
 
 def _worktree(live: _Live) -> str:
     return live.session.worktree_path
+
+
+def _is_dir(path: str) -> bool:
+    return Path(path).is_dir()
 
 
 def _profile(live: _Live) -> TaskProfile:

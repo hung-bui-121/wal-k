@@ -22,6 +22,7 @@ from walk.workflow import (
     ProjectRepository,
     Risk,
     StoryContract,
+    TransitionContext,
     TransitionSource,
     WorkItemKind,
     WorkItemState,
@@ -307,3 +308,44 @@ async def test_tick_counts_start_failures_and_continues(
 
     assert calls == [first.id, second.id]
     assert kernel.telemetry.counters["scheduler.start_failed"] == 1
+
+
+async def test_second_tick_starts_rework_run_on_same_branch(make_kernel: KernelFactory) -> None:
+    # The second run writes one more file than the first, so its own END checkpoint commits.
+    plans = iter([script(tool_calls=3), script(tool_calls=4)])
+    kernel = await make_kernel(plan=lambda _input: next(plans))
+    story = await kernel.make_ready()
+    assert await kernel.scheduler.tick() == 1
+    await kernel.env.settle()
+    (first,) = await kernel.env.runs.for_item(story.id)
+    assert first.state is AgentRunState.COMPLETED
+    review = {
+        "implementer_role": AgentRole.SENIOR_DEV.value,
+        "reviewer_role": AgentRole.LEAD_DEV.value,
+        "cross_model_review": False,
+    }
+    await kernel.env.workflow.raise_event(
+        story.id,
+        "start_review",
+        TransitionContext(
+            actor_role=AgentRole.KERNEL, source=TransitionSource.KERNEL, payload=review
+        ),
+    )
+    await kernel.env.workflow.raise_event(
+        story.id,
+        "review_rejected",
+        TransitionContext(actor_role=AgentRole.LEAD_DEV, source=TransitionSource.AGENT),
+    )
+    assert await _state(kernel, story.id) is WorkItemState.REWORK
+
+    assert await kernel.scheduler.tick() == 1
+    await kernel.env.settle()
+
+    second = next(r for r in await kernel.env.runs.for_item(story.id) if r.id != first.id)
+    assert second.state is AgentRunState.COMPLETED, second.failure_reason
+    assert second.purpose == "IMPLEMENT"
+    assert second.parent_run_id is None
+    assert second.branch == first.branch
+    assert second.worktree_path != first.worktree_path
+    assert await kernel.env.events(second.id, K.ERROR) == []
+    assert await _state(kernel, story.id) is WorkItemState.READY_FOR_REVIEW

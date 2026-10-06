@@ -453,7 +453,6 @@ async def test_on_run_finished_called_once_per_run(make_executor_env: EnvFactory
 async def test_start_allowed_when_assigned_run_is_terminal(make_executor_env: EnvFactory) -> None:
     env = await make_executor_env(script(tool_calls=1, output=completed_output()))
     first = await env.run_to_end()
-    await env.sandbox.remove(first, keep_branch=True)
     async with UnitOfWork(env.db) as uow:
         await env.items.set_assigned_run(env.story.id, first.id, conn=uow.conn)
 

@@ -128,10 +128,12 @@ async def test_fallback_run_adopts_worktree(
     old, new = await _chain(env)
     assert new.worktree_path == old.worktree_path
     assert new.branch == old.branch
-    assert new.worktree_path is not None
+    assert new.branch is not None
+    # The completed run released the worktree (E01-B01); its commits stay on the branch.
+    tree = _git(str(env.repo), "ls-tree", "-r", "--name-only", new.branch).splitlines()
     for n in (1, 2, 3):
-        assert _is_file(Path(new.worktree_path) / "src" / f"Fake{n}.cs")
-    log = _git(new.worktree_path, "log", "--format=%s")
+        assert f"src/Fake{n}.cs" in tree
+    log = _git(str(env.repo), "log", "--format=%s", new.branch)
     assert "wip(STORY-0001): checkpoint 2" in log
     assert claude.inputs[0].worktree_path == old.worktree_path
 

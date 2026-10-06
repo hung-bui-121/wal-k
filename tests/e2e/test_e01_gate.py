@@ -256,7 +256,7 @@ async def test_continuation_does_not_depend_on_session(e01_scenario: E01Scenario
 
     written = {f"src/Fake{n}.cs" for n in range(1, OUTAGE_AFTER_TOOL_CALLS + 1)}
     in_handoff = set(
-        _git(first.worktree_path, "ls-tree", "-r", "--name-only", handoff.head_sha).splitlines()
+        _git(e01_scenario.repo, "ls-tree", "-r", "--name-only", handoff.head_sha).splitlines()
     )
     assert written <= in_handoff
     # run B started (START checkpoint, before any tool call) on the HANDOFF commit of run A
