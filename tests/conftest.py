@@ -34,6 +34,28 @@ def tmp_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def tmp_game_repo(tmp_path: Path) -> Path:
+    """A temporary game repository on ``main``: one commit with README.md and .gitignore.
+
+    ``.gitignore`` holds the kernel's local state (``.walk/``, ``.ai/kernel.db``); hooks are
+    pinned to the repository's own hooks folder so global git configuration cannot leak in.
+    """
+    repo = tmp_path / "game"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "walk-tests")
+    _git(repo, "config", "user.email", "walk-tests@example.invalid")
+    _git(repo, "config", "commit.gpgsign", "false")
+    _git(repo, "config", "core.autocrlf", "false")
+    _git(repo, "config", "core.hooksPath", str(repo / ".git" / "hooks"))
+    (repo / "README.md").write_bytes(b"game repo\n")
+    (repo / ".gitignore").write_bytes(b".walk/\n.ai/kernel.db\n")
+    _git(repo, "add", "README.md", ".gitignore")
+    _git(repo, "commit", "-m", "chore: initial commit")
+    return repo
+
+
+@pytest.fixture
 def fake_clock() -> FakeClock:
     """A clock fixed at 2026-01-01T00:00:00Z."""
     return FakeClock(datetime(2026, 1, 1, tzinfo=UTC))

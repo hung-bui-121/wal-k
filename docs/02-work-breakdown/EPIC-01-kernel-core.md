@@ -2297,7 +2297,7 @@ Level-0 decisions:
 
 ### E01-S17 — Constitutions and runtime policies: loaders, merge rules, MVP role defaults
 
-**Status:** DONE (pending)
+**Status:** DONE (e6a19fc)
 **Type:** feat
 **Requirements:** §8, §9, §12, §13, §14, §15, §105, §127, §137 (Inv. 1)
 **Depends on:** E01-S13, E01-S15
@@ -3150,7 +3150,7 @@ _pending_
 
 ### E01-S23 — Integration protocols and `GitCliProvider` local operations
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §26 (manifest model), §43 (protocol), §55 (protocol), §59, §60 (worktrees), §62 (protocols), §78 (protocol), §81 (`COMMIT`), §90, §91 (protected branches, repository boundary), §137 (Inv. 3)
 **Depends on:** E01-S04, E01-S05
@@ -3298,7 +3298,64 @@ class GitCliProvider:
 - Commit subject: `feat: add integration protocols, subprocess runner and local git provider (E01-S23)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+187 files already formatted
+All checks passed!
+Success: no issues found in 185 source files
+Required test coverage of 85% reached. Total coverage: 99.94%
+626 passed in 44.74s
+```
+Touched modules: `integrations/*` 100%, `persistence/idempotency.py` 100%.
+
+Demo (no CLI in this story; a script drives `GitCliProvider` on a fresh repository):
+```
+worktree on feat/STORY-0001-x
+status ['secrets.env', 'src/A.cs']
+commit 8ade177 ['src/A.cs'] 'wip(STORY-0001): checkpoint 1\n\nWalk-Work-Item: STORY-0001'
+ledger [('COMMIT', {'sha': '8ade1777de42d83986bd25e3d35504c69581b1ab', 'branch': 'feat/STORY-0001-x', 'files_count': 1, 'work_item_id': 'STORY-0001'})]
+main commit refused: walk: branch 'main' is protected; commit refused
+```
+
+The commit subject is shortened to `feat: add integration protocols and local git provider (E01-S23)`, because the prescribed subject has 83 characters and the hook allows 72.
+
+Contract change (small, additive; see commit body):
+- `IdempotencyStore.db` (read-only property, `walk/persistence/idempotency.py`, outside the Files table). The `GitCliProvider` constructor has no `Database`, yet Behavior 4/6 need a unit of work for `IdempotencyStore.run`/`put` and the `COMMIT` event. This mirrors `MemoryIndexRepository.db` (E01-S16).
+
+Level-0 decisions:
+- `AsyncioSubprocessRunner`:
+  - A missing executable returns exit code 127 with `executable not found: …` on stderr, like a POSIX shell, so that "never raises on non-zero exit" also holds here.
+  - Output is decoded as UTF-8 with `errors="replace"`. `duration_ms` uses `time.monotonic()` and is informational only.
+  - `Timeout.detail` = `{argv, timeout_s}`.
+- `GitError.detail` = `{argv, cwd, exit_code, stderr_tail}`, where the tail is the last 2000 characters.
+- Every git call runs with `cwd` = the given path. Branch and worktree management use `repo_root`.
+  - Lists come from `-z` output, so paths with spaces or non-ASCII characters are never quoted.
+  - `status` uses `--porcelain=v1 -z --untracked-files=all` and reports the target of a rename.
+  - `diff_names` returns the sorted union of the diff and `ls-files --others --exclude-standard`.
+- `merge_base` (INTERFACES §2.3, added to the protocol after this story was planned) is implemented as a local operation: `git merge-base a b`, which raises `GitError` on failure.
+- `ensure_branch` checks `refs/heads/<name>` with `rev-parse --verify --quiet` inside `IdempotencyStore.run(key, "git.branch", …)`. The key is stored even when the branch already existed.
+- `add_worktree` compares `Path.resolve()` of `git worktree list --porcelain` entries with the target. This handles forward slashes and 8.3 short names on Windows.
+- `commit_all` staging:
+  - It does not run `git add -A -- . <excludes>`. When an exclude pathspec names an ignored folder such as `.walk/`, git exits 1 ("paths are ignored").
+  - Instead, the candidates are listed with `git --glob-pathspecs ls-files -z --others --modified --deleted --exclude-standard -- . <FORBIDDEN_COMMIT_PATHSPECS>`. They are then staged by exact path with `git --literal-pathspecs add -A --pathspec-from-file=- --pathspec-file-nul`. A forbidden file is therefore never hashed into the object store.
+  - `--glob-pathspecs` is required because, without it, `:(exclude)**/*.env` does not match a top-level `secrets.env` (verified on git 2.41).
+- `commit_all` commit and recording:
+  - `--trailer` is used when `git --version` ≥ 2.32 (checked once per provider). Older versions get the trailer appended to the message after a blank line.
+  - `CommitInfo.message` is the full message read back with `git log -1 --format=%B`. The stored `result_ref` is `CommitInfo` JSON.
+  - A key recorded without a result raises `ConfigError("idempotency key has no result to replay")`.
+  - The `COMMIT` event has `actor_role=KERNEL`, `outcome=OK`, `work_item_id` = the trailer item, and payload `{sha, branch, files_count, work_item_id}`. It is written in the same unit of work as the key, after the git commit. A clean tree writes neither the key nor the event.
+  - `ON_COMMIT` is not fired here: the constructor has no `HookManager`, and the MUST side of that hook is this ledger write (WBS §3.5).
+- Guard hooks:
+  - The script is POSIX sh with a `#!/bin/sh` shebang and LF endings, written as bytes with mode 0755.
+  - `pre-commit` checks `git symbolic-ref --short -q HEAD`, and a detached HEAD is allowed. `pre-push` checks every `refs/heads/*` target read from stdin.
+  - Globs are embedded in a `case` pattern, where `*` also matches `/`. Globs must match `^[A-Za-z0-9*?][A-Za-z0-9._/*?-]*$`, otherwise `ConfigError`. An empty list renders a no-op check.
+  - Both hook files are checked for the marker before either is written. A foreign hook leaves both untouched (`ConfigError`, detail `hook`).
+  - **For owner attention:** git keeps hooks in the common hooks directory (`rev-parse --git-path hooks`), which all worktrees of a repository share. Installing into a run worktree therefore also guards the user's main checkout: a commit on `main` there is refused unless `--no-verify` is used. Per-worktree hooks would need `extensions.worktreeConfig` plus a per-worktree `core.hooksPath`, which changes the repository config. I did not do that in this story.
+- `discard_changes(path)` requires `path` to be a worktree top level (`rev-parse --show-toplevel`, otherwise `ConfigError`). It then runs `git checkout -- .` and `git clean -fd` there. Ignored files (`.walk/`) and nested worktrees are kept.
+- Deferred `push/open_pr/merge/squash_wip` raise `ConfigError("implemented in E03-S01", detail={operation, branch})`.
+- `FakeSubprocessRunner`: `script(prefix, *, exit_code, stdout, stderr, error)`. The longest prefix wins, and the latest one wins among equal prefixes. Unscripted commands raise `AssertionError`. Calls are recorded as `calls` (argv, cwd, env, timeout_s, input_text) and `argvs`.
+- `tmp_game_repo` also sets `commit.gpgsign=false`, `core.autocrlf=false` and `core.hooksPath=<repo>/.git/hooks`, so that the developer's global git configuration cannot change test results.
+- Model field descriptions were added to the DOMAIN-MODEL §4.13 / INTERFACES §2.2–§2.6 models (CONVENTIONS §4). Types and defaults are unchanged.
 
 ---
 

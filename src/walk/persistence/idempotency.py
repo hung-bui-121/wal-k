@@ -30,6 +30,11 @@ class IdempotencyStore:
         self._db = db
         self._clock = clock
 
+    @property
+    def db(self) -> Database:
+        """The database holding ``idempotency_keys``; callers open units of work on it."""
+        return self._db
+
     async def has(self, key: str) -> bool:
         """Return whether ``key`` is recorded."""
         row = (
