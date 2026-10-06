@@ -5,6 +5,7 @@ from walk.integrations.errors import GitError, NotSupported
 from walk.integrations.git import GitCliProvider
 from walk.integrations.git.guard_hooks import GUARD_HOOK_MARKER, render_guard_hook
 from walk.integrations.git.provider import FORBIDDEN_COMMIT_PATHSPECS, WORK_ITEM_TRAILER
+from walk.integrations.manifest import ManifestStore
 from walk.integrations.models import (
     AssetJob,
     AssetProvenance,
@@ -32,6 +33,7 @@ from walk.integrations.protocols import (
     UnityProvider,
     WorkProvider,
 )
+from walk.integrations.service import DefaultIntegrationManager
 from walk.integrations.subprocess import (
     AsyncioSubprocessRunner,
     SubprocessResult,
@@ -54,6 +56,7 @@ __all__ = [
     "CommitInfo",
     "ComponentStatus",
     "CredentialStore",
+    "DefaultIntegrationManager",
     "EnvironmentManifest",
     "GitCliProvider",
     "GitError",
@@ -63,6 +66,7 @@ __all__ = [
     "GraphNode",
     "IntegrationManager",
     "JobResult",
+    "ManifestStore",
     "NotSupported",
     "ProductionKit",
     "PullRequestRef",

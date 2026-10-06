@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib.util
 import shutil
+import socket
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,11 +12,14 @@ import pytest
 import walk
 from tests.cli.conftest import CODEX_MODEL, OverridesFactory, add_story, migrate
 from tests.fakes.fake_keyring import FakeKeyringBackend
+from tests.fakes.fake_subprocess import FakeSubprocessRunner
+from tests.integrations.test_preflight import script_environment
 from walk.agents import AgentInput, ConstitutionLoader, ExpectedOutput, ModelPolicy
 from walk.cli.composition import (
     DEFAULT_READY_ENV_KEYS,
     KernelSettings,
     build_kernel,
+    open_integrations,
 )
 from walk.common.enums import Effort
 from walk.common.errors import ConfigError
@@ -296,3 +300,16 @@ async def test_kernel_defaults_for_environment_effort_and_sleep(
         assert handle.executor._ready_env_keys() == set()  # noqa: SLF001 - no git on PATH
     finally:
         await handle.aclose()
+
+
+async def test_open_integrations_wires_the_preflight(tmp_path: Path) -> None:
+    fake_runner = script_environment(FakeSubprocessRunner())
+    manager = open_integrations(
+        tmp_path, runner=fake_runner, keyring_backend=FakeKeyringBackend({"JIRA_EMAIL": "a@b"})
+    )
+
+    manifest = await manager.preflight(["git"])
+
+    assert manifest.machine_id == socket.gethostname()
+    assert manifest.credentials["JIRA_EMAIL"] == "ready"
+    assert (tmp_path / ".ai" / "project" / "environment.yaml").is_file()

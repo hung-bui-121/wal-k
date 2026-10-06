@@ -5,6 +5,7 @@ lazily so the kernel runs without the optional ``claude`` extra. Everything else
 talks to the `ClaudeClient` protocol and treats SDK messages as opaque `SdkMessage` objects.
 """
 
+import dataclasses
 import importlib
 import shutil
 import sys
@@ -29,6 +30,24 @@ TransportFactory = Callable[[Any, Mapping[str, str]], object]
 _SDK_MODULE: Final = "claude_agent_sdk"
 _CLI_NAME: Final = "claude.exe" if sys.platform == "win32" else "claude"
 _INIT_SUBTYPE: Final = "init"
+
+SDK_OPTIONS: tuple[str, ...] = (
+    "cwd",
+    "model",
+    "tools",
+    "allowed_tools",
+    "permission_mode",
+    "can_use_tool",
+    "permission_prompt_tool_name",
+    "max_turns",
+    "system_prompt",
+    "effort",
+    "env",
+    "resume",
+    "output_format",
+    "setting_sources",
+)
+"""`ClaudeAgentOptions` fields the adapter and its transport set (ADR-0014 SDK table)."""
 
 
 class ClaudeQueryOptions(FrozenModel):
@@ -170,6 +189,19 @@ class SdkClaudeClient:
         client = self._active.get(session_id)
         if client is not None:
             await client.interrupt()
+
+
+def missing_sdk_options() -> list[str]:
+    """`SDK_OPTIONS` entries absent from the installed `ClaudeAgentOptions` (introspection only).
+
+    No query is made and nothing is spawned (ADR-0014; E02-S02 preflight).
+
+    Raises:
+        ConfigError: ``claude-agent-sdk`` is not installed.
+    """
+    sdk = _load_sdk()
+    present = {field.name for field in dataclasses.fields(sdk.ClaudeAgentOptions)}
+    return [name for name in SDK_OPTIONS if name not in present]
 
 
 def _load_sdk() -> ModuleType:

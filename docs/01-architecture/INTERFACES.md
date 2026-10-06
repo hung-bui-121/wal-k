@@ -636,7 +636,12 @@ class IntegrationManager(Protocol):
     ci: "CiProvider | None"
 
     async def preflight(self, required: list[str]) -> EnvironmentManifest:
-        """§26 checks; writes `.ai/project/environment.yaml`; compares with previous manifest → drift (§27)."""
+        """§26 checks; writes `.ai/project/environment.yaml`; compares with previous manifest → drift (§27).
+        E02-S02: `required` names `unity`, `work_provider`, a key of `tools`/`providers` (e.g. `git`, `codex`) or
+        `<section>.<key>` (e.g. `credentials.JIRA_EMAIL`); an unknown name → ConfigError. The manifest is written
+        first; any required component MISSING → ConfigError with `detail["missing_components"]` (`walk doctor` exit 4).
+        Implemented by `walk.integrations.DefaultIntegrationManager`; `ingest`/`reconcile`/`with_idempotency` and the
+        provider attributes arrive with E03-S03."""
 
     async def ingest(self, event: WorkProviderEvent) -> None:
         """Dedup by delivery_id (webhook_deliveries), then WorkflowManager.apply_external_transition; Orchestrator.wake()."""

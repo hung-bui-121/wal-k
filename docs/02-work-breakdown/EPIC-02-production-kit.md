@@ -40,7 +40,7 @@ Parallel sets (WBS.md §8): `{S05→S06→S07} ∥ {S08→S09} ∥ {S10→S11→
 
 ### E02-S01 — `CredentialStore` and agent environment allowlist
 
-**Status:** DONE (pending)
+**Status:** DONE (d3c559e)
 **Type:** feat
 **Requirements:** §91, §26, §139
 **Depends on:** E01-S23, E01-S25
@@ -202,7 +202,7 @@ For the owner / architect:
 
 ### E02-S02 — Environment preflight and `EnvironmentManifest`, `walk doctor` (basic)
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §26, §27, §25, §139
 **Depends on:** E02-S01, E01-S14
@@ -229,6 +229,11 @@ For the owner / architect:
 | `tests/integrations/test_preflight.py` | create | — |
 | `tests/integrations/test_manifest.py` | create | — |
 | `tests/cli/test_cmd_doctor.py` | create | — |
+| `src/walk/model_router/adapters/claude/client.py` | modify | `SDK_OPTIONS`, `missing_sdk_options` (Behavior 9 introspection; only this package may import the SDK) |
+| `tests/model_router/adapters/claude/test_adapter.py` | modify | — |
+| `tests/cli/test_composition.py` | modify | — |
+| `pyproject.toml` | modify | — (import-linter allowance `walk.integrations -> walk.integrations.service`) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/ARCHITECTURE.md` | modify | — (§1.12 `required` names; §2.3 `yaml` row) |
 
 #### Interface contract
 See INTERFACES.md §1.12 `IntegrationManager.preflight`. Deltas:
@@ -315,11 +320,71 @@ class DefaultIntegrationManager:
 #### Notes
 - ADR-0009 D-8, D-9, D-11 (plugin versions recorded under `tools`); ARCHITECTURE §3.4 step 2.
 - Jira status-map validation is E03-S05; the `work_provider` component here only checks kind + credentials.
-- `NEW NAME:` `ManifestStore`, `REQUIRED_DEFAULT`, detector function names.
+- `NEW NAME:` `ManifestStore`, `REQUIRED_DEFAULT`, detector function names; from implementation: `detect_cli_tool`, `MISSING_COMPONENTS`, `SdkOptionProbe`, `DefaultIntegrationManager(sdk_option_probe=...)`, `SDK_OPTIONS`, `missing_sdk_options`, `open_integrations`, `KernelHandle.integrations`.
 - Commit subject: `feat: add environment preflight manifest and doctor command (E02-S02)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`):
+```
+347 files already formatted
+All checks passed!
+Success: no issues found in 345 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.90%
+1076 passed, 3 deselected in 395.86s
+```
+Touched modules: `integrations/preflight.py`, `manifest.py`, `service.py`, `__init__.py`, `cli/cmd_doctor.py`, `cli/composition.py`, `cli/app.py`, `model_router/adapters/claude/client.py` all 100 %.
+
+Demo on a fresh temporary git repository (real probes on the owner's Windows host, no bootstrap yet):
+```
+$ walk doctor --repo <tmp>/game
+component                                state          version   detail
+---------------------------------------  -------------  --------  -----------------------------------------------------
+unity                                    misconfigured            error: unknown option '-version'
+tools.git                                ready          2.41.0
+tools.graphify                           ready          0.9.48
+tools.dotnet                             ready          10.0.100
+providers.codex                          missing                  executable not found: codex ([WinError 2] ...)
+providers.claude                         missing                  claude-agent-sdk is not installed (the 'claude' extra)
+work_provider                            unknown                  no work-provider.yaml; run 'walk bootstrap'
+credentials.ANTHROPIC_API_KEY            missing
+credentials.JIRA_BASE_URL                missing
+...                                      (all eight credentials, presence only)
+exit=0
+$ walk doctor --repo <tmp>/game --json | head -c 200
+{
+  "generated_at": "2026-10-06T20:04:35.432519Z",
+  "machine_id": "CPU12432",
+  "unity": {
+    "state": "misconfigured",
+    "version": null,
+    "detail": "error: unknown option '-version'"
+```
+`<tmp>/game/.ai/project/environment.yaml` was written. The `Unity` on this host's PATH is an npm "CLI for Unity" (1.0.0-beta.8), not the Unity Editor, so `Unity -version` fails and the result is honestly MISCONFIGURED. The editor path becomes configurable with E03-S10 (`unity_path` is `None` in the composition root until then).
+
+Level-0 decisions:
+- **Detector outcomes.** MISSING covers both `FileNotFoundError` from the runner and exit code 127, because `AsyncioSubprocessRunner` reports a missing executable as 127 (E01-S23). The version is the first `\d+(\.\d+)+` token of stdout (then stderr), plus an optional Unity-style suffix such as `f1` (`git version 2.45.0.windows.1` → `2.45.0`). A successful probe without a version token is READY with the first output line as detail. The probe timeout is 5 s.
+- **Unity.** `<unity_path or "Unity"> -version`. `ProjectSettings/ProjectVersion.txt` (`m_EditorVersion`) is reported in the detail (`project editor <version>`). A mismatch is not judged here.
+- **Codex capability probe (Behavior 9)** runs inside `detect_codex_cli` when `--version` succeeds:
+  - `codex exec --help` must show `--json`, `--sandbox`, `--cd`, `--config`, `--output-schema`;
+  - `codex exec resume --help` must show `--json`, `--config`, `--output-schema`.
+
+  These are the flags `adapters/codex/command.py` uses (ADR-0014). A missing flag, or a failing help call, gives MISCONFIGURED and keeps the version, e.g. `codex exec --help lacks --cd (ADR-0014)`.
+- **Claude SDK option introspection (Behavior 9).** `walk.integrations` may not import `claude_agent_sdk` (ARCHITECTURE §2.3), so `DefaultIntegrationManager` takes an additive keyword `sdk_option_probe: SdkOptionProbe | None = None`. The composition root wires `walk.model_router.adapters.claude.client.missing_sdk_options` to it. That function compares `dataclasses.fields(ClaudeAgentOptions)` with `SDK_OPTIONS`, the fields the adapter and its E02-S01 transport set, including `permission_prompt_tool_name`. It is called only when `detect_claude_sdk` (package metadata, no import) is READY. Gaps make `providers.claude` MISCONFIGURED (`ClaudeAgentOptions lacks ... (ADR-0014)`).
+- **`required` names** (INTERFACES §1.12 updated):
+  - `unity`, `work_provider`;
+  - a `tools`/`providers` key;
+  - `<section>.<key>`.
+
+  An unknown name raises `ConfigError` before anything is written. A MISSING one raises `ConfigError` with `detail["missing_components"]` (`MISSING_COMPONENTS`, in `preflight.py`) after the manifest is written. Only MISSING fails; MISCONFIGURED and UNKNOWN are reported but do not fail (Behavior 5).
+- **`work_provider`.** An absent `work-provider.yaml` gives UNKNOWN (`no work-provider.yaml; run 'walk bootstrap'`), not MISSING. Two reasons: `walk doctor` on a repository that is not yet bootstrapped reports the gap without failing on it, and E02-S03 runs `preflight(REQUIRED_DEFAULT)` (step c) before it writes the file (step e). Invalid YAML or an unknown kind gives MISCONFIGURED. `jira` without all three Jira credentials gives MISCONFIGURED listing the absent names.
+- **Registry CLI tools (Behavior 8).** Every `kind == CLI` spec is probed with `<executable> --version` under its tool name (`detect_cli_tool`). Executables that have a dedicated detector are skipped (`git`, `graphify`, `dotnet`, `Unity`/`unity`; case-insensitive), so the packaged catalogue adds no duplicate probes. Dedicated results are keyed `tools.git`, `tools.graphify`, `tools.dotnet`, `unity`.
+- **Drift lines.** State and version are compared; details are not. Single components read `unity: ...` and `work_provider: ...`. A key on one side only reads `absent`. Sections follow manifest field order. `walk doctor` prints them under `drift from <machine>:`.
+- **Deferred methods.** `ingest`/`reconcile`/`with_idempotency` raise `ConfigError("implemented in E03-S03")`, not `NotImplementedError`, which keeps the E01 deferred-method pattern (E01-S29 Notes, E01-R01 Behavior 6). The protocol's provider attributes (`work`, `git`, ...) are not set yet (E03-S03).
+- **Behavior 7.** `KernelLock` has no shared mode, and the preflight reads no database. So `walk doctor` opens no database at all: it reads only the environment and `.ai/project/*.yaml`. It replaces `environment.yaml` atomically and never contends with a running kernel. On exit 4 the table of the manifest just written is still printed, and the error goes to stderr.
+- **Composition.** `open_integrations(repo, *, runner=None, keyring_backend=None, clock=None)` wires the doctor path. `build_kernel` also builds the manager (`KernelHandle.integrations`). `machine_id = socket.gethostname()` (as the daemon registers instances). Required and available skills stay `[]` until E02-S05/S07.
+- **`.ai/project/environment.yaml` writer.** `ManifestStore.write` is the INTERFACES §1.12 writer of this configuration YAML (not a memory document, so not `MemoryManager.write`). It writes a temp file in the same folder and renames it. ARCHITECTURE §2.3 now lists `integrations/manifest.py` and `integrations/service.py` as `yaml` users. `pyproject.toml` gains the import-linter allowance `walk.integrations -> walk.integrations.service` (package re-export, like the other `Default*` services).
+- **Windows `.cmd` shims.** Probes pass bare executable names, so `AsyncioSubprocessRunner` (`create_subprocess_exec`, no PATHEXT lookup) would report an npm-installed `codex.cmd` as MISSING. Resolving executables in the shared runner is outside this story. It is recorded for E02-S15 (`doctor --fix`) and E03-S10.
 
 ---
 

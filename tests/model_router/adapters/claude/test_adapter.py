@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import functools
 import importlib
 import json
@@ -48,9 +49,11 @@ from walk.model_router import (
 )
 from walk.model_router.adapters.claude import ClaudeAdapter
 from walk.model_router.adapters.claude.client import (
+    SDK_OPTIONS,
     ClaudeClient,
     ClaudeQueryOptions,
     SdkClaudeClient,
+    missing_sdk_options,
 )
 from walk.model_router.adapters.claude.projector import ClaudeSkillProjector
 from walk.permissions import PermissionDecision, PermissionEffect, ToolCallRequest
@@ -756,3 +759,19 @@ async def test_real_sdk_round_trip(tmp_path: Path) -> None:
     assert events[0].kind is K.STARTED
     assert any(e.kind is K.USAGE for e in events)
     assert events[-1].kind in {K.ENDED, K.ERROR}
+
+
+def test_missing_sdk_options_introspects_claude_agent_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    present = [name for name in SDK_OPTIONS if name != "output_format"]
+    options_class = dataclasses.make_dataclass("ClaudeAgentOptions", [*present, "extra"])
+    stub = types.ModuleType("claude_agent_sdk")
+    stub.ClaudeAgentOptions = options_class  # type: ignore[attr-defined]  # stub module attribute
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", stub)
+
+    assert missing_sdk_options() == ["output_format"]
+
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
+    with pytest.raises(ConfigError, match="claude-agent-sdk"):
+        missing_sdk_options()

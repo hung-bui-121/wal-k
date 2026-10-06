@@ -246,6 +246,7 @@ ignore_imports = [  # each package re-exports its own service from __init__
     "walk.context -> walk.context.service",
     "walk.effort -> walk.effort.service",
     "walk.hooks -> walk.hooks.service",
+    "walk.integrations -> walk.integrations.service",
     "walk.memory -> walk.memory.service",
     "walk.model_router -> walk.model_router.service",
     "walk.orchestrator -> walk.orchestrator.service",

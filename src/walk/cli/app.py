@@ -8,6 +8,7 @@ import typer
 from walk import __version__
 from walk.cli.cmd_cost import cost_app
 from walk.cli.cmd_db import db_app
+from walk.cli.cmd_doctor import doctor
 from walk.cli.cmd_ledger import ledger_app
 from walk.cli.cmd_memory import memory_app
 from walk.cli.cmd_phase import phase_app
@@ -27,6 +28,7 @@ app.add_typer(ledger_app)
 app.add_typer(memory_app)
 app.add_typer(phase_app)
 app.add_typer(work_app)
+app.command("doctor")(doctor)
 app.command("run")(run)
 app.command("status")(status)
 

@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import shutil
+import socket
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -46,8 +47,10 @@ from walk.hooks import DefaultHookManager, HookExecutionRepository
 from walk.integrations import (
     AsyncioSubprocessRunner,
     CredentialStore,
+    DefaultIntegrationManager,
     GitCliProvider,
     GitProvider,
+    ManifestStore,
     SubprocessRunner,
 )
 from walk.integrations.credentials import KeyringBackend, SystemKeyringBackend
@@ -60,7 +63,7 @@ from walk.model_router import (
     load_models_config,
 )
 from walk.model_router.adapters.claude import ClaudeAdapter
-from walk.model_router.adapters.claude.client import SdkClaudeClient
+from walk.model_router.adapters.claude.client import SdkClaudeClient, missing_sdk_options
 from walk.model_router.adapters.codex import CodexAdapter
 from walk.model_router.adapters.codex.process import AsyncioCodexProcessLauncher
 from walk.orchestrator import (
@@ -208,6 +211,7 @@ class KernelHandle:
         orchestrator: DefaultOrchestrator,
         status_builder: StatusBuilder,
         credentials: CredentialStore,
+        integrations: DefaultIntegrationManager,
     ) -> None:
         """Hold the wired services (built by `build_kernel` only)."""
         self.settings = settings
@@ -237,6 +241,7 @@ class KernelHandle:
         self.orchestrator = orchestrator
         self.status_builder = status_builder
         self.credentials = credentials
+        self.integrations = integrations
         self._closed = False
 
     async def aclose(self) -> None:
@@ -299,6 +304,7 @@ def build_kernel(
     )
     runner = o.subprocess_runner or AsyncioSubprocessRunner()
     git = o.git or GitCliProvider(repo, runner, ledger, idempotency, clock, project_key=key)
+    integrations = _integrations(repo, runner, credentials, tools, clock)
     runs = AgentRunRepository(db, clock=clock)
     checkpoints = DefaultCheckpointManager(
         db,
@@ -467,6 +473,55 @@ def build_kernel(
         orchestrator=orchestrator,
         status_builder=status_builder,
         credentials=credentials,
+        integrations=integrations,
+    )
+
+
+def open_integrations(
+    repo: Path,
+    *,
+    runner: SubprocessRunner | None = None,
+    keyring_backend: KeyringBackend | None = None,
+    clock: Clock | None = None,
+) -> DefaultIntegrationManager:
+    """Wire the §26 preflight for ``repo`` (``walk doctor``); opens no database.
+
+    Args:
+        repo: Game repository root.
+        runner: Runs the probes (the asyncio runner by default).
+        keyring_backend: OS keyring behind the `CredentialStore` (the system keyring by default).
+        clock: Stamps the manifest (the system clock by default).
+
+    Raises:
+        ConfigError: The packaged tool catalogue is invalid.
+    """
+    credentials = CredentialStore(os.environ, keyring_backend or SystemKeyringBackend())
+    tools = DefaultToolRegistry(load_tool_specs([]))
+    return _integrations(
+        repo, runner or AsyncioSubprocessRunner(), credentials, tools, clock or SystemClock()
+    )
+
+
+def _integrations(
+    repo: Path,
+    runner: SubprocessRunner,
+    credentials: CredentialStore,
+    tools: DefaultToolRegistry,
+    clock: Clock,
+) -> DefaultIntegrationManager:
+    """The preflight manager; skills join with E02-S05/S07, the Unity path with E03-S10."""
+    return DefaultIntegrationManager(
+        runner=runner,
+        credentials=credentials,
+        manifest_store=ManifestStore(repo / _AI_DIR, clock),
+        tools=tools,
+        clock=clock,
+        machine_id=socket.gethostname(),
+        unity_path=None,
+        project_path=str(repo),
+        required_skills=[],
+        available_skills=[],
+        sdk_option_probe=missing_sdk_options,
     )
 
 
