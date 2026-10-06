@@ -138,8 +138,8 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E01-S03 | SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup` | persistence, cli | Project DB created with full DOMAIN-MODEL §6.2 schema, WAL + pragmas + immutability triggers |
 | E01-S04 | `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore` | persistence | Transactional building blocks and ID allocation shared by all repositories |
 | E01-S05 | Execution ledger: `LedgerManager`, `walk ledger tail/query` | telemetry, cli | Append-only ledger with query API and CLI |
-| E01-S06 | `TelemetryManager` and `EvidenceManager` | telemetry | JSON-line logging, counters/timers, `RetrospectiveMetrics` from ledger, evidence recording with hashing and §47 ranking |
-| E01-S07 | Hooks runtime core: `HookManager` | hooks | Priority-ordered synchronous dispatch, timeouts, fail policies, `hook_executions` + ledger |
+| E01-S06 | `TelemetryManager` and `EvidenceManager` | telemetry | DONE (ece9b6f) |
+| E01-S07 | Hooks runtime core: `HookManager` | hooks | DONE (pending) |
 | E01-S08 | Work-item aggregates, repository, `WorkflowManager.create/get/query`, `walk work list/show` | workflow, cli | Persist the §52 hierarchy with sequence IDs and `WORK_ITEM_CREATED` |
 | E01-S09 | `StateMachine`, YAML `TransitionTable` loader, guard registry, `raise_event`, `story_workflow`, `walk work transition` | workflow, cli | Explicit, persisted, guarded transitions committed atomically with ledger + transition row |
 | E01-S10 | `feature_workflow`/`bug_workflow` tables, remaining guards, Definition of Ready, `ready_items`, done dimensions | workflow | All INTERFACES §3.1–§3.3 transitions and guards available as data + callables |

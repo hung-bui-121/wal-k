@@ -743,7 +743,7 @@ Level-0 decisions:
 
 ### E01-S06 — `TelemetryManager` and `EvidenceManager`
 
-**Status:** DONE (pending)
+**Status:** DONE (ece9b6f)
 **Type:** feat
 **Requirements:** §6.6, §47, §86, §116
 **Depends on:** E01-S05
@@ -870,7 +870,7 @@ Level-0 decisions:
 
 ### E01-S07 — Hooks runtime core: `HookManager`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §32, §41, §138 (Tool Failure)
 **Depends on:** E01-S05
@@ -937,7 +937,7 @@ class DefaultHookManager:
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | When `HookName` members are enumerated, Then they equal the ARCHITECTURE §4.1 list (43 values, snake_case) | `tests/hooks/test_models.py::test_hook_names_match_architecture_table` |
+| 1 | When `HookName` members are enumerated, Then they equal the ARCHITECTURE §4.1 list (45 values, snake_case) | `tests/hooks/test_models.py::test_hook_names_match_architecture_table` |
 | 2 | Given hooks with priorities 100, 10, 10 (ids b, a), When `hooks_for`, Then order is `10/a, 10/b, 100` | `tests/hooks/test_service.py::test_hooks_ordered_by_priority_then_id` |
 | 3 | When registering the same `(name,id)` twice, Then `ConfigError` | `tests/hooks/test_service.py::test_register_rejects_duplicate_id` |
 | 4 | Given a required builtin, When a project hook with the same id is registered, Then `ConfigError` | `tests/hooks/test_service.py::test_project_hook_cannot_replace_required_builtin` |
@@ -958,7 +958,30 @@ class DefaultHookManager:
 - Commit: `feat: add hook manager with ordered dispatch and fail policies (E01-S07)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+69 files already formatted
+All checks passed!
+Success: no issues found in 66 source files
+Required test coverage of 85% reached. Total coverage: 99.78%
+176 passed in 6.66s
+```
+Touched modules: `hooks/models.py`, `protocols.py`, `errors.py`, `repository.py`, `service.py` each 100%.
+
+Doc corrections in this commit:
+- AC 1 said "43 values". ARCHITECTURE §4.1 and DOMAIN-MODEL §4.6 both list 45 names, and the two sets are identical. The test parses the §4.1 table and expects 45. The AC text now says 45.
+- AC 10 asserts `ConfigError`, as the Notes resolve, not `NotSupported`.
+
+Level-0 decisions (no listed signature changed):
+- `HookExecutionRepository(db)` has `db` (read-only property) and `async insert(ctx, result, *, at, uow)`. The `DefaultHookManager` constructor gets no `Database`, so it opens its units of work on `repo.db`, the same pattern as `LedgerRepository.db` (E01-S06).
+- Each execution is recorded after the hook returns, in one unit of work: the `hook_executions` row plus the `HOOK_EXECUTED`/`HOOK_FAILED` event. The hook itself runs outside any transaction, so it can open its own units of work. Because of that, `fire` must not be called while a unit of work is open on the same database (ARCHITECTURE: hooks fire after commit). Otherwise `UnitOfWork` raises `ConfigError("nested transaction")`.
+- Ledger event: `actor_role=KERNEL`, `work_item_id`/`run_id`/`phase_id` taken from the context, `at` = execution start (clock), `duration_ms`, `outcome` `OK`/`FAILED` (TIMEOUT maps to `FAILED`). The payload is `{hook_name, hook_id, kind, status, fail_policy, message}`. The row `at` is the same start time, and `message` is NULL on success.
+- Timeouts use `asyncio.timeout(timeout_s)`, which is what `wait_for` does internally. `timeout.expired()` tells the kernel deadline apart from a `TimeoutError` raised by the hook itself, which counts as `FAILED`. Any `Exception` from a hook is caught and recorded as `FAILED` with message `<Type>: <text>`. Cancellation still propagates.
+- `HookFailed` detail is `{hook_name, hook_id, results: [HookResult as JSON…]}`.
+- `register`: the required-builtin check runs first and matches the id across all hook names. Then come the duplicate `(name, id)` check and the "required cannot be disabled" check. A builtin without `fn` resolves `callables[hook.callable_path]`, and if that fails it raises `ConfigError("… needs a callable")`. A project hook given an `fn` raises `ConfigError`, because it runs its command or action.
+- A registered project hook has no executor until E02-S09. Firing it records `FAILED` ("project hooks are available from E02-S09") and applies its fail policy, so a `fail_closed` project hook never passes silently.
+- `fire` raises `ConfigError` when `ctx.name` differs from `name`.
+- Extra tests beyond the AC table: protocol conformance, model defaults/frozen, the register guards above, `callable_path` resolution, a hook raising `TimeoutError`, and a project hook without an executor.
 
 ---
 
