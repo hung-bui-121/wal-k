@@ -5,7 +5,7 @@ story in `docs/02-work-breakdown/EPIC-*.md`. Do not edit by hand; re-run the scr
 
 - Spec sections known: 140
 - Sections covered by at least one story: 140
-- Stories with requirement references: 171
+- Stories with requirement references: 174
 
 ## Coverage matrix
 
@@ -36,8 +36,8 @@ story in `docs/02-work-breakdown/EPIC-*.md`. Do not edit by hand; re-run the scr
 | §23 | Cross-Model Review | `E01-R01`, `E01-S20`, `E03-R01`, `E03-S06`, `E03-S07`, `E03-S13`, `E03-S19`, `E05-R01`, `E05-S04`, `E11-S04` |
 | §24 | Production Kit | `E02-R01`, `E02-S03`, `E02-S04`, `E02-S09`, `E02-S12`, `E02-S16` |
 | §25 | Project Bootstrap | `E02-S02`, `E02-S03`, `E02-S16` |
-| §26 | Environment Bootstrap | `E01-S23`, `E02-S01`, `E02-S02`, `E02-S15`, `E02-S16`, `E03-S10`, `E06-S01`, `E08-S02`, `E08-S03`, `E08-S10` |
-| §27 | Reproducible Environment | `E02-S02`, `E02-S07`, `E02-S15` |
+| §26 | Environment Bootstrap | `E01-S23`, `E02-B01`, `E02-S01`, `E02-S02`, `E02-S15`, `E02-S16`, `E03-S10`, `E06-S01`, `E08-S02`, `E08-S03`, `E08-S10` |
+| §27 | Reproducible Environment | `E02-B01`, `E02-S02`, `E02-S07`, `E02-S15` |
 | §28 | Canonical Skill Registry | `E01-S14`, `E02-S05`, `E02-S06`, `E02-S07`, `E02-S15`, `E02-S16` |
 | §29 | Skill Assignment | `E01-S14`, `E01-S18`, `E02-R01`, `E02-S05`, `E02-S06`, `E03-S07` |
 | §30 | Tool Registry | `E01-S14`, `E01-S26`, `E02-S05`, `E04-S11`, `E08-S04`, `E08-S08` |
@@ -101,7 +101,7 @@ story in `docs/02-work-breakdown/EPIC-*.md`. Do not edit by hand; re-run the scr
 | §88 | Auditability | `E01-S05`, `E04-S05`, `E06-S05`, `E08-S05`, `E09-R01`, `E09-S05`, `E09-S07` |
 | §89 | Recovery | `E01-B02`, `E01-R01`, `E01-S03`, `E01-S25`, `E01-S27`, `E01-S28`, `E01-S29`, `E01-S30`, `E01-S31`, `E03-S03`, `E03-S20`, `E04-S06`, `E07-S01`, `E07-S10` |
 | §90 | Idempotency | `E01-B02`, `E01-R01`, `E01-S04`, `E01-S23`, `E01-S25`, `E01-S28`, `E01-S29`, `E03-S01`, `E03-S02`, `E03-S03`, `E03-S04`, `E03-S08`, `E03-S11`, `E03-S12`, `E07-S01`, `E07-S02`, `E07-S04`, `E07-S05`, `E07-S08`, `E07-S09`, `E07-S10`, `E08-S04`, `E08-S09`, `E11-S03`, `E11-S06` |
-| §91 | Security | `E01-S14`, `E01-S15`, `E01-S16`, `E01-S21`, `E01-S22`, `E01-S23`, `E01-S25`, `E01-S26`, `E01-S27`, `E02-R01`, `E02-S01`, `E02-S10`, `E02-S14`, `E02-S15`, `E02-S16`, `E03-R01`, `E03-S01`, `E03-S04`, `E03-S05`, `E03-S08`, `E08-S02`, `E08-S03`, `E08-S10`, `E11-S06` |
+| §91 | Security | `E01-S14`, `E01-S15`, `E01-S16`, `E01-S21`, `E01-S22`, `E01-S23`, `E01-S25`, `E01-S26`, `E01-S27`, `E02-B01`, `E02-B02`, `E02-B03`, `E02-R01`, `E02-S01`, `E02-S10`, `E02-S14`, `E02-S15`, `E02-S16`, `E03-R01`, `E03-S01`, `E03-S04`, `E03-S05`, `E03-S08`, `E08-S02`, `E08-S03`, `E08-S10`, `E11-S06` |
 | §92 | Protected Actions | `E01-S15`, `E01-S26`, `E02-S10`, `E02-S11`, `E02-S14`, `E02-S16`, `E03-S12`, `E03-S16`, `E03-S17`, `E05-S02`, `E05-S05`, `E07-S07`, `E11-R01`, `E11-S06`, `E11-S08` |
 | §93 | Human Override | `E01-S11`, `E01-S30`, `E02-R01`, `E02-S11`, `E02-S13`, `E02-S16`, `E03-S16`, `E05-S01`, `E05-S09`, `E07-S04`, `E07-S05`, `E07-S10` |
 | §94 | Continuous Improvement | `E10-S02`, `E10-S10`, `E10-X01` |
@@ -149,7 +149,7 @@ story in `docs/02-work-breakdown/EPIC-*.md`. Do not edit by hand; re-run the scr
 | §136 | Success Criteria | `E02-S16`, `E03-S19`, `E03-S20`, `E05-S10`, `E06-S08`, `E07-S08`, `E07-S10`, `E08-S09`, `E09-S07`, `E10-S10`, `E11-S02`, `E11-S04`, `E11-S08` |
 | §137 | Key Architectural Invariants | `E01-B01`, `E01-B02`, `E01-B03`, `E01-B05`, `E01-B06`, `E01-R01`, `E01-S01`, `E01-S03`, `E01-S04`, `E01-S05`, `E01-S09`, `E01-S10`, `E01-S15`, `E01-S16`, `E01-S17`, `E01-S18`, `E01-S19`, `E01-S20`, `E01-S21`, `E01-S22`, `E01-S23`, `E01-S24`, `E01-S25`, `E01-S26`, `E01-S27`, `E01-S28`, `E01-S29`, `E01-S30`, `E01-S31`, `E02-R01`, `E02-S04`, `E02-S05`, `E02-S06`, `E02-S07`, `E02-S08`, `E02-S09`, `E02-S10`, `E02-S11`, `E02-S12`, `E02-S13`, `E02-S14`, `E02-S15`, `E02-S16`, `E03-R01`, `E03-S01`, `E03-S02`, `E03-S03`, `E03-S04`, `E03-S06`, `E03-S07`, `E03-S08`, `E03-S10`, `E03-S11`, `E03-S12`, `E03-S13`, `E03-S14`, `E03-S15`, `E03-S16`, `E03-S17`, `E03-S18`, `E03-S19`, `E03-S20`, `E04-R01`, `E04-S05`, `E04-S06`, `E04-S07`, `E04-S15`, `E05-R01`, `E05-S01`, `E05-S02`, `E05-S03`, `E05-S04`, `E05-S05`, `E05-S06`, `E05-S07`, `E05-S08`, `E05-S09`, `E05-S10`, `E05-S11`, `E05-S12`, `E06-R01`, `E06-S01`, `E06-S02`, `E06-S03`, `E06-S04`, `E06-S05`, `E06-S06`, `E06-S07`, `E06-S08`, `E07-R01`, `E07-S01`, `E07-S02`, `E07-S03`, `E07-S04`, `E07-S05`, `E07-S06`, `E07-S07`, `E07-S08`, `E07-S09`, `E07-S10`, `E08-R01`, `E08-S01`, `E08-S02`, `E08-S04`, `E08-S05`, `E08-S07`, `E08-S08`, `E08-S09`, `E08-S10`, `E09-R01`, `E09-S01`, `E09-S05`, `E09-S06`, `E09-S07`, `E10-R01`, `E10-S03`, `E10-S04`, `E10-S05`, `E10-S06`, `E10-S07`, `E10-S08`, `E10-S09`, `E10-S10`, `E11-R01`, `E11-S01`, `E11-S02`, `E11-S03`, `E11-S04`, `E11-S05`, `E11-S06`, `E11-S07`, `E11-S08` |
 | §138 | Primary Risks | `E01-S07`, `E01-S19`, `E01-S20`, `E01-S24`, `E01-S27`, `E01-S28`, `E01-S31`, `E02-S06`, `E02-S07`, `E02-S14`, `E03-R01`, `E03-S16`, `E04-S03`, `E04-S04`, `E04-S08`, `E04-S09`, `E04-S14`, `E04-S15`, `E05-R01`, `E05-S02`, `E05-S03`, `E05-S04`, `E05-S05`, `E05-S06`, `E05-S07`, `E05-S08`, `E05-S10`, `E05-S11`, `E05-S12`, `E06-S02`, `E06-S08`, `E07-S06`, `E07-S07` |
-| §139 | Open Design Questions | `E01-S02`, `E01-S21`, `E01-S22`, `E01-S30`, `E02-S01`, `E02-S02`, `E02-S12`, `E10-S08`, `E10-X01` |
+| §139 | Open Design Questions | `E01-S02`, `E01-S21`, `E01-S22`, `E01-S30`, `E02-B02`, `E02-B03`, `E02-S01`, `E02-S02`, `E02-S12`, `E10-S08`, `E10-X01` |
 | §140 | Final Product Definition | `E07-S10` |
 
 ## Sections not cited by any story
@@ -159,7 +159,7 @@ None.
 ## Stories by epic file
 
 - `EPIC-01-kernel-core.md`: 38 stories
-- `EPIC-02-production-kit.md`: 17 stories
+- `EPIC-02-production-kit.md`: 20 stories
 - `EPIC-03-coding-workflow.md`: 21 stories
 - `EPIC-04-persistent-studio-memory.md`: 16 stories
 - `EPIC-05-multi-agent-reasoning.md`: 14 stories

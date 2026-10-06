@@ -1169,7 +1169,7 @@ The kernel can compile, run EditMode/PlayMode tests and build a Unity project in
 | `src/walk/integrations/unity/install.py` | create | `install_ci_package`, `ci_package_source`, `CI_PACKAGE_NAME` |
 | `src/walk/integrations/errors.py` | modify | `UnityNotFound(ConfigError)`, `UnityJobFailed(TransientError)` |
 | `src/walk/integrations/preflight.py` | modify | — (`detect_unity` delegates the project checks to `UnityBatchProvider.detect`) |
-| `src/walk/integrations/bootstrap.py` | modify | `BootstrapResult.ci_package_version` (`Bootstrapper` calls `install_ci_package` when a Unity project is detected) |
+| `src/walk/orchestrator/bootstrap.py` | modify | `BootstrapResult.ci_package_version` (`Bootstrapper` calls `install_ci_package` when a Unity project is detected; ADR-0020) |
 | `src/walk/cli/cmd_bootstrap.py` | modify | — (prints `com.walk.ci: installed <version>` / `skipped (no unity project)`) |
 | `pyproject.toml` | modify | — (hatch `force-include`: `unity/com.walk.ci` → `walk/_data/com.walk.ci`) |
 | `unity/com.walk.ci/package.json` | create | — (`name: com.walk.ci`, `version: 1.0.0`, `unity: 2022.3`) |
@@ -1354,7 +1354,7 @@ _pending_
 |---|---|---|
 | `src/walk/integrations/ci.py` | create | `LocalCiProvider`, `CiConfig`, `CiJobSpec`, `load_ci_config`, `job_kind_for`, `CI_CONFIG_PATH` |
 | `src/walk/integrations/defaults/ci.yaml` | create | — (kernel default config, copied by bootstrap) |
-| `src/walk/integrations/bootstrap.py` | modify | — (writes `.ai/project/ci.yaml` from the default when absent) |
+| `src/walk/orchestrator/bootstrap.py` | modify | — (writes `.ai/project/ci.yaml` from the default when absent; ADR-0020) |
 | `src/walk/integrations/protocols.py` | modify | — (`CiProvider.run_pipeline` gains keyword-only `work_item_id: WorkItemId \| None = None`) |
 | `src/walk/integrations/errors.py` | modify | `CiJobUnknown(ConfigError)` |
 | `src/walk/integrations/__init__.py` | modify | re-export `LocalCiProvider`, `CiConfig`, `load_ci_config` |

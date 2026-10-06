@@ -1602,7 +1602,7 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 
 | Command | Arguments / options | Behaviour |
 |---|---|---|
-| `walk bootstrap` | `--gdd PATH...` `--provider local\|jira` `--name NAME` `--key KEY` `--unity-path PATH` `--yes` | §25: preflight → Production Kit (kernel defaults copied to `.ai/agents/`) → `.ai/` init (project.md skeleton from GDD headings, kernel-versions.yaml, environment.yaml, .gitignore) → DB create + migrate. Idempotent. |
+| `walk bootstrap` | `--gdd PATH...` `--provider local\|jira` `--name NAME` `--key KEY` `--unity-path PATH` `--yes` | §25: preflight → Production Kit (kernel defaults copied to `.ai/agents/`; `permissions.yaml` starts as an empty narrowing file) → `.ai/` init (project.md skeleton from GDD headings, kernel-versions.yaml, environment.yaml, .gitignore) → DB create + migrate. Idempotent. |
 | `walk doctor` | `--fix` `--strict` | §26 preflight; prints `EnvironmentManifest`; `--fix` installs guard hooks, regenerates skill projections, repairs index; exit 1 on missing required. |
 | `walk run` | `--max-parallel N` `--webhook-port PORT` `--poll-interval S` `--once` `--skip-preflight` | Start kernel daemon (ARCHITECTURE.md §3.4). `--once` = single tick then exit (tests). |
 | `walk status` | `--watch` | `KernelStatus` (§87): phase, progress, active runs, blocked, pending approvals, budgets. |

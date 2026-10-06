@@ -11,7 +11,7 @@ Rules (WBS.md §2 rule 6):
   the same commit (CONVENTIONS.md §4); the epic review task checks this register for names
   that were promoted but are still story-local, and for conflicting definitions.
 
-Entries: 200
+Entries: 203
 
 | Story | Kind | Names / note | File |
 |---|---|---|---|
@@ -52,19 +52,22 @@ Entries: 200
 | `E01-R01` | NEW NAME | item in EPIC-01, Then each has a WBS §6 row and the architect table is in Evidence \| manual checklist recorded in Evidence \| | `EPIC-01-kernel-core.md` |
 | `E02-S01` | NEW NAME | `KeyringBackend`, `SystemKeyringBackend`, `CREDENTIAL_NAMES`, `KEYRING_SERVICE`, `AGENT_ENV_ALLOWLIST`, `scrubbed_env`, `KernelOverrides.keyring_backend`; from the binding Note: `walk.model_router.adapters.claude.transport` (`scrubbed_transport`, `TRANSPORT_MODULE`), `SdkClaudeClient(transport_factory=...)` with `TransportFactory`, `KernelHandle.credentials`. | `EPIC-02-production-kit.md` |
 | `E02-S02` | NEW NAME | `ManifestStore`, `REQUIRED_DEFAULT`, detector function names; from implementation: `detect_cli_tool`, `MISSING_COMPONENTS`, `SdkOptionProbe`, `DefaultIntegrationManager(sdk_option_probe=...)`, `SDK_OPTIONS`, `missing_sdk_options`, `open_integrations`, `KernelHandle.integrations`. | `EPIC-02-production-kit.md` |
-| `E02-S03` | NEW NAME | `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `.ai/project/production-kit.yaml`, `walk.memory.skeletons`, defaults files under `integrations/defaults/`. | `EPIC-02-production-kit.md` |
+| `E02-S03` | NEW NAME | `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `NO_COMMIT_SHA`, `open_bootstrapper`, `.ai/project/production-kit.yaml`, `walk.memory.skeletons`, defaults files under `integrations/defaults/`. | `EPIC-02-production-kit.md` |
 | `E02-S04` | NEW NAME | `BehaviorVersionCatalog`, `KernelVersionPins`, `VersionPinError`, `PINS_PATH`, template version comment convention `{# version: X.Y #}`. | `EPIC-02-production-kit.md` |
 | `E02-S05` | NEW NAME | `SkillFrontMatter`, `parse_skill_file`, `discover_skill_dirs`, `SkillLoadError`. | `EPIC-02-production-kit.md` |
 | `E02-S06` | NEW NAME | `ClaudeSkillProjector`, `CodexSkillProjector`, `AGENTS_MD_START/END`, `INLINE_LIMIT_BYTES`, `ProjectionLock`, `LOCK_PATH`, `SkillProjectionRepository`, `FakeSkillProjector`; from implementation: `SkillProjector.render`, `GitProvider.git_path`, `DefaultSkillRegistry(db=, ai_root=, exclude_path=)` with `ExcludePath`, `DefaultSandboxManager(project_skills=)`, `skills_app`, `skill_projectors`, `open_skill_registry`. | `EPIC-02-production-kit.md` |
 | `E02-S07` | NEW NAME | `compute_drift`, `DefaultSkillRegistry.regenerate`, `KernelSettings.strict`; from implementation: `SkillProjector.scan`, `DefaultSkillRegistry(ledger=, clock=, project_key=)`, `DefaultOrchestrator(startup_checks=)`, `PROJECTIONS_DIR`, `skill_drift_reports`, `skills_check_drift`. | `EPIC-02-production-kit.md` |
-| `E02-S08` | NEW NAME | `BuiltinHookDeps` (incl. `hooks`), `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `path`, `remaining_work_present`. | `EPIC-02-production-kit.md` |
+| `E02-S08` | NEW NAME | `BuiltinHookDeps` (incl. `hooks`, `workflow`, `default_branch`), `builtin_hooks`, `MUST_HOOK_IDS`, builtin hook ids (`builtin.*`, incl. `builtin.pause_all_runs`, `builtin.budget_escalate`, `builtin.approval_recorded`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `reason`, `mode`, counter `remaining_work_nonempty`. | `EPIC-02-production-kit.md` |
 | `E02-S09` | NEW NAME | `ProjectHooksFile`, `ProjectHookSpec`, `KERNEL_ACTIONS`, `HOOK_ENV_PREFIX`, `hook_env`, `set_kernel_actions`. | `EPIC-02-production-kit.md` |
 | `E02-S10` | NEW NAME | `PermissionsFile`, `load_defaults`, `load_project_rules`, `merge_narrowing`, `DEFAULT_PROTECTED_ACTIONS`, tool names `decision.propose`, `work.plan`, `qc.*`. | `EPIC-02-production-kit.md` |
 | `E02-S11` | NEW NAME | `EventApprovalWaiter` (the `ApprovalWaiter` protocol itself is defined by E01-S26), `expire_due`, `approval_timeout_s` policy key, command names `approve`/`deny` in `CommandConsumer`. | `EPIC-02-production-kit.md` |
 | `E02-S12` | NEW NAME | `walk artifacts` group (WBS §6), `hash_payload`, `approved_doc`, `APPROVED_DIR`, `ApprovedArtifactRepository`, `ApprovedArtifactDrift`, `ApprovalNotAuthorized`, `_approved_write` internal flag. | `EPIC-02-production-kit.md` |
 | `E02-S13` | NEW NAME | `set_priority`, `set_autonomy`, `PoliciesFile`, `update_model_policy`, command handler names. | `EPIC-02-production-kit.md` |
 | `E02-S14` | NEW NAME | `DEFAULT_FORBIDDEN_PATHS`, `EVIDENCE_EXCEPTIONS`, `walk.memory.secrets` (`contains_secret`, `SECRET_PATTERNS`), `RuntimePolicy.allowed_paths`, hook script files. | `EPIC-02-production-kit.md` |
+| `E02-S14` | NEW NAME | `GitProvider.hide_local_changes`, `HideTracked`, `DefaultSkillRegistry(hide_tracked=...)`. | `EPIC-02-production-kit.md` |
 | `E02-S15` | NEW NAME | `DoctorReport`, `walk.cli.lints`, `PROVIDER_NAME_PATTERN`. | `EPIC-02-production-kit.md` |
+| `E02-B01` | NEW NAME | `resolve_executable`, `unsafe_batch_argument`, `BATCH_UNSAFE_CHARS` (`walk.integrations.subprocess`), exit code 126 for a refused batch call, `tests/fakes/fake_shim.py` (`write_shim`). | `EPIC-02-production-kit.md` |
+| `E02-B02` | NEW NAME | `WINDOWS_AGENT_ENV_ALLOWLIST`, `scrubbed_env(..., platform=)`. | `EPIC-02-production-kit.md` |
 | `EPIC-03-coding-workflow header` | NEW NAME | per-kind branch prefixes (INTERFACES §1.13 only names `feat/<id>-<slug>`). | `EPIC-03-coding-workflow.md` |
 | `E03-S01` | NEW NAME | `LocalPrStub` and path `.walk/prs/<branch>.json`; `ProtectedBranchRefused`; `GitCliProvider.detect_gh`. | `EPIC-03-coding-workflow.md` |
 | `E03-S03` | NEW NAME | `external_events.yaml`, `ExternalEventMap`, `load_external_event_map`, `WebhookDeliveryRepository`, `WorkProviderSyncRepository`, `WorkPoller.poll_once`. | `EPIC-03-coding-workflow.md` |

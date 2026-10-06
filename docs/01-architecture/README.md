@@ -26,5 +26,6 @@ Source of truth for requirements: `requirements/WAL_K_REQ.md` (cited as `§NN`).
 | [adr/ADR-0017-openart-via-remote-mcp.md](adr/ADR-0017-openart-via-remote-mcp.md) | OpenArt through its remote MCP server: official `mcp` SDK (streamable HTTP + OAuth 2.1 PKCE, dynamic registration), `walk auth login`, refresh token in OS keyring only, tool mapping as config validated against `tools/list`. |
 | [adr/ADR-0018-hooks-below-domain-packages.md](adr/ADR-0018-hooks-below-domain-packages.md) | `walk.hooks` is first in the L2 import order (imports only common/persistence/telemetry) so that workflow, budgets, effort, permissions, memory, context, decisions and debate can inject `HookManager`. |
 | [adr/ADR-0019-budgets-before-effort.md](adr/ADR-0019-budgets-before-effort.md) | `walk.budgets` precedes `walk.effort` in the L2 import order so that `EffortManager` can take `dict[BudgetDimension, float]` headroom. |
+| [adr/ADR-0020-bootstrapper-in-orchestrator.md](adr/ADR-0020-bootstrapper-in-orchestrator.md) | The Production Kit `Bootstrapper` lives in `walk.orchestrator.bootstrap` (it writes memory documents and version pins), takes `ProjectRepository` and `GitProvider`; templates stay in `integrations/defaults/`. |
 
 Reading order for implementers: ADR-0001 → ARCHITECTURE → DOMAIN-MODEL → INTERFACES → remaining ADRs as referenced.

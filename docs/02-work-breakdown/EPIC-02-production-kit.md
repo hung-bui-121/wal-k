@@ -390,7 +390,7 @@ Level-0 decisions:
 
 ### E02-S03 — `walk bootstrap`: Production Kit generation and `.ai/` initialisation
 
-**Status:** BLOCKED
+**Status:** TODO
 **Type:** feat
 **Requirements:** §24, §25, §123, §124, §34, §35, §36
 **Depends on:** E02-S02, E01-S16, E01-S17
@@ -401,27 +401,31 @@ Level-0 decisions:
 `walk bootstrap` turns a game repository into a Production Kit in one idempotent command: preflight, kernel defaults copied into `.ai/agents/`, `.ai/project/*` initialised from the GDD, `.ai/.gitignore`, DB created and migrated, `projects` row inserted, `ProductionKit` written.
 
 #### Scope
-- In: `Bootstrapper`, `cmd_bootstrap`, `.ai/` tree creation, `project.md`/`constitution.md` skeletons, `work-provider.yaml`, placeholder `kernel-versions.yaml` (content E02-S04), `production-kit.yaml`.
-- Out: version pin content (E02-S04); skill projection (E02-S06); Jira status validation (E03-S05); `com.walk.ci` package install (E03-S10).
+- In: `Bootstrapper` in `walk.orchestrator.bootstrap` (ADR-0020), the composition helper `open_bootstrapper`, `cmd_bootstrap`, `.ai/` tree creation, `project.md`/`constitution.md` skeletons, `work-provider.yaml`, the empty `permissions.yaml` narrowing file, placeholder `kernel-versions.yaml` (content E02-S04), `production-kit.yaml`.
+- Out: version pin content (E02-S04); the kernel permission defaults `src/walk/permissions/defaults.yaml` (E02-S10); skill projection (E02-S06, `walk skills sync`); Jira status validation (E03-S05); `com.walk.ci` package install (E03-S10).
 
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/integrations/bootstrap.py` | create | `Bootstrapper`, `BootstrapOptions`, `BootstrapResult` |
-| `src/walk/integrations/__init__.py` | modify | re-export `Bootstrapper`, `BootstrapOptions` |
+| `src/walk/orchestrator/bootstrap.py` | create | `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `NO_COMMIT_SHA` |
+| `src/walk/orchestrator/__init__.py` | modify | re-export `Bootstrapper`, `BootstrapOptions`, `BootstrapResult` |
 | `src/walk/integrations/defaults/work-provider.yaml` | create | — (template: `kind: local`, commented Jira mapping per ADR-0005 D-3) |
 | `src/walk/integrations/defaults/ai.gitignore` | create | — (`kernel.db*`, `kernel.lock`) |
 | `src/walk/integrations/defaults/root.gitignore.fragment` | create | — (`.walk/`, `graphify-out/`) |
 | `src/walk/memory/skeletons.py` | create | `project_skeleton`, `project_constitution_skeleton` |
+| `src/walk/cli/composition.py` | modify | `open_bootstrapper` |
 | `src/walk/cli/cmd_bootstrap.py` | create | `bootstrap` |
 | `src/walk/cli/app.py` | modify | register `bootstrap` |
-| `tests/integrations/test_bootstrap.py` | create | — |
+| `tests/orchestrator/test_bootstrap.py` | create | — |
 | `tests/memory/test_skeletons.py` | create | — |
 | `tests/cli/test_cmd_bootstrap.py` | create | — |
 
 #### Interface contract
 ```python
-# src/walk/integrations/bootstrap.py
+# src/walk/orchestrator/bootstrap.py  (ADR-0020)
+NO_COMMIT_SHA: Sha = Sha("0000000")  # stamped as head on documents of a repository without commits
+
+
 class BootstrapOptions(WalkModel):
     repo_path: str
     project_key: ProjectKey
@@ -447,13 +451,27 @@ class Bootstrapper:
         *,
         integrations: IntegrationManager,
         memory: MemoryManager,
+        git: GitProvider,
         database: Database,
         migrations: MigrationRunner,
-        work_repo: WorkflowRepository,
+        projects: ProjectRepository,
         clock: Clock,
         kit_version: str,
     ) -> None: ...
     async def run(self, options: BootstrapOptions) -> BootstrapResult: ...
+
+
+# src/walk/cli/composition.py
+def open_bootstrapper(
+    repo: Path,
+    options: BootstrapOptions,
+    *,
+    runner: SubprocessRunner | None = None,
+    keyring_backend: KeyringBackend | None = None,
+    clock: Clock | None = None,
+) -> Bootstrapper:
+    """Wires the Default* services for one bootstrap (the only place that constructs `Bootstrapper`).
+    Called by `cmd_bootstrap` after Behavior 3, 4 and 7 passed; opening the database creates `.ai/`."""
 
 
 # src/walk/memory/skeletons.py
@@ -473,44 +491,49 @@ def project_constitution_skeleton(
 ) -> MemoryDocument:
     """type=project_constitution, id='constitution', sections: Product Authority, Constraints, Quality Bar, Forbidden."""
 ```
+`Bootstrapper` imports only `models`/`protocols`/`errors` of other packages plus `walk.memory.skeletons` and `walk.persistence` (ARCHITECTURE §1.3, ADR-0020 D-1); the ARCHITECTURE §2.2 orchestrator row already allows every edge it needs.
 CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY [--unity-path PATH] --yes` (INTERFACES §6).
 
 #### Behavior
-1. Order of steps (each idempotent): (a) create `.ai/` and `.walk/`; (b) `Database` open + `MigrationRunner.apply_pending`; (c) `preflight(REQUIRED_DEFAULT)` — failure aborts with exit 4 before any copy; (d) copy kernel defaults: `src/walk/agents/defaults/*.md` → `.ai/agents/roles/`, `agents/defaults/policies.yaml` → `.ai/agents/policies.yaml`, `permissions/defaults.yaml` → `.ai/agents/permissions.yaml`, `model_router/defaults/models.yaml` → `.ai/agents/models.yaml`, empty `hooks.yaml` (`hooks: []`), empty `skills/` dir, `projections.lock.yaml` (`projections: []`); (e) `work-provider.yaml` with `kind: <provider>`; (f) `project.md`, `constitution.md` via `MemoryManager.write` (actor `USER`, head = repo HEAD or `0000000` when the repo has no commits); (g) `kernel-versions.yaml` placeholder `{}` (E02-S04 replaces); (h) `.ai/.gitignore`, append fragment to root `.gitignore` if lines absent; (i) `projects` row upsert; (j) `production-kit.yaml`.
+1. Order of steps (each idempotent): (a) create `.ai/` and `.walk/`; (b) `MigrationRunner.apply_pending` on the opened `Database`; (c) `integrations.preflight(REQUIRED_DEFAULT)` — failure aborts with exit 4 before any copy (`work_provider` is UNKNOWN, not MISSING, until step (e) writes `work-provider.yaml`, so a fresh repository passes; E02-S02 Evidence); (d) copy kernel defaults: `src/walk/agents/defaults/*.md` → `.ai/agents/roles/`, `agents/defaults/policies.yaml` → `.ai/agents/policies.yaml`, `model_router/defaults/models.yaml` → `.ai/agents/models.yaml`; write `.ai/agents/permissions.yaml` as the empty narrowing file of Behavior 9, empty `hooks.yaml` (`hooks: []`), empty `skills/` dir, `projections.lock.yaml` (`projections: []`, written by `ProjectionLock`); (e) `work-provider.yaml` with `kind: <provider>`; (f) `project.md`, `constitution.md` via `MemoryManager.write` (actor `USER`, `head = git.head(repo)`, `branch = git.current_branch(repo)`; on `GitError` because the repository has no commits: `head = NO_COMMIT_SHA`, `branch = Project.default_branch`); (g) `kernel-versions.yaml` placeholder `{}` (E02-S04 replaces); (h) `.ai/.gitignore`, append fragment to root `.gitignore` if lines absent; (i) `projects` row upsert through `ProjectRepository`; (j) `production-kit.yaml`.
 2. Existing files are never overwritten; they are listed in `unchanged_paths`. A second run produces `created_paths == []` and exit 0.
-3. Without `--yes`, a non-TTY stdin aborts with exit 1 and message `bootstrap requires --yes in non-interactive mode`; with a TTY the command prompts `Create Production Kit in <repo>? [y/N]`.
-4. `--key` must match `ProjectKey`; invalid → exit 1 before any filesystem change.
+3. Without `--yes`, a non-TTY stdin aborts with exit 1 and message `bootstrap requires --yes in non-interactive mode`; with a TTY the command prompts `Create Production Kit in <repo>? [y/N]`. `cmd_bootstrap` checks this before `open_bootstrapper`, so nothing is created.
+4. `--key` must match `ProjectKey`; invalid → exit 1 before any filesystem change (checked by `cmd_bootstrap`).
 5. GDD headings are collected from H1/H2 lines of every GDD file; when `--gdd` is omitted and `GDD/` exists, all `*.md` files under it are used; when neither exists, `Goals` contains the single bullet `- (no GDD provided)`.
-6. `ProductionKit` fields are filled with repo-relative paths; `skill_names` = builtin skill names present under `src/walk/skills/builtin/` (names read from directories; registry service is E02-S05); `approved_artifact_ids = []`.
-7. `--provider jira` additionally requires the three Jira credentials present; absence → exit 4 with the missing names (status-map validation added in E03-S05).
-8. All writes go through `MemoryManager.write` (Markdown) or atomic `tmp + rename` helpers (YAML) — no direct `open().write` outside `walk.persistence`/`walk.memory` helpers (CONVENTIONS §2).
+6. `ProductionKit` fields are filled with repo-relative paths; `skill_names` = builtin skill names present under `src/walk/skills/builtin/` (names read from directories); `approved_artifact_ids = []`.
+7. `--provider jira` additionally requires the three Jira credentials present (`CredentialStore.present`, checked by `cmd_bootstrap` before `open_bootstrapper`); absence → exit 4 with the missing names and nothing created (status-map validation added in E03-S05).
+8. All writes go through `MemoryManager.write` (Markdown), the owning package's writer (`ProjectionLock.write`), or atomic `tmp + rename` helpers (YAML) — no direct `open().write` outside `walk.persistence`/`walk.memory` helpers (CONVENTIONS §2).
+9. `.ai/agents/permissions.yaml` is never a copy of the kernel defaults (single source: the package file of E02-S10). It is the empty narrowing file of the E02-S10 `PermissionsFile` schema: the comment lines `# Project narrowing of the kernel permission defaults (ADR-0006 D-6).` and `# Rules may only add DENY/REQUIRE_APPROVAL or restate a default ALLOW (E02-S10).`, then `rules: []` and `protected_actions: []`.
+10. A database whose `projects` row has a different key → `ConfigError("database belongs to project <key>")` before step (d) (one project per database, ADR-0002 D-1); the same key → the row is left unchanged.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | Given an empty temp git repo with `GDD/combat.md` When `run(options)` Then every path of ARCHITECTURE §8 `[MVP]` + `agents/` exists | `tests/integrations/test_bootstrap.py::test_bootstrap_creates_full_ai_tree` |
-| 2 | Given the same repo When `run` twice Then second `created_paths == []` and file hashes unchanged | `tests/integrations/test_bootstrap.py::test_bootstrap_is_idempotent` |
-| 3 | Given preflight MISSING git When `run` Then `ConfigError` and no `.ai/agents/` created | `tests/integrations/test_bootstrap.py::test_bootstrap_aborts_on_preflight_failure` |
+| 1 | Given an empty temp git repo with `GDD/combat.md` When `run(options)` Then every path of ARCHITECTURE §8 `[MVP]` + `agents/` exists | `tests/orchestrator/test_bootstrap.py::test_bootstrap_creates_full_ai_tree` |
+| 2 | Given the same repo When `run` twice Then second `created_paths == []` and file hashes unchanged | `tests/orchestrator/test_bootstrap.py::test_bootstrap_is_idempotent` |
+| 3 | Given preflight MISSING git When `run` Then `ConfigError` and no `.ai/agents/` created | `tests/orchestrator/test_bootstrap.py::test_bootstrap_aborts_on_preflight_failure` |
 | 4 | Given GDD with headings `# Combat`, `## Shotgun` When `project_skeleton` Then `Goals` has bullet `Combat` and `related.gdd` lists the file | `tests/memory/test_skeletons.py::test_project_skeleton_seeds_goals_from_gdd_headings` |
 | 5 | Given skeleton When parsed by `MemoryManager.read("project")` Then all ten §36 sections present in order | `tests/memory/test_skeletons.py::test_project_skeleton_has_all_sections_in_order` |
-| 6 | Given `--provider jira` and no credentials When `walk bootstrap --yes` Then exit 4 listing `JIRA_BASE_URL` | `tests/cli/test_cmd_bootstrap.py::test_bootstrap_jira_requires_credentials` |
+| 6 | Given `--provider jira` and no credentials When `walk bootstrap --yes` Then exit 4 listing `JIRA_BASE_URL` and no `.ai/` created | `tests/cli/test_cmd_bootstrap.py::test_bootstrap_jira_requires_credentials` |
 | 7 | Given no `--yes` and non-TTY When `walk bootstrap` Then exit 1 and nothing created | `tests/cli/test_cmd_bootstrap.py::test_bootstrap_requires_yes_when_non_interactive` |
 | 8 | Given `--key demo` (lowercase) When `walk bootstrap --yes` Then exit 1 | `tests/cli/test_cmd_bootstrap.py::test_bootstrap_rejects_invalid_project_key` |
-| 9 | Given a successful run When reading `production-kit.yaml` Then it validates as `ProductionKit` with `kit_version` | `tests/integrations/test_bootstrap.py::test_bootstrap_writes_production_kit_file` |
-| 10 | Given a successful run When querying `projects` Then one row with `key`, `repo_path`, `work_provider` | `tests/integrations/test_bootstrap.py::test_bootstrap_inserts_project_row` |
+| 9 | Given a successful run When reading `production-kit.yaml` Then it validates as `ProductionKit` with `kit_version` | `tests/orchestrator/test_bootstrap.py::test_bootstrap_writes_production_kit_file` |
+| 10 | Given a successful run When querying `projects` Then one row with `key`, `repo_path`, `work_provider` | `tests/orchestrator/test_bootstrap.py::test_bootstrap_inserts_project_row` |
+| 11 | Given a git repo without commits When `run` Then it succeeds and the `project.md` freshness head is `0000000` | `tests/orchestrator/test_bootstrap.py::test_bootstrap_without_commits_stamps_placeholder_head` |
+| 12 | Given a successful run When reading `.ai/agents/permissions.yaml` Then it holds the two comment lines, `rules: []` and `protected_actions: []` only | `tests/orchestrator/test_bootstrap.py::test_bootstrap_writes_empty_permissions_narrowing` |
+| 13 | Given a database whose `projects` row has key `OTHER` When `run` with key `DEMO` Then `ConfigError` and no `.ai/agents/` created | `tests/orchestrator/test_bootstrap.py::test_bootstrap_refuses_database_of_another_project` |
 
 #### Evidence required
 - Quality gate output.
 - Demo: `walk bootstrap --provider local --key DEMO --name Demo --yes` → prints created paths; `tree .ai` (or `Get-ChildItem -Recurse .ai`) shows the layout; second run prints `nothing to do`.
 
 #### Notes
-- §25 ordering; ADR-0003 D-7/D-8; ARCHITECTURE §8.
-- `NEW NAME:` `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `.ai/project/production-kit.yaml`, `walk.memory.skeletons`, defaults files under `integrations/defaults/`.
-- Pitfall: repo without commits has no HEAD — use `Sha("0000000")` placeholder and document it in `MemoryManager.write` tests.
+- §25 ordering; ADR-0003 D-7/D-8; ARCHITECTURE §8; ADR-0020 (placement, constructor).
+- `NEW NAME:` `Bootstrapper`, `BootstrapOptions`, `BootstrapResult`, `NO_COMMIT_SHA`, `open_bootstrapper`, `.ai/project/production-kit.yaml`, `walk.memory.skeletons`, defaults files under `integrations/defaults/`.
+- Pitfall: a repo without commits has no HEAD, so `GitProvider.head` raises `GitError`; use `NO_COMMIT_SHA` and cover it in a test (AC 11).
+- `import-linter`: `walk.orchestrator` has no row contract (it may import every lower package), but the "only the composition root wires service.py" contract applies, so `bootstrap.py` takes protocol-typed services and `open_bootstrapper` builds the `Default*` ones.
+- Resolved block (architect, 2026-10-07). The implementer's BLOCKING note found four problems: an `integrations → memory` import (a cycle with `memory → integrations`), `integrations → improvement` from E02-S04, `WorkflowRepository` where the `projects` row needs `ProjectRepository`, and no way to resolve HEAD. ADR-0020 settles them. `Bootstrapper` moves to `src/walk/orchestrator/bootstrap.py`. The constructor takes `projects: ProjectRepository` and a required `git: GitProvider`. The templates stay under `integrations/defaults/` and the skeletons in `walk.memory.skeletons`. E02-S04, E03-S10, E03-S11, E04-S02 and E04-S11 now modify `src/walk/orchestrator/bootstrap.py`. Step (d) writes the empty narrowing file, because `src/walk/permissions/defaults.yaml` arrives with E02-S10 and stays the only source of defaults.
 - Commit subject: `feat: add bootstrap command generating the production kit (E02-S03)`.
-- **BLOCKING (implementer, 2026-10-07): `Bootstrapper` cannot live in `walk.integrations`.** The contract puts `Bootstrapper` in `src/walk/integrations/bootstrap.py` with a `memory: MemoryManager` parameter, and step (f) writes `walk.memory.skeletons` documents through it. ARCHITECTURE §2.2 forbids `integrations → memory` (`·`; `import-linter` contract "integrations: ARCHITECTURE 2.2 row" and `tests/test_import_contracts.py`). Allowing it would also make a package cycle, because `memory → integrations` (GitProvider protocol) is allowed. E02-S04 then modifies the same file to write pins from `walk.improvement`, and `integrations → improvement` is `·` as well. Neither import can be avoided by Level-0 means: the documents are `walk.memory.models.MemoryDocument`s built by `walk.memory.skeletons`, and type-checking-only imports count too (E01-B06). Also, the constructor names `work_repo: WorkflowRepository`, but the `projects` row needs `ProjectRepository`.
-  - Decision needed (architect/planner): where `Bootstrapper` lives. Recommended: `src/walk/orchestrator/bootstrap.py` (orchestrator may import every package, including `improvement` for E02-S04 and `IntegrationManager` for preflight), re-exported from `walk.orchestrator`. The `integrations/defaults/*` templates and `walk.memory.skeletons` stay where planned. Alternative: `src/walk/cli/bootstrap.py`, beside the composition root. Either way, update the Files tables of E02-S03, E02-S04 (`bootstrap.py` modify) and E03-S10 (`BootstrapResult.ci_package_version`), plus the WBS §6 register. Also fix the constructor parameter to `projects: ProjectRepository`, and allow an optional `git: GitProvider` for the HEAD/branch of step (f) (the contract gives no way to resolve HEAD).
-  - Implementation notes kept for the unblocked story: `work_provider` is UNKNOWN (not MISSING) before bootstrap writes `work-provider.yaml` (E02-S02 Evidence), so step (c) `preflight(REQUIRED_DEFAULT)` passes on a fresh repository. `src/walk/permissions/defaults.yaml` does not exist until E02-S10, so step (d) should write an empty narrowing file (`rules: []`, `protected_actions: []`, the E02-S10 `PermissionsFile` schema) rather than copy it.
 
 #### Evidence (filled by implementer)
 _pending_
@@ -540,7 +563,8 @@ Every builtin behaviour artifact is catalogued as a `BehaviorVersion`; bootstrap
 | `src/walk/improvement/models.py` | create | `RolloutStage`, `ImprovementRisk`, `CandidateState`, `BehaviorVersion` |
 | `src/walk/improvement/versions.py` | create | `BehaviorVersionCatalog`, `KernelVersionPins`, `PINS_PATH` |
 | `src/walk/improvement/errors.py` | create | `VersionPinError` |
-| `src/walk/integrations/bootstrap.py` | modify | — (step g writes pins from catalog) |
+| `src/walk/orchestrator/bootstrap.py` | modify | — (step g writes pins from catalog; ADR-0020) |
+| `pyproject.toml` | modify | — (import-linter: `walk.improvement` row contract, and `walk.improvement` added to the forbidden lists of the rows whose ARCHITECTURE §2.2 cell is `·`) |
 | `src/walk/orchestrator/service.py` | modify | — (startup step 3 calls `KernelVersionPins.validate`) |
 | `src/walk/cli/cmd_version.py` | create | `version` |
 | `src/walk/cli/app.py` | modify | `--version` now delegates to `cmd_version` |
@@ -610,6 +634,7 @@ class KernelVersionPins(WalkModel):
 #### Notes
 - ADR-0008 D-3/D-4 (data model fixed now, tooling Stage 10); ARCHITECTURE §9.
 - `NEW NAME:` `BehaviorVersionCatalog`, `KernelVersionPins`, `VersionPinError`, `PINS_PATH`, template version comment convention `{# version: X.Y #}`.
+- Pitfall: creating `src/walk/improvement/__init__.py` makes `tests/test_import_contracts.py::test_contracts_match_dependency_table` treat `improvement` as an existing package, so the import-linter contracts in `pyproject.toml` must gain its row and its column in the same commit. The bootstrapper lives in `walk.orchestrator` (ADR-0020), which may import `improvement`.
 - Commit subject: `feat: add behavior version catalog and kernel version pins (E02-S04)`.
 
 #### Evidence (filled by implementer)
@@ -1079,7 +1104,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** BLOCKED
+**Status:** TODO
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1087,21 +1112,27 @@ Level-0 decisions:
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
 #### Goal
-Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is registered as a `required=True` builtin hook with priority < 50, fires in its trigger path, and cannot be disabled by project configuration.
+Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is registered as a `required=True` builtin hook with priority < 50 and cannot be disabled by project configuration. Each one fires in its trigger path without stopping the run whose task fired it and without repeating a checkpoint the kernel already took. Every other §4.1 attachment is listed in the deferral table with its owner.
 
 #### Scope
-- In: `walk.orchestrator.builtin_hooks` (`BuiltinHookDeps`, `builtin_hooks`, `register_builtins`; ADR-0016 — `walk.hooks` may not import runtime/integrations), wiring of hook callables to E01 services, exclusion table for later stories.
-- Out: ledger writes (done at §4.3 write points, WBS.md §3.5); project hooks (E02-S09); attachments listed in the exclusion table.
+- In: `walk.orchestrator.builtin_hooks` (`BuiltinHookDeps`, `builtin_hooks`, `register_builtins`, `MUST_HOOK_IDS`; ADR-0016); the default attachment `builtin.memory_index`; the hook execution rules (Behavior 3–4); payload fixes in `CheckpointManager` (`wip_commit_done`) and `RecoveryManager` (`checkpoint_id`, `handover_id` on `ON_MODEL_FALLBACK`); the executor guard against stopping a run from its own task; the deferral table.
+- Out: ledger writes (done at §4.3 write points, WBS.md §3.5); project hooks (E02-S09); approval waiter, expiry and resume (E02-S11); firing `ON_PROJECT_PAUSE`/`ON_TASK_CANCELLED` from `walk pause`/`walk work cancel` (E02-S13); handovers on PAUSE/BUDGET (E04-S07); attachments in the deferral table.
 
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/orchestrator/builtin_hooks.py` | create | `BuiltinHookDeps`, `builtin_hooks`, `register_builtins` |
+| `src/walk/orchestrator/builtin_hooks.py` | create | `BuiltinHookDeps`, `builtin_hooks`, `register_builtins`, `MUST_HOOK_IDS` |
 | `src/walk/orchestrator/__init__.py` | modify | re-export `BuiltinHookDeps`, `register_builtins` |
 | `src/walk/cli/composition.py` | modify | — (builds `BuiltinHookDeps` and calls `register_builtins(hook_manager, deps)` once, after all services exist and before project hooks load; ADR-0016) |
+| `src/walk/runtime/checkpoints.py` | modify | — (`ON_AGENT_CHECKPOINT` payload gains `wip_commit_done`) |
+| `src/walk/runtime/recovery.py` | modify | — (`ON_MODEL_FALLBACK` payload gains `checkpoint_id`, `handover_id`) |
+| `src/walk/runtime/executor.py` | modify | — (`pause`/`cancel` called from the run's own task raise `ConfigError` instead of awaiting that task) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `AgentExecutor.pause/cancel`: the own-task `ConfigError`) |
 | `tests/hooks/test_builtins.py` | create | — |
 | `tests/hooks/test_builtins_required.py` | create | — |
-| `src/walk/runtime/checkpoints.py` | modify | — (`ON_AGENT_CHECKPOINT` payload gains `wip_commit_done`) |
+| `tests/hooks/test_builtins_pause_paths.py` | create | — (real executor with the builtins registered: budget exhaustion and protected-action approval inside a run) |
+| `tests/runtime/test_executor.py` | modify | — (own-task guard) |
+| `tests/runtime/test_recovery.py` | modify | — (fallback payload keys) |
 
 #### Interface contract
 ```python
@@ -1109,14 +1140,18 @@ Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is r
 class BuiltinHookDeps(WalkModel):
     """Protocol-typed service handles the builtin hooks call (arbitrary_types_allowed)."""
 
-    hooks: HookManager  # nested fire (ON_MODEL_FALLBACK → ON_AGENT_HANDOFF, ON_AGENT_START → ON_CONTEXT_STALE)
+    hooks: HookManager  # nested fire ON_MODEL_FALLBACK → ON_AGENT_HANDOFF
     checkpoints: CheckpointManager
     memory: MemoryManager
     git: GitProvider
     executor: AgentExecutor
-    budgets: BudgetManager
     permissions: PermissionManager
     telemetry: TelemetryManager
+    workflow: WorkflowManager  # ON_TASK_START reads the work item (branch)
+    default_branch: str  # Project.default_branch, base of ensure_branch
+
+
+MUST_HOOK_IDS: tuple[str, ...]  # ids of the MUST table below, in table order
 
 
 def builtin_hooks(
@@ -1124,74 +1159,110 @@ def builtin_hooks(
 ) -> list[tuple[Hook, Callable[[HookContext], Awaitable[None]]]]: ...
 def register_builtins(manager: HookManager, deps: BuiltinHookDeps) -> None: ...
 ```
-Registered MUST hooks (id → behaviour; all `required=True`, `kind="builtin"`, `fail_policy=FAIL_CLOSED`, priority as given):
+`BuiltinHookDeps` drops the ADR-0016 sketch's `budgets` field: budget facts arrive in the `ON_BUDGET_EXHAUSTED` payload. A later story adds it back when a hook needs it (E07-S02).
 
-| HookName | id | prio | Callable behaviour |
-|---|---|---|---|
-| `ON_PROJECT_START` | `builtin.memory_index` | 10 | `memory.rebuild_index()` (default attachment, but shipped `required=False`, prio 60) |
-| `ON_PROJECT_PAUSE` | `builtin.pause_checkpoint_all` | 10 | `checkpoints.checkpoint(run, PAUSE)` for every `executor.running()` |
-| `ON_PHASE_START` | `builtin.phase_baseline` | 10 | `memory.approve_artifact(PHASE_BASELINE manifest of phase scope ids + HEAD, actor KERNEL)` |
-| `ON_TASK_START` | `builtin.ensure_branch` | 10 | `git.ensure_branch(item.branch or feat/<id>-<slug>, base=default_branch, idempotency_key=f"git.branch:{item.id}")` |
-| `ON_TASK_COMPLETE` | `builtin.remaining_work_check` | 10 | reads feature/bug doc; if section `Remaining Work` non-empty and not `- none` → `telemetry.counter("remaining_work_nonempty")` and payload flag `remaining_work_present=True` (does not fail; §6.5 guard decides) |
-| `ON_AGENT_START` | `builtin.freshness_check` | 10 | for each memory doc id in `ctx.payload["context_doc_ids"]`: `memory.assess_freshness`; non-CURRENT → `fire(ON_CONTEXT_STALE)` (E04-S04 adds flagging; here fires only) |
-| `ON_AGENT_CHECKPOINT` | `builtin.wip_commit` | 10 | no-op guard asserting `ctx.payload["wip_commit_done"] is True` (the commit is made inside `CheckpointManager.checkpoint`; the hook fails closed if the invariant is violated) |
-| `ON_AGENT_END` | `builtin.final_checkpoint` | 10 | no-op when `ctx.payload` carries `checkpoint_id` (the executor's END checkpoint, E01-S27 Behavior 10(b)); else `checkpoints.checkpoint(run, END)` |
-| `ON_AGENT_HANDOFF` | `builtin.handoff_checkpoint_and_handover` | 10 | no-op when `ctx.payload` carries both `checkpoint_id` and `handover_id` (E01-S28 Behavior 3 already checkpointed and wrote the handover); else `checkpoints.checkpoint(run, HANDOFF, handover=ctx.payload["handover"])` (which writes the handover document) |
-| `ON_MODEL_FALLBACK` | `builtin.fallback_chain` | 10 | `hooks.fire(ON_AGENT_HANDOFF, ctx)` with the payload forwarded unchanged — creates no checkpoint itself, so with `checkpoint_id` + `handover_id` present the chained handoff hook is a no-op and project hooks on `ON_AGENT_HANDOFF` still observe the fallback |
-| `ON_BUDGET_EXHAUSTED` | `builtin.budget_block` | 10 | `checkpoints.checkpoint(run, PAUSE)`; `executor.pause(run_id)` → state `BLOCKED_BUDGET` via executor API; `permissions.request_approval(kind="ESCALATION", approver=USER, …)` |
-| `ON_PROTECTED_ACTION_REQUESTED` | `builtin.pause_for_approval` | 10 | `executor.pause(run_id)` → `PAUSED_FOR_APPROVAL` |
-| `ON_TASK_CANCELLED` | `builtin.cancel_cleanup` | 10 | `executor.cancel(run_id, reason)`; sandbox removal is performed by executor |
-| `ON_RECOVERY_RESUME` | `builtin.load_handover` | 10 | asserts `ctx.payload["handover_id"]` resolves via `memory.read_handover` |
-| `ON_CONTEXT_UPDATED` | `builtin.index_update` | 10 | `memory.rebuild_index()` restricted to `ctx.payload["path"]` (index upsert for one doc) |
+Registered MUST hooks (all `required=True`, `kind="builtin"`, `fail_policy=FAIL_CLOSED`, priority 10):
 
-Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvider.transition` (E03-S03); `ON_TASK_BLOCKED → WorkProvider.transition + comment` (E03-S03); `ON_TASK_FAILED → escalation` (E03-S16); `ON_READY_FOR_QC → QC run with different model` (E03-S07); `ON_BUG_CREATED → WorkProvider.create + bug skeleton` (E03-S14/E04-S01); `ON_COMMIT/ON_PR_OPENED/ON_MERGED → relevant_files refresh` (E04-S04); `ON_BUILD_*`/`ON_TEST_RESULT → evidence` (E03-S11); `ON_CONTEXT_STALE → requires_verification` (E04-S04); `ON_DEBATE_*`, `ON_DECISION_RECORDED`, `ON_ESCALATION` (E04-S05/E05); `ON_PHASE_REVIEW_START/COMPLETE/GATE_DECISION` (E07); `ON_IMPROVEMENT_OBSERVATION` (E04-S13); `ON_EFFORT_CHANGE`, `ON_BUDGET_THRESHOLD`, `ON_TOOL_*` (ledger-only → write points, nothing to register).
+| HookName | id | Callable behaviour |
+|---|---|---|
+| `ON_PROJECT_PAUSE` | `builtin.pause_all_runs` | `executor.pause(run.id)` for every run in `executor.running()`. The executor cancels the adapter, writes the PAUSE checkpoint and sets `PAUSED_BY_USER`; the hook writes no checkpoint of its own |
+| `ON_TASK_START` | `builtin.ensure_branch` | `item = workflow.get(ctx.work_item_id)`; `git.ensure_branch(branch_name_for(item), base=deps.default_branch, idempotency_key=f"git.branch:{item.id}")`. This is the key `SandboxManager.create` uses, so whichever runs first creates the branch |
+| `ON_TASK_COMPLETE` | `builtin.remaining_work_check` | `memory.read(ctx.work_item_id)` (`DocumentNotFound` → no-op); section `Remaining Work` non-empty and not `- none` → `telemetry.counter("remaining_work_nonempty", work_item=<id>)` plus a WARNING log. Never fails; the §6.5 guard decides |
+| `ON_AGENT_CHECKPOINT` | `builtin.wip_commit` | guard: `ctx.payload["wip_commit_done"] is True`, else `HookFailed` (the commit is made inside `CheckpointManager.checkpoint`) |
+| `ON_AGENT_END` | `builtin.final_checkpoint` | no-op when `ctx.payload` carries `checkpoint_id` (the executor's END checkpoint, E01-S27 Behavior 10(b)); else `checkpoints.checkpoint(run, END)` |
+| `ON_AGENT_HANDOFF` | `builtin.handoff_checkpoint_and_handover` | no-op when `ctx.payload` carries both `checkpoint_id` and `handover_id`; else `checkpoints.checkpoint(run, HANDOFF, handover=ctx.payload["handover"])` (which writes the handover document) |
+| `ON_MODEL_FALLBACK` | `builtin.fallback_chain` | `hooks.fire(ON_AGENT_HANDOFF, ctx)` with the payload forwarded unchanged. Both callers (executor and `RecoveryManager`) send `checkpoint_id` + `handover_id`, so the chained handoff hook is a no-op and project hooks on `ON_AGENT_HANDOFF` still see the fallback |
+| `ON_BUDGET_EXHAUSTED` | `builtin.budget_escalate` | only when `ctx.payload["hard_action"] == "BLOCK"`: `permissions.request_approval(<the budget payload>, kind="ESCALATION", approver=USER, requested_by=KERNEL, run_id=ctx.run_id, work_item_id=ctx.work_item_id)`, unless `permissions.pending(USER)` already holds an `ESCALATION` whose payload has the same `budget_id`. Never checkpoints and never stops a run |
+| `ON_PROTECTED_ACTION_REQUESTED` | `builtin.approval_recorded` | guard: payload carries `approval_id` and `kind` (the request is persisted and `APPROVAL_REQUESTED` written before the hook fires). Never pauses: the requester does (Behavior 3) |
+| `ON_TASK_CANCELLED` | `builtin.cancel_cleanup` | `executor.cancel(ctx.run_id, ctx.payload["reason"])` when `ctx.run_id` is in `executor.running()`, else no-op; the executor removes the worktree and keeps the branch |
+| `ON_RECOVERY_RESUME` | `builtin.load_handover` | `mode == "handover"`: `ctx.payload["handover_id"]` must resolve via `memory.read_handover`; `mode == "native"`: `handover_id` may be `None` and nothing is read |
+
+Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.memory_index`, `required=False`, priority 60, `fail_policy=LOG_AND_CONTINUE`, `memory.rebuild_index()`.
+
+§4.1 attachments not registered here, with the place that covers them:
+
+| §4.1 attachment | Covered by |
+|---|---|
+| `ON_AGENT_START` → freshness check, may fire `ON_CONTEXT_STALE` | `ContextManager.build` runs its freshness probe and fires `ON_CONTEXT_STALE` before `ON_AGENT_START` fires (E01-S24). `MemoryManager.assess_freshness` arrives in E04-S03; until then it raises `ConfigError("implemented in E04-S03")`, so a FAIL_CLOSED hook calling it would fail every run with memory documents in context. The `ON_AGENT_START` builtin is registered by E04-S04 (its Behavior 1) |
+| `ON_CONTEXT_UPDATED` → freshness stamp, index update | done inside `MemoryManager.write`, in the same transaction (E01-S16, WBS.md §3.5); a per-write `rebuild_index()` would repeat it. The counter builtin is E04-S04 |
+| `ON_PHASE_START` → `PHASE_BASELINE` approved artifact | E07-S02. It needs `MemoryManager.approve_artifact` (E02-S12, which this story does not depend on) and the full manifest |
+| `ON_STATE_TRANSITION` → `WorkProvider.transition` | E03-S03 |
+| `ON_TASK_BLOCKED` → `WorkProvider.transition` + comment | E03-S03 |
+| `ON_TASK_FAILED` → escalation | E03-S16 |
+| `ON_READY_FOR_QC` → QC run with a different model | E03-S07 |
+| `ON_BUG_CREATED` → `WorkProvider.create` + bug skeleton | E03-S14 / E04-S01 |
+| `ON_COMMIT`/`ON_PR_OPENED`/`ON_MERGED` → `relevant_files` refresh | E04-S04 |
+| `ON_BUILD_*`/`ON_TEST_RESULT` → evidence | E03-S11 |
+| `ON_CONTEXT_STALE` → `requires_verification` | E04-S04 |
+| `ON_DEBATE_*`, `ON_DECISION_RECORDED`, `ON_ESCALATION` | E04-S05 / E05 |
+| `ON_PHASE_REVIEW_START`/`COMPLETE`/`GATE_DECISION` | E07 |
+| `ON_IMPROVEMENT_OBSERVATION` | E04-S13 |
+| `ON_EFFORT_CHANGE`, `ON_BUDGET_THRESHOLD`, `ON_TOOL_*` | ledger only → write points; nothing to register |
 
 #### Behavior
-1. `register_builtins` registers every row above; calling it twice raises `ConfigError("builtin hooks already registered")`.
-2. Each callable receives `HookContext` and reads only documented payload keys; a missing key raises `HookFailed` (FAIL_CLOSED) with the key name.
-3. `builtin.pause_checkpoint_all` continues through all running runs even if one checkpoint fails, then raises `HookFailed` listing failed run ids.
-4. `builtin.ensure_branch` passes the idempotency key from ARCHITECTURE §5.4 so repeated `ON_TASK_START` (REWORK) is a no-op.
-5. `builtin.freshness_check` fires `ON_CONTEXT_STALE` once per non-CURRENT doc with payload `{doc_id, status, reason}`.
-6. Hooks never write ledger events directly (WBS.md §3.5); `HookManager.fire` records `HOOK_EXECUTED`/`HOOK_FAILED`.
-7. `HookManager.register(hook)` with `kind="project"` and `id` equal to a required builtin id, or `enabled=False` targeting a required id, raises `ConfigError` (enforced in E01-S07; re-tested here with the real builtin set).
-8. No duplicate checkpoints (ARCHITECTURE §4.1): `builtin.final_checkpoint` is a no-op when the payload carries `checkpoint_id`; `builtin.handoff_checkpoint_and_handover` is a no-op when it carries both `checkpoint_id` and `handover_id`. A no-op still returns normally, so `HOOK_EXECUTED` (status OK) is recorded; it does not read `handover`, so the rule 2 missing-key check applies only on the checkpointing path.
+1. `register_builtins` registers every MUST row and the default attachment; `MUST_HOOK_IDS` lists exactly the MUST ids; calling it twice raises `ConfigError("builtin hooks already registered")`.
+2. Each callable receives `HookContext` and reads only documented payload keys; a missing key on the path that reads it raises `HookFailed` (FAIL_CLOSED) with the key name. `HookContext` is frozen: a hook never reports back through the payload.
+3. Execution context (no self-wait). Hooks run synchronously in the task that fires them. `ON_BUDGET_EXHAUSTED` (after `BudgetManager.meter` commits, from the executor's metering and from `_end`), `ON_PROTECTED_ACTION_REQUESTED` (from `ToolInvoker.authorize`), `ON_AGENT_START/CHECKPOINT/END/HANDOFF` and `ON_MODEL_FALLBACK` fire inside a run's own task. Builtins on them never call `AgentExecutor.pause/cancel`; they record, verify or request, and the caller acts after `fire` returns:
+   - budget: the executor's `_meter` raises `BudgetExhausted` and `_block_budget` cancels the adapter, takes the one PAUSE checkpoint and ends the run `BLOCKED_BUDGET` (or the router falls back, E01-S27);
+   - approval: `ToolInvoker.authorize` sets `PAUSED_FOR_APPROVAL`, takes the PAUSE checkpoint and waits on the `ApprovalWaiter` while the run stays alive (E01-S26).
+   `builtin.pause_all_runs` and `builtin.cancel_cleanup` do call the executor. They attach to `ON_PROJECT_PAUSE`/`ON_TASK_CANCELLED`, which only `Orchestrator.pause()` and `cancel_work_item()` (E02-S13) fire, from the command-consumer task. Defence in depth: `DefaultAgentExecutor.pause/cancel` raise `ConfigError("run <id> cannot stop itself from its own task")` when `asyncio.current_task()` is the run's task. A misplaced fire therefore fails closed instead of hanging.
+4. No duplicate checkpoints (ARCHITECTURE §4.1). A builtin creates a checkpoint only on the END/HANDOFF path when the payload shows that none was taken. `pause_all_runs` and `cancel_cleanup` leave the PAUSE checkpoint to the executor; `budget_escalate` and `approval_recorded` create none. A no-op returns normally, so `HOOK_EXECUTED` (status OK) is recorded; the no-op path reads no key, so the rule 2 check applies only on the checkpointing path.
+5. `builtin.pause_all_runs` continues through all running runs even if one pause fails, then raises `HookFailed` listing the failed run ids.
+6. `builtin.ensure_branch` uses the ARCHITECTURE §5.4 key shared with `SandboxManager.create`, so a repeated `ON_TASK_START` (REWORK) and the sandbox are no-ops after the first call.
+7. `builtin.budget_escalate` keeps at most one PENDING `ESCALATION` per `budget_id`. Hard actions `DOWNGRADE_EFFORT` and `FALLBACK_MODEL` are no-ops (the executor and router act on `BudgetExhausted`). The hook also escalates when the run has already ended (e.g. `EXECUTION_TIME_S` metered in `_end`), because the budget stays exhausted for the next run.
+8. `request_approval` inside `budget_escalate` fires `ON_PROTECTED_ACTION_REQUESTED` after its unit of work commits; `approval_recorded` is a guard, so the chain ends there.
+9. Hooks never write ledger events directly (WBS.md §3.5); `HookManager.fire` records `HOOK_EXECUTED`/`HOOK_FAILED`.
+10. `HookManager.register(hook)` with `kind="project"` and `id` equal to a required builtin id, or `enabled=False` targeting a required id, raises `ConfigError` (enforced in E01-S07; re-tested here with the real builtin set).
+11. `RecoveryManager` adds `checkpoint_id` (the latest checkpoint of the interrupted run, after the handover is ensured) and `handover_id` to its `ON_MODEL_FALLBACK` payload; the executor already sends both.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | Given a kernel with fakes When `register_builtins` Then `hooks_for(name)` contains each id in the table with `required=True` and priority < 50 | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
-| 2 | Given registration done When `register_builtins` again Then `ConfigError` | `tests/hooks/test_builtins.py::test_register_builtins_twice_raises` |
-| 3 | Given two running fake runs When `fire(ON_PROJECT_PAUSE)` Then two `PAUSE` checkpoints exist | `tests/hooks/test_builtins.py::test_project_pause_checkpoints_all_running_runs` |
-| 4 | Given a story entering IMPLEMENTING When `fire(ON_TASK_START)` twice Then branch exists once and second call is a no-op | `tests/hooks/test_builtins.py::test_task_start_ensures_branch_idempotently` |
-| 5 | Given a fallback When `fire(ON_MODEL_FALLBACK)` with handover payload Then a `HANDOFF` checkpoint and `HO-0001.md` exist | `tests/hooks/test_builtins.py::test_model_fallback_chains_handoff_checkpoint_and_handover` |
-| 6 | Given `fire(ON_AGENT_HANDOFF)` without `handover` in payload Then `HookFailed` naming `handover` | `tests/hooks/test_builtins.py::test_handoff_without_handover_fails_closed` |
-| 7 | Given budget hard limit When `fire(ON_BUDGET_EXHAUSTED)` Then run `BLOCKED_BUDGET`, `PAUSE` checkpoint, pending `ApprovalRequest(kind=ESCALATION)` | `tests/hooks/test_builtins.py::test_budget_exhausted_blocks_run_and_escalates` |
-| 8 | Given a stale doc id When `fire(ON_AGENT_START)` Then one `ON_CONTEXT_STALE` execution recorded | `tests/hooks/test_builtins.py::test_agent_start_fires_context_stale_for_stale_docs` |
-| 9 | Given project hook with id `builtin.final_checkpoint` and `enabled=False` When `register` Then `ConfigError` | `tests/hooks/test_builtins_required.py::test_project_cannot_disable_required_builtin` |
-| 10 | Given `fire(ON_AGENT_END)` Then exactly one `END` checkpoint and no direct ledger write by the hook (ledger count unchanged except `HOOK_EXECUTED`, `CHECKPOINT_CREATED`) | `tests/hooks/test_builtins_required.py::test_hooks_do_not_duplicate_ledger_events` |
-| 11 | Given an `ON_AGENT_END` payload with `checkpoint_id` and an `ON_MODEL_FALLBACK` payload with `checkpoint_id` and `handover_id` When both are fired Then no new checkpoint row and no new `.ai/handovers/` document exist, `ON_AGENT_HANDOFF` was fired once, and all three builtin executions are `OK` | `tests/hooks/test_builtins_required.py::test_checkpoint_hooks_noop_when_executor_already_checkpointed` |
+| 1 | Given a kernel with fakes When `register_builtins` Then `hooks_for(name)` contains each `MUST_HOOK_IDS` entry with `required=True` and priority < 50, and the ids equal the MUST table | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
+| 2 | Given registration done When inspecting `ON_PROJECT_START` Then `builtin.memory_index` is `required=False`, priority 60, `LOG_AND_CONTINUE` | `tests/hooks/test_builtins.py::test_memory_index_is_a_default_attachment` |
+| 3 | Given registration done When `register_builtins` again Then `ConfigError` | `tests/hooks/test_builtins.py::test_register_builtins_twice_raises` |
+| 4 | Given two running fake runs When `fire(ON_PROJECT_PAUSE)` from the test task Then both runs are `PAUSED_BY_USER` and exactly two `PAUSE` checkpoints exist | `tests/hooks/test_builtins.py::test_project_pause_pauses_all_running_runs` |
+| 5 | Given a story entering IMPLEMENTING When `fire(ON_TASK_START)` twice Then the branch exists once and the second call is a no-op | `tests/hooks/test_builtins.py::test_task_start_ensures_branch_idempotently` |
+| 6 | Given a fallback payload with `handover` but no ids When `fire(ON_MODEL_FALLBACK)` Then a `HANDOFF` checkpoint and `HO-0001.md` exist | `tests/hooks/test_builtins.py::test_model_fallback_chains_handoff_checkpoint_and_handover` |
+| 7 | Given `fire(ON_AGENT_HANDOFF)` without `handover` and without ids Then `HookFailed` naming `handover` | `tests/hooks/test_builtins.py::test_handoff_without_handover_fails_closed` |
+| 8 | Given a fake run whose usage exhausts a `BLOCK` budget When the real executor runs it with the builtins registered Then within 5 s the run is `BLOCKED_BUDGET`, the run has exactly one `PAUSE` checkpoint, exactly one pending `ApprovalRequest(kind=ESCALATION, approver=USER)` exists and `builtin.approval_recorded` ran once with `OK` | `tests/hooks/test_builtins_pause_paths.py::test_budget_exhausted_blocks_once_and_escalates_without_deadlock` |
+| 9 | Given a fake run requesting a tool that requires approval When the real executor runs it with the builtins registered Then within 5 s the run is `PAUSED_FOR_APPROVAL` with one `PAUSE` checkpoint, its task is still alive and `builtin.approval_recorded` ran with `OK` | `tests/hooks/test_builtins_pause_paths.py::test_protected_action_pause_is_done_by_the_tool_invoker` |
+| 10 | Given `ON_BUDGET_EXHAUSTED` with `hard_action` `FALLBACK_MODEL` When fired Then no approval request exists | `tests/hooks/test_builtins.py::test_budget_exhausted_non_block_does_not_escalate` |
+| 11 | Given `ON_BUDGET_EXHAUSTED` for the same `BLOCK` budget fired twice Then exactly one pending `ESCALATION` exists | `tests/hooks/test_builtins.py::test_budget_escalation_is_once_per_budget` |
+| 12 | Given a running run When its own task calls `executor.pause(run_id)` Then `ConfigError` is raised at once and the run is not left waiting on itself | `tests/runtime/test_executor.py::test_pause_from_the_runs_own_task_raises` |
+| 13 | Given recovery that switches model When `ON_MODEL_FALLBACK` fires Then the payload has `checkpoint_id` and `handover_id`, and the chained handoff hook creates no checkpoint | `tests/runtime/test_recovery.py::test_recovery_fallback_payload_carries_checkpoint_and_handover` |
+| 14 | Given `ON_RECOVERY_RESUME` with `mode=native` and `handover_id=None` Then `OK`; with `mode=handover` and `handover_id=None` Then `HookFailed` | `tests/hooks/test_builtins.py::test_load_handover_accepts_native_resume_without_handover` |
+| 15 | Given a feature document whose `Remaining Work` lists an item When `fire(ON_TASK_COMPLETE)` Then counter `remaining_work_nonempty` is 1 and the result is `OK`; given no document Then `OK` | `tests/hooks/test_builtins.py::test_task_complete_counts_remaining_work_without_failing` |
+| 16 | Given `ON_TASK_CANCELLED` for a running run Then it is `CANCELLED` with its worktree removed; for a run id not running Then `OK` and nothing changes | `tests/hooks/test_builtins.py::test_task_cancelled_cancels_running_run_only` |
+| 17 | Given `ON_AGENT_CHECKPOINT` with `wip_commit_done=False` Then `HookFailed`; with `True` Then `OK` | `tests/hooks/test_builtins.py::test_wip_commit_guard` |
+| 18 | Given project hook with id `builtin.final_checkpoint` and `enabled=False` When `register` Then `ConfigError` | `tests/hooks/test_builtins_required.py::test_project_cannot_disable_required_builtin` |
+| 19 | Given `fire(ON_AGENT_END)` without `checkpoint_id` Then exactly one `END` checkpoint and no direct ledger write by the hook (ledger count unchanged except `HOOK_EXECUTED`, `CHECKPOINT_CREATED`) | `tests/hooks/test_builtins_required.py::test_hooks_do_not_duplicate_ledger_events` |
+| 20 | Given an `ON_AGENT_END` payload with `checkpoint_id` and an `ON_MODEL_FALLBACK` payload with `checkpoint_id` and `handover_id` When both are fired Then no new checkpoint row and no new `.ai/handovers/` document exist, `ON_AGENT_HANDOFF` was fired once, and all three builtin executions are `OK` | `tests/hooks/test_builtins_required.py::test_checkpoint_hooks_noop_when_executor_already_checkpointed` |
 
 #### Evidence required
 - Quality gate output.
 - Demo: `walk run --once` on a bootstrapped repo then `walk ledger query --kind HOOK_EXECUTED --limit 5` → shows `builtin.memory_index` under `ON_PROJECT_START`.
 
 #### Notes
-- Binding (E01-R01 planner note): E01 checkpoints never send `wip_commit_done`. This story adds it: `CheckpointManager.checkpoint` puts `wip_commit_done: bool` (True when the WIP commit was created or there was nothing to commit) into the `ON_AGENT_CHECKPOINT` payload; `src/walk/runtime/checkpoints.py` is added to the Files table as `modify`. `builtin.wip_commit` stays fail-closed on `False` but treats a missing key as a contract error raised during development tests, never as a silent pass.
-- ARCHITECTURE §4.1 (table), §4.3; ADR-0009 D-7; ADR-0016 (module placement and single registration call site); WBS.md §3.5.
-- `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`), `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `path`, `remaining_work_present`.
-- Pitfall: `ON_MODEL_FALLBACK → ON_AGENT_HANDOFF` is a nested `fire`; ensure `HookManager.fire` is re-entrant (no shared mutable state).
+- Binding (E01-R01 planner note): E01 checkpoints never send `wip_commit_done`. This story adds it: `CheckpointManager.checkpoint` puts `wip_commit_done: bool` (True when the WIP commit was created or there was nothing to commit) into the `ON_AGENT_CHECKPOINT` payload. `builtin.wip_commit` stays fail-closed on `False` and treats a missing key as a contract error raised during development tests, never as a silent pass.
+- ARCHITECTURE §4.1 (table and execution rule), §4.3; ADR-0009 D-7; ADR-0016 (module placement and single registration call site); WBS.md §3.5.
+- `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`, `workflow`, `default_branch`), `builtin_hooks`, `MUST_HOOK_IDS`, builtin hook ids (`builtin.*`, incl. `builtin.pause_all_runs`, `builtin.budget_escalate`, `builtin.approval_recorded`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `reason`, `mode`, counter `remaining_work_nonempty`.
+- Pitfall: `ON_MODEL_FALLBACK → ON_AGENT_HANDOFF` and `ON_BUDGET_EXHAUSTED → ON_PROTECTED_ACTION_REQUESTED` are nested `fire`s; `HookManager.fire` must stay re-entrant (no shared mutable state).
+- Pitfall: AC 8 and AC 9 guard against deadlock. Wrap each in `asyncio.wait_for(..., 5)` so a regression fails the test instead of hanging the suite.
+- Resolved block (architect, 2026-10-07). The implementer's BLOCKING note is settled as follows:
+  - `budget_block` and `pause_for_approval` called `executor.pause` from inside the run's own task (a deadlock) and repeated E01's PAUSE checkpoint. They are replaced by `builtin.budget_escalate` (requests only the ESCALATION approval) and `builtin.approval_recorded` (a guard). The executor and the tool invoker keep the pause, which they already perform (Behavior 3).
+  - The old AC 7, which expected a hook-made checkpoint, is now AC 8: one PAUSE checkpoint, made by the executor.
+  - `executor.pause/cancel` now fail fast on self-wait (AC 12).
+  - (a) The freshness hook is deferred to E04-S04, because `ContextManager.build` already fires `ON_CONTEXT_STALE`.
+  - (b) The recovery fallback payload carries both ids (AC 13).
+  - (c) `load_handover` accepts native resume (AC 14).
+  - (d) `builtin.index_update` is dropped: `write()` already updates the index.
+  - (e) `builtin.memory_index` is a default attachment with its own AC 2.
+  - Two further fixes from the review:
+    - the `ON_PHASE_START` baseline needs `approve_artifact` (E02-S12, not a dependency), so it is deferred to E07-S02;
+    - `remaining_work_check` can no longer set a payload flag (`HookContext` is frozen), so it counts and logs instead.
+  - `ON_PROJECT_PAUSE` now pauses each run through the executor rather than checkpointing runs that keep running.
 - Commit subject: `feat: register builtin must hooks (E02-S08)`.
-- **BLOCKING (implementer, 2026-10-07): two table rows conflict with the E01 pause paths, and AC 7 encodes one of them.**
-  - **`builtin.budget_block` (`ON_BUDGET_EXHAUSTED`).** `BudgetManager.meter` fires this hook after commit, inside the run's own task: from the executor's usage metering, and from `_end` metering `EXECUTION_TIME_S`. `DefaultAgentExecutor.pause(run_id)` → `_stopping` awaits `live.task`, which is the current task, so it never returns. Also, E01-S27 `_block_budget` already cancels the adapter, takes the PAUSE checkpoint and ends the run `BLOCKED_BUDGET`. The hook's own `checkpoint(run, PAUSE)` would duplicate it (ARCHITECTURE §4.1 forbids duplicate checkpoints; rule 8 settles that only for END/HANDOFF). The one effect E01 lacks is the `ESCALATION` approval request. But `permissions.request_approval` fires `ON_PROTECTED_ACTION_REQUESTED`, which chains into the second row.
-  - **`builtin.pause_for_approval` (`ON_PROTECTED_ACTION_REQUESTED`).** `request_approval` is called by `ToolInvoker` inside the run task, which then sets `PAUSED_FOR_APPROVAL`, checkpoints PAUSE and waits on `ApprovalWaiter` while the run stays alive (E01-S26). `executor.pause(run_id)` here deadlocks the same way. If run elsewhere, it would end a run that the waiter keeps alive (`PAUSED_BY_USER`), which contradicts E01-S26.
-  - **Decision needed (planner).** Proposed, following rule 8: `builtin.budget_block` only requests the `ESCALATION` approval (approver USER), without triggering a run pause through `ON_PROTECTED_ACTION_REQUESTED`. `builtin.pause_for_approval` becomes a guard that is a no-op when the payload carries `approval_id` (the tool invoker pauses), or moves to E02-S11. AC 7 then reads "run `BLOCKED_BUDGET` by the executor, exactly one PAUSE checkpoint, one pending `ESCALATION` approval".
-  - **Also found, for the same revision** (each fits a Level-0 or Files-table fix once the above is decided):
-    - (a) `builtin.freshness_check` calls `MemoryManager.assess_freshness`, which raises `ConfigError("implemented in E04-S03")`. `ON_AGENT_START` fires on every run with `context_doc_ids`, so FAIL_CLOSED fails every run whose context holds a memory document. Proposal: register it in E04-S04, or skip deferred `ConfigError`s explicitly. AC 8 needs a fake memory either way.
-    - (b) `RecoveryManager` fires `ON_MODEL_FALLBACK` with payload `{trigger, from, to}`, without `checkpoint_id`/`handover_id`, although both exist at that point. The chained `builtin.handoff_checkpoint_and_handover` would then require `handover` and fail closed. Add both keys there (`runtime/recovery.py` to the Files table).
-    - (c) `ON_RECOVERY_RESUME` carries `handover_id: None` in native-resume mode. `builtin.load_handover` must accept `None` when `mode` is native.
-    - (d) `ON_CONTEXT_UPDATED` → `builtin.index_update`: `MemoryManager` has no per-path index method, and `write()` already upserts the index row in the same transaction. A full `rebuild_index()` per write duplicates that work.
-    - (e) The `builtin.memory_index` row says `required=False`, prio 60, while AC 1 expects every table id `required=True`, prio < 50.
-  - Not affected: the `builtin.wip_commit` payload (`wip_commit_done`, binding Note), the END/HANDOFF no-op rows, and the executor-side payloads (`context_doc_ids`, `checkpoint_id`, `handover_id`), which exist as planned.
 
 #### Evidence (filled by implementer)
 _pending_
@@ -1406,11 +1477,12 @@ def merge_narrowing(defaults: PermissionsFile, project: PermissionsFile) -> Perm
 
 #### Evidence required
 - Quality gate output.
-- Demo: `cat .ai/agents/permissions.yaml | head -20` after bootstrap shows the copied defaults header.
+- Demo: `cat .ai/agents/permissions.yaml` after bootstrap shows the empty narrowing file (E02-S03 Behavior 9); `walk doctor` loads defaults + that file without error.
 
 #### Notes
 - ADR-0006 D-3, D-6; ADR-0013 D-4; ARCHITECTURE §6 (protected actions list).
 - `NEW NAME:` `PermissionsFile`, `load_defaults`, `load_project_rules`, `merge_narrowing`, `DEFAULT_PROTECTED_ACTIONS`, tool names `decision.propose`, `work.plan`, `qc.*`.
+- E02-S03 never copies `defaults.yaml` into a project. It writes `.ai/agents/permissions.yaml` as an empty narrowing file (two comment lines, `rules: []`, `protected_actions: []`); `load_project_rules` must accept it, and `defaults.yaml` stays the single source of the kernel rules.
 - Commit subject: `feat: add default permission rules and protected actions (E02-S10)`.
 
 #### Evidence (filled by implementer)
@@ -1472,7 +1544,7 @@ class EventApprovalWaiter:  # implements ApprovalWaiter protocol (E01-S26)
 CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `walk approvals [--pending] [--json]`.
 
 #### Behavior
-1. `request_approval` allocates `APV-NNNN` via `IdSequenceStore`, sets `expires_at = requested_at + approval_timeout_s`, persists PENDING, writes `APPROVAL_REQUESTED`, fires `ON_PROTECTED_ACTION_REQUESTED` (payload `{approval_id, tool, run_id}`) — whose builtin (E02-S08) pauses the run; then `ToolInvoker.authorize` creates a `PAUSE` checkpoint and awaits `ApprovalWaiter.wait`.
+1. `request_approval` allocates `APV-NNNN` via `IdSequenceStore`, sets `expires_at = requested_at + approval_timeout_s`, persists PENDING, writes `APPROVAL_REQUESTED`, fires `ON_PROTECTED_ACTION_REQUESTED` after commit (payload keeps `approval_id`, `kind`, `approver` and adds `tool`; `run_id` is on the context). Its builtin `builtin.approval_recorded` (E02-S08) only verifies the request and never pauses (it runs inside the run's task). `ToolInvoker.authorize` then sets `PAUSED_FOR_APPROVAL`, creates the `PAUSE` checkpoint and awaits `ApprovalWaiter.wait`.
 2. `decide_approval(id, approve, by, note)`: PENDING → APPROVED/DENIED, `decided_at`, `decided_by`, ledger `APPROVAL_DECIDED` (`outcome` OK/DENIED, actor `USER`), then `EventApprovalWaiter.resolve`; run state returns to `RUNNING` through `executor.resume(run_id)`; a non-PENDING request → `PermanentError("approval already decided")`.
 3. APPROVED → `authorize` returns `PermissionDecision(effect=ALLOW, approval_request_id=id)`; DENIED/EXPIRED → `DENY` + `TOOL_DENIED` ledger + `ON_TOOL_DENIED`.
 4. `expire_due` runs every scheduler tick and on `wait` timeout; expiry is idempotent.
@@ -1523,7 +1595,7 @@ Approved artifacts are first-class: `MemoryManager.approve_artifact` writes `.ai
 
 #### Scope
 - In: `approve_artifact`, `verify_approved_artifacts`, `ApprovedArtifactRepository`, `write()` guard for `approved/`, CLI group, startup step integration.
-- Out: `ApprovedArtifact` as context items (E04-S08); `PHASE_BASELINE` creation (E02-S08 hook calls this API; E07-S02 fills content); change-request workflow via decisions (E05).
+- Out: `ApprovedArtifact` as context items (E04-S08); `PHASE_BASELINE` creation (E07-S02 registers the `ON_PHASE_START` builtin that calls this API; deferred from E02-S08); change-request workflow via decisions (E05).
 
 #### Files
 | Path | Action | Public symbols |
@@ -1659,9 +1731,9 @@ def update_model_policy(
 CLI (INTERFACES §6): `walk pause [--agent RUN_ID]`, `walk resume [--agent RUN_ID]`, `walk work cancel ID --reason TEXT`, `walk work priority ID P0|P1|P2|P3`, `walk policy set-model ROLE --preferred M... [--fallback M...]`, `walk policy set-autonomy 0|1|2|3`.
 
 #### Behavior
-1. `pause()` without run: `projects.paused = 1`, fire `ON_PROJECT_PAUSE` (builtin checkpoints all runs), each running run → `PAUSED_BY_USER`; `resume()` clears the flag, fires `ON_PROJECT_RESUME`, re-queues paused runs via the scheduler (idempotency key with incremented `state_version` is not needed — the run resumes natively or via handover per E01-S28).
+1. `pause()` without run: `projects.paused = 1`, fire `ON_PROJECT_PAUSE` from the command-consumer task (never from a run task, E02-S08 Behavior 3), whose builtin `builtin.pause_all_runs` calls `AgentExecutor.pause` for each running run: one `PAUSE` checkpoint each, written by the executor, and `PAUSED_BY_USER`; `resume()` clears the flag, fires `ON_PROJECT_RESUME`, re-queues paused runs via the scheduler (idempotency key with incremented `state_version` is not needed — the run resumes natively or via handover per E01-S28).
 2. `pause(run_id)`: `PAUSE` checkpoint, run `PAUSED_BY_USER`; `resume(run_id)` → `AgentExecutor.resume_native(latest checkpoint)`; unknown run → exit 1.
-3. `cancel_work_item(id, reason)`: raise workflow event `cancel` as USER (guards apply: COMPLETE/CANCELLED items → `GuardRejected`, exit 2), fire `ON_TASK_CANCELLED` (builtin cancels the run; executor removes the worktree keeping the branch).
+3. `cancel_work_item(id, reason)`: raise workflow event `cancel` as USER (guards apply: COMPLETE/CANCELLED items → `GuardRejected`, exit 2), fire `ON_TASK_CANCELLED` from the command-consumer task with `run_id` = the item's running run (or `None`) and payload `{reason}` (builtin `builtin.cancel_cleanup` cancels that run; the executor removes the worktree and keeps the branch).
 4. `set_priority`: updates `work_items.priority` + json; next tick re-sorts. `set_autonomy`: updates `Project.autonomy_level_max`.
 5. `set-model`: validates every model id exists and is enabled in the `CapabilityRegistry`, rewrites `.ai/agents/policies.yaml` for that role only (other roles byte-identical), effective on the next scheduled run.
 6. Every command writes `USER_OVERRIDE` with payload `{"command": "<name>", "args": {...}}`, `actor_role = USER` (write point `orchestrator`, ARCHITECTURE §4.3).
@@ -1708,7 +1780,7 @@ _pending_
 Repository boundary, protected branches, secret isolation and command restrictions are enforced mechanically: `BoundaryAuditor` ships the default forbidden-path set, every worktree gets git guard hooks, `push` refuses protected branches, and one shared secret scanner protects `.ai/` writes and agent diffs.
 
 #### Scope
-- In: `DEFAULT_FORBIDDEN_PATHS`, `allowed_paths` from policy, `install_guard_hooks` (sh scripts), `push` protected check, `contains_secret`, `BoundaryAuditor` secret scan of added files, `SandboxManager.create` guard-hook installation.
+- In: `DEFAULT_FORBIDDEN_PATHS`, `allowed_paths` from policy, `install_guard_hooks` (sh scripts), `push` protected check, `contains_secret`, `BoundaryAuditor` secret scan of added files, `SandboxManager.create` guard-hook installation, projection targets that the game repository tracks (Behavior 9–12).
 - Out: remote push mechanics/PR (E03-S01); Codex sandbox flags (E01-S26, verified by ADR-0014).
 
 #### Files
@@ -1726,6 +1798,12 @@ Repository boundary, protected branches, secret isolation and command restrictio
 | `tests/runtime/test_boundary.py` | create | — |
 | `tests/memory/test_secrets.py` | create | — |
 | `tests/integrations/git/test_guard_hooks.py` | create | — |
+| `src/walk/integrations/protocols.py`, `src/walk/integrations/git/provider.py`, `tests/fakes/fake_git_provider.py` | modify | `GitProvider.hide_local_changes` |
+| `src/walk/skills/service.py` | modify | `DefaultSkillRegistry(hide_tracked=...)`, `HideTracked` (`project_all` hides tracked targets before writing) |
+| `src/walk/cli/composition.py` | modify | — (wires `hide_tracked`: run worktrees only, Behavior 10) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§2.3 `GitProvider.hide_local_changes`) |
+| `tests/skills/test_projection_tracked_targets.py` | create | — |
+| `tests/integrations/git/test_provider.py` | modify | — |
 
 #### Interface contract
 See INTERFACES.md §1.13 `BoundaryAuditor.audit`, §2.3 `GitProvider.install_guard_hooks`, `GitProvider.push`.
@@ -1776,6 +1854,16 @@ SECRET_PATTERNS: tuple[tuple[str, str], ...] = (
 
 
 def contains_secret(text: str) -> str | None: ...  # pattern name or None
+
+
+# GitProvider (INTERFACES §2.3) addition
+async def hide_local_changes(self, path: str, files: list[str]) -> list[str]:
+    """Mark those of `files` (worktree-relative) that are tracked in the index of the worktree at `path`
+    with `git update-index --skip-worktree`; return them. Untracked files are left alone (info/exclude covers them)."""
+
+
+# src/walk/skills/service.py
+HideTracked = Callable[[str, list[str]], Awaitable[list[str]]]  # (worktree, relative targets) -> hidden
 ```
 Guard hook scripts: `pre-commit.sh` aborts when current branch matches any protected pattern (`main`, `release/*` expanded from `WALK_PROTECTED_BRANCHES` written into the script at install time); `pre-push.sh` aborts when any pushed ref matches a protected pattern. Both exit 1 with message `walk: protected branch <name>`.
 
@@ -1788,6 +1876,10 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 6. `install_guard_hooks` resolves the worktree's hooks dir via `git rev-parse --git-path hooks`, writes both scripts with `0o755`, substituting the protected patterns; idempotent (same content → no rewrite). Existing non-walk hooks are preserved by chaining (`exec <hooks>/pre-commit.local` if present).
 7. `push(path, branch, protected_branches)` raises `PermissionDenied` when `branch` matches any protected pattern before invoking git (remote mechanics E03-S01).
 8. `SandboxManager.create` installs guard hooks after projection; failure → `ConfigError` and worktree removed.
+9. Tracked projection targets. A game repository may track its own `AGENTS.md` (or a `.claude/skills/<name>/SKILL.md` with a builtin's name). `info/exclude` cannot hide a tracked file, so the Codex managed section shows up as a change to the forbidden path `AGENTS.md`. Every audited checkpoint of a Codex run would then end `FAILED_BOUNDARY`, and without the audit `commit_all` would commit the section. Rule: `project_all` passes every rendered target to `hide_tracked(worktree, targets)` before writing. The tracked targets get `--skip-worktree` in that worktree's own index (each linked worktree has one), so `status`, `diff_names`, `commit_all` and `discard_changes` ignore the projection. Codex still reads the real `AGENTS.md`, with the repository's text kept around the markers (E02-S06 Behavior 3).
+10. Only run worktrees under `.walk/worktrees/` are marked. When the target worktree is any other path and a target is tracked (e.g. `walk skills sync --worktree .` in the main checkout), `hide_tracked` raises `ConfigError("<path> is tracked; skills are projected into run worktrees only")` and nothing is written. The user's checkout never gets a hidden index flag. The default `walk skills sync` target `.walk/projections/<provider>/` has no tracked files.
+11. Accepted consequence: an agent edit to a hidden file inside a run worktree is invisible to `BoundaryAuditor`. It is never committed and disappears with the worktree. Edits inside the managed section are still reported as drift by E02-S07, which compares file content.
+12. Git operations that move HEAD inside a run worktree (E03-S01 `squash_wip`, rebase) clear the flag (`--no-skip-worktree`) and restore the file first, then re-project.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
@@ -1802,6 +1894,9 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 | 8 | Given a real temp worktree When `install_guard_hooks(["main","release/*"])` Then both scripts exist, executable, contain patterns; second call no rewrite | `tests/integrations/git/test_guard_hooks.py::test_install_guard_hooks_idempotent` |
 | 9 | Given hooks installed and checkout `main` When `git commit` via runner Then exit 1 with `protected branch` | `tests/integrations/git/test_guard_hooks.py::test_pre_commit_blocks_protected_branch` |
 | 10 | Given `push(path, "main", ["main"])` Then `PermissionDenied` and git not invoked | `tests/integrations/git/test_guard_hooks.py::test_push_refuses_protected_branch` |
+| 11 | Given a run worktree of a repository that tracks `AGENTS.md` When `project_all` runs for codex Then the managed section is in the file, `git status` of the worktree is clean, and `commit_all` returns None | `tests/skills/test_projection_tracked_targets.py::test_tracked_agents_md_is_hidden_in_run_worktree` |
+| 12 | Given the main checkout with a tracked `AGENTS.md` When `project_all` targets it Then `ConfigError` and the file bytes are unchanged | `tests/skills/test_projection_tracked_targets.py::test_projection_refuses_tracked_target_outside_run_worktrees` |
+| 13 | Given tracked `a.txt` and untracked `b.txt` When `hide_local_changes(path, ["a.txt", "b.txt"])` Then it returns `["a.txt"]` and an edit of `a.txt` is absent from `status` | `tests/integrations/git/test_provider.py::test_hide_local_changes_marks_only_tracked_files` |
 
 #### Evidence required
 - Quality gate output.
@@ -1811,6 +1906,11 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 - ARCHITECTURE §6 table, §4.2 last row; ADR-0006 D-5; ADR-0009 consequence (sh on Windows via Git for Windows).
 - `NEW NAME:` `DEFAULT_FORBIDDEN_PATHS`, `EVIDENCE_EXCEPTIONS`, `walk.memory.secrets` (`contains_secret`, `SECRET_PATTERNS`), `RuntimePolicy.allowed_paths`, hook script files.
 - Pitfall: test 9 requires `sh` on PATH; mark `@pytest.mark.skipif(shutil.which("sh") is None)` — not `integration`, since Git for Windows ships `sh`.
+- Tracked `AGENTS.md` (architect, 2026-10-07; found in E02-S06 Evidence). `skip-worktree` was chosen because it is git-native, independent of the provider, and keeps Codex reading the file it is verified to read (ADR-0014). Rejected alternatives:
+  - Projecting into `AGENTS.override.md`. Per Codex documentation, Codex reads one instructions file per directory, so the override would replace the repository's text instead of extending it, and that behaviour is not verified for the pinned CLI.
+  - A separate `AGENTS.walk.md` included by reference. `AGENTS.md` has no include mechanism, and adding the reference would itself modify the tracked file.
+  - Bootstrap refusing such repositories. That blocks every repository that already uses Codex.
+- `NEW NAME:` `GitProvider.hide_local_changes`, `HideTracked`, `DefaultSkillRegistry(hide_tracked=...)`.
 - Commit subject: `feat: enforce repository boundary guard hooks and secret scan (E02-S14)`.
 
 #### Evidence (filled by implementer)
@@ -2030,6 +2130,208 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 #### Notes
 - Reviewer must be a different agent instance/model than the implementer of ≥ 50 % of E02 stories (IMPLEMENTATION-PROTOCOL, §23).
 - Do not fix in place; create `E02-B*` stories.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E02-B01 — Subprocess runner resolves Windows `.cmd`/`.bat` shims
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §26, §27, §91
+**Depends on:** E02-S02
+**Effort:** MEDIUM   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+On Windows, tools installed as npm or other batch shims (`codex.cmd`, `graphify.cmd`, …) are found and run by the shared `AsyncioSubprocessRunner`, so `walk doctor` reports them READY instead of MISSING. A batch shim never receives an argument that `cmd.exe` would reinterpret.
+
+#### Scope
+- In: executable resolution in `AsyncioSubprocessRunner.run` (`shutil.which`, `PATHEXT`), the batch-argument guard, the same guard in `AsyncioCodexProcessLauncher` (which already resolves through `shutil.which` but passes arguments unchecked), a shim test helper.
+- Out: the Claude CLI (the SDK transport resolves it and rejects batch CLIs itself, E02-S01 Evidence); the Unity editor path (E03-S10); `doctor --fix` (E02-S15); the agent environment variables a shim needs (E02-B02).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/integrations/subprocess.py` | modify | `AsyncioSubprocessRunner.run`, `resolve_executable`, `unsafe_batch_argument`, `BATCH_UNSAFE_CHARS` |
+| `src/walk/model_router/adapters/codex/process.py` | modify | — (`launch` and `_quick` refuse unsafe arguments to a resolved `.cmd`/`.bat`; local copy of the check, `model_router` may not import `integrations`) |
+| `tests/fakes/fake_shim.py` | create | `write_shim` (a `.cmd` file on Windows, an executable `#!/bin/sh` script elsewhere) |
+| `tests/integrations/test_subprocess.py` | modify | — |
+| `tests/integrations/test_preflight.py` | modify | — |
+| `tests/model_router/adapters/codex/test_process.py` | create | — |
+
+#### Interface contract
+```python
+# src/walk/integrations/subprocess.py
+BATCH_UNSAFE_CHARS: str = '%!"&|<>^\r\n'  # characters cmd.exe re-parses in batch-file arguments
+_EXIT_REFUSED: Final = 126  # POSIX "found but cannot be executed"
+
+
+def resolve_executable(name: str, env: Mapping[str, str] | None) -> str | None:
+    """Absolute path of `name`: `shutil.which(name, path=<PATH of env when env is given and has one,
+    else the kernel's PATH>)`. On Windows `shutil.which` applies the kernel's PATHEXT, so `codex`
+    finds `codex.cmd`; the env PATH key is matched case-insensitively there. None when not found."""
+
+
+def unsafe_batch_argument(executable: str, args: list[str]) -> int | None:
+    """Index of the first arg containing a BATCH_UNSAFE_CHARS character when `executable` ends with
+    .cmd/.bat (case-insensitive); None otherwise. Pure; independent of the running platform."""
+```
+`SubprocessRunner.run` keeps its signature and its "a non-zero exit is a result" contract (INTERFACES unchanged).
+
+#### Behavior
+1. `run` resolves `argv[0]` with `resolve_executable(argv[0], env)` and spawns the resolved path with `argv[1:]`; `SubprocessResult.argv` keeps the argv as given.
+2. Not found → exit 127, stderr `executable not found: <name>`, nothing spawned (the existing convention, now decided before spawning).
+3. `unsafe_batch_argument(resolved, argv[1:])` not None → exit 126, stderr `refused: argument <index> is unsafe for batch file <name>`, nothing spawned. Callers already treat non-zero as failure: a detector reports MISCONFIGURED with that detail, and git raises `GitError` (`git.exe` is never a shim). This prevents argument injection through `cmd.exe` (the CVE-2024-24576 class).
+4. When `env` is given, the lookup uses its `PATH`, because the child runs with that environment. Without `env`, or when it lacks `PATH`, the lookup uses the kernel's `PATH`.
+5. `AsyncioCodexProcessLauncher.launch` applies rule 3 to its resolved executable and raises `PermissionError` (an `OSError`, so `CodexAdapter` maps it to `ProviderUnavailable` as it does today); `_quick` returns `(False, <message>)`.
+6. On POSIX the behaviour is unchanged apart from rule 4 (`shutil.which` with the same PATH that `exec` would search).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given Windows and a temp dir on PATH holding `fake-tool.cmd` that prints `fake-tool 1.2.3` When `run(["fake-tool", "--version"])` Then exit 0 and stdout contains `1.2.3` | `tests/integrations/test_subprocess.py::test_run_resolves_windows_cmd_shim` |
+| 2 | Given a shim only on `env["PATH"]` (not on the kernel PATH) When `run([...], env=env)` Then it is found and exits 0 | `tests/integrations/test_subprocess.py::test_run_resolves_against_the_env_path` |
+| 3 | Given an unknown executable When `run` Then exit 127 and stderr starts with `executable not found` | `tests/integrations/test_subprocess.py::test_run_unknown_executable_reports_127` |
+| 4 | Given Windows and a `.cmd` shim that writes a marker file When `run([shim, "a&b"])` Then exit 126, stderr contains `refused`, and the marker file does not exist | `tests/integrations/test_subprocess.py::test_run_refuses_unsafe_argument_to_batch_shim` |
+| 5 | Given `C:/x/codex.CMD` with args `["exec", "a%PATH%"]` Then `unsafe_batch_argument` is 1; given `codex.exe` Then None | `tests/integrations/test_subprocess.py::test_unsafe_batch_argument_detection` |
+| 6 | Given Windows and only a `dotnet.cmd` shim on PATH When `detect_dotnet(AsyncioSubprocessRunner())` Then READY with its version | `tests/integrations/test_preflight.py::test_detect_reports_ready_for_cmd_shim` |
+| 7 | Given Windows and a `codex.cmd` shim When `launch` gets an argument containing `&` Then `PermissionError` and no process is started | `tests/model_router/adapters/codex/test_process.py::test_launch_refuses_unsafe_argument_to_batch_shim` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the owner's Windows host with Codex installed through npm: `walk doctor` shows `providers.codex  ready  <version>` (E02-S02 Evidence showed `missing`).
+
+#### Notes
+- Found in E02-S02 Evidence ("Windows `.cmd` shims"). `create_subprocess_exec` hands a bare name to `CreateProcess`, which does not apply `PATHEXT`.
+- Windows-only tests use `@pytest.mark.skipif(sys.platform != "win32", reason="Windows shim")`, not `integration`. AC 2, 3 and 5 run everywhere.
+- A `.cmd` child needs `SystemRoot`/`ComSpec` in its environment. Tests that pass an explicit `env` include them; agent spawns get them from E02-B02.
+- `NEW NAME:` `resolve_executable`, `unsafe_batch_argument`, `BATCH_UNSAFE_CHARS` (`walk.integrations.subprocess`), exit code 126 for a refused batch call, `tests/fakes/fake_shim.py` (`write_shim`).
+- Commit subject: `bugfix: resolve windows batch shims in subprocess runner (E02-B01)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E02-B02 — Agent environment allowlist keeps the Windows variables provider CLIs need
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §91, §139
+**Depends on:** E02-S01
+**Effort:** LOW   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+On Windows, the Claude and Codex CLIs, and the tools they spawn, start under the scrubbed agent environment, because the allowlist also keeps the non-secret Windows system variables they need. The POSIX allowlist is unchanged, and no credential can pass on any platform.
+
+#### Scope
+- In: `WINDOWS_AGENT_ENV_ALLOWLIST`, platform-aware `scrubbed_env`, a guard test that no allowlist entry can match a credential, a Windows round-trip check of both CLIs.
+- Out: shim resolution (E02-B01); the ARCHITECTURE §6 text (E02-B03); provider login (outside the kernel).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/sandbox.py` | modify | `WINDOWS_AGENT_ENV_ALLOWLIST`, `scrubbed_env` (keyword `platform`) |
+| `tests/runtime/test_sandbox_env.py` | modify | — |
+
+#### Interface contract
+Checked against the code (`src/walk/runtime/sandbox.py`). `AGENT_ENV_ALLOWLIST` already holds `PATH`, `HOME`, `TMP`, `TEMP`, `USERPROFILE`, `SYSTEMROOT` and `UNITY_*`, and Windows comparison is already case-insensitive. Missing are `APPDATA`, `LOCALAPPDATA`, `PATHEXT` and `COMSPEC`.
+```python
+# src/walk/runtime/sandbox.py
+WINDOWS_AGENT_ENV_ALLOWLIST: tuple[str, ...] = ("APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC")
+
+
+def scrubbed_env(os_env: Mapping[str, str], *, platform: str = sys.platform) -> dict[str, str]:
+    """AGENT_ENV_ALLOWLIST, plus WINDOWS_AGENT_ENV_ALLOWLIST when platform == "win32"; keys compare
+    case-insensitively on win32 (`ComSpec`, `SystemRoot` match); values and key spelling copied verbatim."""
+```
+
+#### Behavior
+1. On `win32` both lists apply; on every other platform only `AGENT_ENV_ALLOWLIST` applies, and the output for a given environment is unchanged.
+2. `DefaultAgentExecutor` keeps calling `scrubbed_env(os.environ)`; the Claude transport and the Codex launcher receive the result unchanged (E02-S01 Behavior 7).
+3. No allowlist entry, exact or glob, matches a `CREDENTIAL_NAMES` entry or a name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. A test enforces this, so a later addition cannot leak a credential.
+4. A variable is added to either list only with evidence from AC 5 (a CLI fails without it) and only if it satisfies rule 3. Variables such as `USERNAME`, `WINDIR` or `PROGRAMDATA` are not added on speculation.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given an env with `APPDATA`, `LOCALAPPDATA`, `PATHEXT`, `ComSpec`, `SystemRoot` and `PATH` When `scrubbed_env(env, platform="win32")` Then all six are kept with their original key spelling | `tests/runtime/test_sandbox_env.py::test_scrubbed_env_keeps_windows_system_variables_on_win32` |
+| 2 | Given the same env When `scrubbed_env(env, platform="linux")` Then `APPDATA`, `LOCALAPPDATA`, `PATHEXT`, `ComSpec` are dropped | `tests/runtime/test_sandbox_env.py::test_scrubbed_env_posix_ignores_windows_list` |
+| 3 | Given `ANTHROPIC_API_KEY`, `JIRA_API_TOKEN`, `OPENAI_API_KEY`, `GITHUB_TOKEN` in the env When `scrubbed_env(env, platform="win32")` Then none of them is present | `tests/runtime/test_sandbox_env.py::test_scrubbed_env_drops_secrets_on_win32` |
+| 4 | Given both allowlists When matched against every `CREDENTIAL_NAMES` entry and the words `KEY`, `TOKEN`, `SECRET`, `PASSWORD` Then no entry matches | `tests/runtime/test_sandbox_env.py::test_allowlist_never_matches_a_credential_name` |
+| 5 | Given Windows with the CLI installed (skipped otherwise) When `claude --version` and `codex --version` run with exactly `scrubbed_env(os.environ)` Then each exits 0 | `tests/runtime/test_sandbox_env.py::test_provider_clis_start_with_scrubbed_env_on_windows` |
+
+#### Evidence required
+- Quality gate output.
+- AC 5 transcript on the owner's Windows host (`uv run pytest -m integration tests/runtime/test_sandbox_env.py -k windows -v`), listing which CLIs ran and which were skipped as not installed.
+
+#### Notes
+- Raised in E02-S01 Evidence ("For the owner / architect"). The variables come from how the CLIs start on Windows: `PATHEXT` and `COMSPEC` are needed by Node's and Rust's process spawning (shell and `.cmd` children), and `APPDATA`/`LOCALAPPDATA` by npm-installed CLIs and their config lookup.
+- AC 5 is `@pytest.mark.integration` and `skipif(sys.platform != "win32")`; it makes no model call and needs no login.
+- ADR-0009 D-8; ARCHITECTURE §6 "Secret isolation" (text updated by E02-B03).
+- `NEW NAME:` `WINDOWS_AGENT_ENV_ALLOWLIST`, `scrubbed_env(..., platform=)`.
+- Commit subject: `bugfix: keep windows system variables in agent environment (E02-B02)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E02-B03 — ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §91, §139
+**Depends on:** E02-S01, E02-B02
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+ARCHITECTURE §6 and ADR-0009 D-8 describe the real process model. The Claude Agent SDK spawns the Claude Code CLI as a subprocess through the kernel's `scrubbed_transport` (E02-S01), so the environment allowlist and its threat model cover both provider CLIs and every tool process they spawn.
+
+#### Scope
+- In: the §6 "Secret isolation" row, a residual-risk sentence, the ADR-0009 D-8 consequence for `ANTHROPIC_API_KEY`, ADR-0004 D-7 transport mention, a docs test keeping §6 in sync with the allowlist.
+- Out: any code change (the transport exists since E02-S01; the allowlist changes in E02-B02).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/01-architecture/ARCHITECTURE.md` | modify | — (§6 "Secret isolation" row) |
+| `docs/01-architecture/adr/ADR-0009-runtime-topology-and-open-questions.md` | modify | — (D-8: `ANTHROPIC_API_KEY` is reported, never injected into an agent subprocess) |
+| `docs/01-architecture/adr/ADR-0004-model-adapter-boundary-and-handover.md` | modify | — (D-7: the CLI subprocess is launched through `scrubbed_transport`) |
+| `tests/docs/test_architecture_security.py` | create | — |
+
+#### Interface contract
+No code interface. Target wording of the §6 "Secret isolation" mechanism cell:
+- Credentials: unchanged sentence (`CredentialStore`: environment, then OS keyring; never `.ai/`; write-time secret scan).
+- Process model: both providers run as **subprocesses** of the kernel. Codex is `codex exec` through `CodexProcessLauncher`; Claude is the Claude Code CLI, which the Agent SDK spawns through the kernel's `scrubbed_transport`. Each child gets exactly `scrubbed_env(os.environ)`, with nothing inherited: `AGENT_ENV_ALLOWLIST` (`PATH`, `HOME`, `TMP`, `TEMP`, `USERPROFILE`, `SYSTEMROOT`, `UNITY_*`) plus `WINDOWS_AGENT_ENV_ALLOWLIST` on Windows. Every process the CLI starts for the agent (shell and Bash tools) inherits that environment.
+- Authentication: both CLIs authenticate with their own login state (`codex login`, `claude login`). The kernel injects no provider key, because a key in the CLI environment would be readable by the agent's shell tools. `ANTHROPIC_API_KEY` is resolved by `CredentialStore` for presence reporting only.
+- Residual risk: the CLI login state is a file in the user's home directory. A provider-native shell tool runs as the same OS user and can read it. Command restrictions (`PermissionRule.command_patterns`), the Codex sandbox and the post-run `BoundaryAuditor` limit what an agent does, not what it can read. This is accepted for the single-user local daemon (ADR-0009).
+
+#### Behavior
+1. §6 no longer says the Claude SDK "runs inside the kernel process"; it states the subprocess model and the scrubbing as above.
+2. The allowlist in §6 names every entry of `AGENT_ENV_ALLOWLIST` and `WINDOWS_AGENT_ENV_ALLOWLIST` (AC 2 keeps them in sync).
+3. ADR-0009 D-8 gains a dated consequence line: `ANTHROPIC_API_KEY` is never passed to an agent subprocess, and Claude authenticates through `claude login`.
+4. ADR-0004 D-7 names `scrubbed_transport` as the launcher of the Claude CLI.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given ARCHITECTURE §6 When reading the "Secret isolation" row Then it contains `subprocess` and `scrubbed_transport` and not `inside the kernel process` | `tests/docs/test_architecture_security.py::test_secret_isolation_row_describes_cli_subprocesses` |
+| 2 | Given `AGENT_ENV_ALLOWLIST` and `WINDOWS_AGENT_ENV_ALLOWLIST` When reading the same row Then every entry appears in it | `tests/docs/test_architecture_security.py::test_secret_isolation_row_lists_the_agent_allowlist` |
+| 3 | Given ADR-0009 When reading D-8 Then it states that `ANTHROPIC_API_KEY` is not passed to agent subprocesses | `tests/docs/test_architecture_security.py::test_adr_0009_states_no_provider_key_injection` |
+
+#### Evidence required
+- Quality gate output (the docs tests run in the normal suite).
+- The diff of the §6 row in the commit body.
+
+#### Notes
+- Raised in E02-S01 Evidence ("For the owner / architect"). The SDK's own `env` option merges onto the inherited environment, which is why E02-S01 replaced the transport.
+- Commit subject: `bugfix: describe claude cli subprocess in security model (E02-B03)`.
 
 #### Evidence (filled by implementer)
 _pending_

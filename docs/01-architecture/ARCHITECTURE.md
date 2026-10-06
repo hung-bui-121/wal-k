@@ -103,7 +103,7 @@ Each row: responsibility, §125 kernel service(s) hosted, key public classes (de
 | `walk.context` | Context-first retrieval (§6.8, §40): builds the `ContextBundle` for an `AgentInput` from memory, decisions, approved artifacts, workflow state, code graph and selected source, within a token budget, with freshness-aware ranking (§42, ADR-0012). | `ContextManager` | `ContextBundle`, `ContextBundleRef`, `ContextItem`, `ContextRequest`, `ContextRanker`, `ContextManager` | |
 | `walk.runtime` | Agent execution engine: `AgentExecutor` runs one `AgentRun` as an asyncio task around a `ModelAdapter`, consumes the event stream, enforces permissions at the tool boundary (`ToolInvoker`, `can_use_tool` callback), meters budget, creates checkpoints, performs fallback + handover, validates `AgentOutput`, applies output effects via `OutputApplier`. Also hosts the WIP commit strategy and worktree sandbox. | `CheckpointManager` | `AgentExecutor`, `AgentRun`, `AgentRunState`, `ToolInvoker`, `Checkpoint`, `CheckpointManager`, `OutputApplier`, `SandboxManager`, `BoundaryAuditor` | ADR-0002, ADR-0006 |
 | `walk.improvement` | Continuous improvement (§94–§121): observations, retrospectives (derived from ledger), candidates, patterns/anti-patterns, behavior versions and rollout stages, kernel changelog; project vs kernel storage separation (§110, §119). | `ImprovementManager` | `ImprovementObservation`, `ImprovementCandidate`, `Pattern`, `AntiPattern`, `Retrospective`, `BehaviorVersion`, `RolloutStage`, `ImprovementManager` | `[Stage 10]` full; `[MVP]` observations + phase retrospective skeleton (§136) |
-| `walk.orchestrator` | Production orchestration: event loop/scheduler (§56, §60), `TaskRouter` (role assignment, §10.1), phase execution and Phase Gate (§67–§72), phase evidence packaging (§69), REWORK/CHANGE intake (§71–§72), GDD compiler entry points (§48–§49) `[Stage 6]`, human override commands (§93), built-in hook callables for the §4.1 MUST/default attachments (`builtin_hooks`, ADR-0016). | `Orchestrator`, `TaskRouter` | `Orchestrator`, `TaskRouter`, `RouteDecision`, `KernelStatus`, `Scheduler`, `PhaseGate`, `EvidencePackager`, `PhaseEvidencePackage`, `ChangeImpactAnalyzer` `[Stage 6+]`, `GddCompiler` `[Stage 6]`, `BuiltinHookDeps` | ADR-0016 |
+| `walk.orchestrator` | Production orchestration: event loop/scheduler (§56, §60), `TaskRouter` (role assignment, §10.1), phase execution and Phase Gate (§67–§72), phase evidence packaging (§69), REWORK/CHANGE intake (§71–§72), GDD compiler entry points (§48–§49) `[Stage 6]`, human override commands (§93), built-in hook callables for the §4.1 MUST/default attachments (`builtin_hooks`, ADR-0016), Production Kit bootstrap (`bootstrap`, §24–§25, ADR-0020). | `Orchestrator`, `TaskRouter` | `Orchestrator`, `TaskRouter`, `RouteDecision`, `KernelStatus`, `Scheduler`, `PhaseGate`, `EvidencePackager`, `PhaseEvidencePackage`, `ChangeImpactAnalyzer` `[Stage 6+]`, `GddCompiler` `[Stage 6]`, `BuiltinHookDeps`, `Bootstrapper` | ADR-0016, ADR-0020 |
 | `walk.cli` | `walk` typer application; composition root; JSON output mode for dashboards (§87). | — | `app`, `build_kernel()`, `KernelHandle` | |
 
 ### 1.3 Standard module layout inside every package
@@ -176,7 +176,7 @@ Cycle check: every ✔ lies strictly left of the row's own diagonal, so the rela
 | `sqlite3` | `walk/persistence/` (repositories in other packages receive a `Database` handle; they write SQL, they do not open connections) |
 | `typer` | `walk/cli/` |
 | `keyring` | `walk/integrations/credentials.py` (the `CredentialStore`) |
-| `yaml` (PyYAML) | `walk/memory/`, `walk/agents/`, `walk/skills/`, `walk/hooks/`, `walk/permissions/`, `walk/workflow/` (transition tables, ADR-0010 D-4), `walk/orchestrator/router.py` (routing rows of `scheduled_states.yaml`, E01-S29), `walk/cli/` (configuration loaders only); `walk/integrations/manifest.py` and `walk/integrations/service.py` (`environment.yaml`, `work-provider.yaml` kind; E02-S02); `walk/integrations/assets/` (provenance files and asset rules `[Stage 8]`) |
+| `yaml` (PyYAML) | `walk/memory/`, `walk/agents/`, `walk/skills/`, `walk/hooks/`, `walk/permissions/`, `walk/workflow/` (transition tables, ADR-0010 D-4), `walk/orchestrator/router.py` (routing rows of `scheduled_states.yaml`, E01-S29), `walk/orchestrator/bootstrap.py` (`production-kit.yaml`, `work-provider.yaml` kind; ADR-0020), `walk/cli/` (configuration loaders only); `walk/integrations/manifest.py` and `walk/integrations/service.py` (`environment.yaml`, `work-provider.yaml` kind; E02-S02); `walk/integrations/assets/` (provenance files and asset rules `[Stage 8]`) |
 
 A ruff `banned-api` / `import-linter` configuration encodes this table.
 
@@ -280,7 +280,7 @@ Hooks are **kernel-side, deterministic and synchronous** (ADR-0009 §D-7): `Hook
 | HookName | Fires when | Default attachments |
 |---|---|---|
 | `ON_PROJECT_START` | kernel started for project (after recovery) | default: `MemoryManager.rebuild_index()` (ledger `PROJECT_STARTED` is written by `Orchestrator.start` before the hook fires, §4.3) |
-| `ON_PROJECT_PAUSE` / `ON_PROJECT_RESUME` | user `walk pause` / `walk resume` | MUST: checkpoint all running agents (pause); ledger `USER_OVERRIDE` |
+| `ON_PROJECT_PAUSE` / `ON_PROJECT_RESUME` | user `walk pause` / `walk resume` | MUST: pause every running agent through `AgentExecutor.pause` (one PAUSE checkpoint each, written by the executor); ledger `USER_OVERRIDE` |
 | `ON_PHASE_START` | phase → `ACTIVE` | MUST: snapshot phase baseline (`ApprovedArtifact kind=PHASE_BASELINE`); default: budget allocation for phase |
 | `ON_PHASE_REVIEW_START` | phase → `EVIDENCE_REVIEW` | MUST: `EvidencePackager.build()`; default: `ImprovementManager.phase_retrospective()` |
 | `ON_PHASE_COMPLETE` | phase → `COMPLETE` | MUST: write phase report to `.ai/reports/phases/` (no learning promotion: phase learnings are captured by the `ON_PHASE_REVIEW_START` retrospective and reach kernel scope only through explicit `walk improvement promote`, ADR-0008 D-2) |
@@ -291,25 +291,25 @@ Hooks are **kernel-side, deterministic and synchronous** (ADR-0009 §D-7): `Hook
 | `ON_TASK_FAILED` | agent run `FAILED` and retries exhausted | MUST: escalation to Orchestrator role; ledger `ERROR` |
 | `ON_TASK_CANCELLED` | user `walk work cancel` | MUST: cancel run, remove worktree, ledger `USER_OVERRIDE` |
 | `ON_STATE_TRANSITION` | every committed `StateMachine` transition | MUST: ledger `WORK_ITEM_TRANSITION`; `WorkProvider.transition` (idempotent) |
-| `ON_AGENT_START` | before `adapter.run` | MUST: ledger `AGENT_RUN_STARTED`; `ContextManager` freshness check → may fire `ON_CONTEXT_STALE` |
+| `ON_AGENT_START` | before `adapter.run` | MUST: ledger `AGENT_RUN_STARTED`; freshness is checked by `ContextManager.build`, which fires `ON_CONTEXT_STALE` before this hook fires (builtin attachment E04-S04) |
 | `ON_AGENT_CHECKPOINT` | `CheckpointManager.checkpoint()` | MUST: WIP commit on work branch (ADR-0002 §D-4); ledger `CHECKPOINT_CREATED` |
 | `ON_AGENT_END` | after output applied | MUST: final checkpoint — **no-op when the payload carries `checkpoint_id`** (the executor already wrote the `END` checkpoint); ledger `AGENT_RUN_ENDED`; cost roll-up |
 | `ON_AGENT_HANDOFF` | run about to be continued by another run (fallback, pause, re-assignment) | **MUST: `CheckpointManager.checkpoint()` + `MemoryManager.write_handover()`** (§32 example) — no-op when the payload carries both `checkpoint_id` and `handover_id` (the caller already checkpointed and wrote the handover) |
 | `ON_MODEL_FALLBACK` | executor (or recovery) switched a run to a different model | MUST: `ON_AGENT_HANDOFF` chain, forwarding the payload (`checkpoint_id`, `handover_id` present → the handoff attachment is a no-op, so observers still see every handoff without a duplicate checkpoint); ledger `MODEL_FALLBACK` is written by `runtime.AgentExecutor` before the hook fires; default: improvement observation `REPEATED_FALLBACK` counter |
 | `ON_EFFORT_CHANGE` | `EffortManager` approved an up/downgrade | MUST: ledger `EFFORT_CHANGED` |
 | `ON_BUDGET_THRESHOLD` | consumption crosses `soft_threshold` | MUST: ledger `BUDGET_EVENT`; default: effort downgrade request |
-| `ON_BUDGET_EXHAUSTED` | hard limit reached | MUST: checkpoint + run state `BLOCKED_BUDGET` + escalation |
+| `ON_BUDGET_EXHAUSTED` | hard limit reached | MUST: escalation — one `ApprovalRequest(kind=ESCALATION, approver=USER)` per budget when the hard action is `BLOCK`. The checkpoint and run state `BLOCKED_BUDGET` are done by `runtime.AgentExecutor` (`BudgetExhausted`), not by the hook |
 | `ON_TOOL_BEFORE` | permission decision ALLOW for a tool call | MUST: ledger `TOOL_INVOKED` (pre) |
 | `ON_TOOL_AFTER` | tool returned | MUST: ledger `TOOL_INVOKED` (post, duration, status); default: `ON_CODE_CHANGED` if write tool |
 | `ON_TOOL_DENIED` | permission decision DENY | MUST: ledger `TOOL_DENIED`; counter for anti-pattern detection |
-| `ON_PROTECTED_ACTION_REQUESTED` | decision `REQUIRE_APPROVAL` | MUST: `ApprovalRequest` persisted; ledger `APPROVAL_REQUESTED`; run paused |
+| `ON_PROTECTED_ACTION_REQUESTED` | decision `REQUIRE_APPROVAL` | MUST: `ApprovalRequest` persisted and ledger `APPROVAL_REQUESTED` (both by `PermissionManager.request_approval` before the hook fires; the builtin verifies them); the requester pauses the run (`ToolInvoker`: `PAUSED_FOR_APPROVAL` + PAUSE checkpoint) |
 | `ON_CODE_CHANGED` | files in worktree changed (post tool or at checkpoint diff) | default: `CodeGraphProvider.mark_dirty(paths)`; freshness invalidation of memory docs listing those files |
 | `ON_COMMIT` | kernel committed on work branch | MUST: ledger `COMMIT` with work item ref; default: `WorkProvider.add_comment` summary |
 | `ON_PR_OPENED` / `ON_MERGED` | PR created / merged | MUST: ledger `PR_OPENED` / `MERGED`; feature context `relevant_files` refresh |
 | `ON_BUILD_START` / `ON_BUILD_SUCCESS` / `ON_BUILD_FAILURE` | `CiProvider`/`UnityProvider` job | MUST: ledger `BUILD_RESULT` + evidence record; failure → workflow event `ci_failed` |
 | `ON_TEST_RESULT` | test run finished | MUST: evidence record `AUTOMATED_TEST` |
 | `ON_CONTEXT_STALE` | freshness `POSSIBLY_STALE`/`INVALID` detected for an item in the bundle | MUST: mark bundle item `requires_verification=True`; ledger `CONTEXT_FRESHNESS`; default: observation counter |
-| `ON_CONTEXT_UPDATED` | memory doc written | MUST: freshness stamp (commit + timestamp); memory index update; ledger `CONTEXT_UPDATED` |
+| `ON_CONTEXT_UPDATED` | memory doc written | MUST: freshness stamp (commit + timestamp); memory index update; ledger `CONTEXT_UPDATED` — all three inside `MemoryManager.write`, in one transaction, before the hook fires (builtin: counter only, E04-S04) |
 | `ON_READY_FOR_QC` | work item → `QC` | MUST: QC run scheduled with a model different from implementer when `cross_model_review=true` (§23) |
 | `ON_QC_RESULT` | QC output applied | MUST: ledger `QC_RESULT`; evidence record |
 | `ON_BUG_CREATED` | bug work item persisted | MUST: `WorkProvider.create` (idempotent); ledger `BUG_CREATED`; bug context skeleton |
@@ -320,6 +320,8 @@ Hooks are **kernel-side, deterministic and synchronous** (ADR-0009 §D-7): `Hook
 | `ON_IMPROVEMENT_OBSERVATION` | observation created | MUST: write to `.ai/improvements/OBS-NNNN.md`; ledger |
 
 Failure policy: `MUST` hooks are `fail_closed` (the triggering operation aborts and the run is marked `FAILED_HOOK`); `default`/project hooks are `log_and_continue` unless `fail_policy: fail_closed` in `hooks.yaml`.
+
+Execution rule (E02-S08): a hook runs in the task that fires it. Hooks that fire inside an agent run's own task are `ON_AGENT_START/CHECKPOINT/END/HANDOFF`, `ON_MODEL_FALLBACK`, `ON_TOOL_*`, `ON_PROTECTED_ACTION_REQUESTED` and `ON_BUDGET_EXHAUSTED`. Their builtins must not stop that run (`AgentExecutor.pause/cancel` raise `ConfigError` when called from the run's own task) and must not repeat a checkpoint the caller took. They record, verify or request, and the caller acts after `fire` returns. Only hooks fired from the command-consumer task (`ON_PROJECT_PAUSE`, `ON_TASK_CANCELLED`) stop runs, through the executor.
 
 ### 4.2 Permission enforcement point (§31; ADR-0006)
 

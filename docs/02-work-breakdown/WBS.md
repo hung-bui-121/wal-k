@@ -175,12 +175,12 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 |---|---|---|---|
 | E02-S01 | `CredentialStore` and agent environment allowlist | integrations, runtime | Secrets from env → keyring only; scrubbed subprocess env (ADR-0009 D-8) |
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | integrations, cli | §26 checks for git/unity/providers/credentials/skills; drift vs previous manifest (§27) |
-| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | cli, integrations, memory | §24–§25 idempotent bootstrap producing `ProductionKit` |
+| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | cli, orchestrator, memory | §24–§25 idempotent bootstrap producing `ProductionKit` (ADR-0020) |
 | E02-S04 | `kernel-versions.yaml` and behavior-version pins | improvement (models), agents, cli | Pins generated, loaded, validated at startup; `walk version` lists them (§105) |
 | E02-S05 | `SkillRegistry` loading and builtin skills | skills | Canonical `SKILL.md` parsing, project shadows builtin, `for_role` (§28–§29) |
 | E02-S06 | Skill projections for Claude and Codex, lock file, `walk skills list/sync` | skills, adapters | Projections generated into worktrees; `.git/info/exclude` updated (ADR-0007 D-2) |
 | E02-S07 | Skill drift detection, `walk skills check-drift`, startup check | skills, cli | missing/modified/orphaned detection; `--strict` fails (ADR-0007 D-3) |
-| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | hooks, runtime, memory | Every MUST attachment registered with `required=True`, priority < 50 |
+| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | orchestrator, runtime | Every MUST attachment whose dependencies exist registered with `required=True`, priority < 50, no self-stop or duplicate checkpoint; the rest in a deferral table |
 | E02-S09 | Project hooks from `.ai/agents/hooks.yaml` | hooks | Shell/kernel-action hooks with timeout and fail policy; cannot disable MUST hooks |
 | E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | permissions | ADR-0006 D-6 rule set; project narrowing only; §92 list |
 | E02-S11 | Approval requests: `request_approval/decide_approval/pending`, `walk approve/deny/approvals` | permissions, runtime, cli | REQUIRE_APPROVAL pauses run, CLI resolves, timeout → DENY |
@@ -190,6 +190,9 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E02-S15 | `walk doctor --fix --strict` | cli, integrations | Repairs (hooks, projections, index) and strict lints (import-linter, constitution provider names, `models.yaml`) |
 | E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | tests/e2e | Gate scenario above |
 | E02-R01 | Review E02 | — | DoD + invariants 7, 10, 11 |
+| E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | integrations, adapters | Installed npm tools found on Windows; batch arguments guarded |
+| E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | runtime | `APPDATA`, `LOCALAPPDATA`, `PATHEXT`, `COMSPEC` on Windows only; secrets still scrubbed |
+| E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | docs | Security model matches the E02-S01 transport |
 
 ### E03 — Coding Workflow (§135 Stage 3)
 **Goal.** The §131 MVP feature lifecycle runs end-to-end on a real git repository with `LocalWorkProvider` (and `JiraWorkProvider` behind the same contract): plan → technical design → implementation → Lead Dev review → CI → QC → fix loop → feature complete, including the §132 failover.
@@ -427,12 +430,12 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-B06 | Architecture tests for module-level import cells and per-file process confinement | bugfix | E01-R01 | LOW | DONE (13ec3c1) |
 | E02-S01 | `CredentialStore` and agent environment allowlist | feat | E01-S23, E01-S25 | MEDIUM | DONE (d3c559e) |
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | feat | E02-S01, E01-S14 | HIGH | DONE (bc1fcfe) |
-| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | BLOCKED |
+| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | TODO |
 | E02-S04 | `kernel-versions.yaml` and behavior-version pins | feat | E02-S03 | MEDIUM | TODO |
 | E02-S05 | `SkillRegistry` loading and builtin skills | feat | E01-S14 | MEDIUM | DONE (65ef1d3) |
 | E02-S06 | Skill projections for Claude and Codex, lock file, `walk skills list/sync` | feat | E02-S05, E01-S21, E01-S22, E01-S25 | HIGH | DONE (11d1d66) |
 | E02-S07 | Skill drift detection, `walk skills check-drift`, startup check | feat | E02-S06, E02-S02 | MEDIUM | DONE (9a8616c) |
-| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | BLOCKED |
+| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | TODO |
 | E02-S09 | Project hooks from `.ai/agents/hooks.yaml` | feat | E02-S08 | MEDIUM | TODO |
 | E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | feat | E01-S15, E02-S03 | MEDIUM | TODO |
 | E02-S11 | Approval requests and `walk approve/deny/approvals` | feat | E02-S10, E01-S26 | HIGH | TODO |
@@ -442,6 +445,9 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S15 | `walk doctor --fix --strict` | feat | E02-S07, E02-S14, E02-S04 | MEDIUM | TODO |
 | E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | feat | E02-S15, E02-S13, E02-S12, E02-S09 | MEDIUM | TODO |
 | E02-R01 | Review E02 | docs | E02-S16 | MEDIUM | TODO |
+| E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | bugfix | E02-S02 | MEDIUM | TODO |
+| E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | bugfix | E02-S01 | LOW | TODO |
+| E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | bugfix | E02-S01, E02-B02 | LOW | TODO |
 | E03-S01 | `GitCliProvider` remote operations: push, PR, merge, `squash_wip` | feat | E01-S23, E02-S14 | HIGH | TODO |
 | E03-S02 | `LocalWorkProvider` and work-provider contract test suite | feat | E01-S23, E01-S04 | HIGH | TODO |
 | E03-S03 | `IntegrationManager`: ingest, reconcile, idempotency, `WorkPoller` | feat | E03-S02, E01-S09 | HIGH | TODO |
@@ -591,6 +597,7 @@ decisions that affect several epics.
 | `walk rc create/list/show` command group | E11-S02 | No RC CLI in INTERFACES §6 |
 | `RELOCATE: walk.hooks` to the front of the L2 import order (ADR-0018) | E01-S08 | `workflow`, `budgets`, `effort`, `permissions`, `memory`, `context`, `decisions`, `debate` inject `HookManager`; the old order forbade it |
 | `RELOCATE: walk.budgets` before `walk.effort` in the L2 import order (ADR-0019) | E01-S13 | `EffortManager` takes `dict[BudgetDimension, float]` headroom; the old order forbade `effort → budgets` |
+| `RELOCATE: Bootstrapper → walk.orchestrator.bootstrap` (ADR-0020) | E02-S03 | It writes memory documents and (E02-S04) version pins; `integrations → memory/improvement` is forbidden and `integrations → memory` would be a cycle |
 
 ---
 
@@ -636,7 +643,7 @@ Checkpoints inside E01 (points where `walk` must still run end-to-end): after S0
 
 ### 7.3 Story level, E02–E04
 
-- **E02:** S01→S02→S03→S04 is the bootstrap spine; S05→S06→S07 (skills) and S08→S09 (hooks) and S10→S11→S12 (permissions/artifacts) are three independent chains that join at S14/S15→S16.
+- **E02:** S01→S02→S03→S04 is the bootstrap spine; S05→S06→S07 (skills) and S08→S09 (hooks) and S10→S11→S12 (permissions/artifacts) are three independent chains that join at S14/S15→S16. Bugfixes B01 (after S02) and B02→B03 (after S01) are independent of every chain; B01 and B02 should land before E02-S16 so the gate runs on Windows.
 - **E03:** two spines — providers (S01, S02→S03→S04→S05) and workflow (S06→S07→S08→S09, S10→S11→S12, S13, S14→S15→S16, S17, S18) — join at S19→S20.
 - **E04:** memory (S01→S02, S03→S04), decisions (S05), handovers (S06→S07), context (S08→S09/S10, S11→S12), S13, S14 → S15.
 

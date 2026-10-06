@@ -230,7 +230,7 @@ _pending_
 | `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.start_phase` |
 | `src/walk/workflow/service.py` | modify | `DefaultWorkflowManager.update_phase` `(verify: E01-S11 may expose `PhaseRepository.save` instead)` |
 | `src/walk/workflow/repository.py` | modify | `PhaseRepository.save` `(verify)` |
-| `src/walk/orchestrator/builtin_hooks.py` | modify | `phase_baseline` (content completed), `phase_budget_allocate`; `BuiltinHookDeps.workflow`, `BuiltinHookDeps.phase_budget_limits` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `phase_baseline` (registered here; deferred from E02-S08), `phase_budget_allocate`; `BuiltinHookDeps.budgets`, `BuiltinHookDeps.phase_budget_limits` (`BuiltinHookDeps.workflow` exists since E02-S08) |
 | `src/walk/agents/policy_file.py` | modify | `PoliciesFile.phase_budget` `(verify: E01-S17 policies loader module name)` |
 | `src/walk/agents/defaults/policies.yaml` | modify | — (`phase_budget: {COST_USD: 200.0, EXECUTION_TIME_S: 86400}`) |
 | `src/walk/memory/sections.py` | modify | `PHASE_SECTIONS` |
@@ -254,7 +254,7 @@ async def start_phase(self, phase_id: PhaseId) -> Phase:
 
 
 # src/walk/orchestrator/builtin_hooks.py  (ADR-0016)
-# ON_PHASE_START  builtin.phase_baseline   prio 10  required=True   (exists since E02-S08; content completed here)
+# ON_PHASE_START  builtin.phase_baseline   prio 10  required=True   (registered here; E02-S08 deferral table)
 #   payload manifest written as the APR payload file `baseline.yaml`:
 #     {phase_id, gate_round, head: <repo HEAD sha>, scope_epic_ids, scope_work_item_ids (all descendants of scope epics),
 #      gdd_coverage: WorkflowManager.gdd_coverage(project_key), approved_artifact_ids: <all APPROVED artifacts>, created_at}

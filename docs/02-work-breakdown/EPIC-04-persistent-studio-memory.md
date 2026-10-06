@@ -206,10 +206,10 @@ _pending_
 |---|---|---|
 | `src/walk/memory/service.py` | modify | `DefaultMemoryManager.read_project_context`, `DefaultMemoryManager.project_context_sections_for_context` |
 | `src/walk/memory/protocols.py` | modify | `MemoryManager.project_context_sections_for_context` |
-| `src/walk/integrations/bootstrap.py` | modify | — (`Bootstrapper` writes `project.md` through `project_context_to_document`) |
+| `src/walk/orchestrator/bootstrap.py` | modify | — (`Bootstrapper` writes `project.md` through `project_context_to_document`; ADR-0020) |
 | `src/walk/cli/cmd_memory.py` | modify | `show` command |
 | `tests/memory/test_service_project_context.py` | create | — |
-| `tests/integrations/test_bootstrap_project_context.py` | create | — |
+| `tests/orchestrator/test_bootstrap_project_context.py` | create | — |
 | `tests/cli/test_cmd_memory_show.py` | create | — |
 
 #### Interface contract
@@ -241,8 +241,8 @@ CLI: `walk memory show DOC_ID [--json]` — prints front matter (YAML) and secti
 | 1 | Given a bootstrapped repo When `read_project_context` runs Then `goals` lists GDD headings and `platforms == ["TBD"]` | `tests/memory/test_service_project_context.py::test_read_project_context_after_bootstrap` |
 | 2 | Given no `project.md` When `read_project_context` runs Then `ConfigError` | `tests/memory/test_service_project_context.py::test_read_project_context_missing_raises` |
 | 3 | Given a project doc with all sections When `project_context_sections_for_context` runs Then exactly the four whitelisted keys in order | `tests/memory/test_service_project_context.py::test_sections_for_context_whitelist` |
-| 4 | Given a GDD with 3 files and 12 headings When bootstrap runs Then `Goals` has 12 bullets each ending with the file path | `tests/integrations/test_bootstrap_project_context.py::test_bootstrap_seeds_goals_from_gdd` |
-| 5 | Given an edited `project.md` When bootstrap runs again Then the file is unchanged | `tests/integrations/test_bootstrap_project_context.py::test_bootstrap_keeps_existing_project_md` |
+| 4 | Given a GDD with 3 files and 12 headings When bootstrap runs Then `Goals` has 12 bullets each ending with the file path | `tests/orchestrator/test_bootstrap_project_context.py::test_bootstrap_seeds_goals_from_gdd` |
+| 5 | Given an edited `project.md` When bootstrap runs again Then the file is unchanged | `tests/orchestrator/test_bootstrap_project_context.py::test_bootstrap_keeps_existing_project_md` |
 | 6 | Given `walk memory show project --json` Then output parses as JSON with `front_matter.type == "project"` | `tests/cli/test_cmd_memory_show.py::test_memory_show_json` |
 | 7 | Given `walk memory show NOPE` Then exit code 1 | `tests/cli/test_cmd_memory_show.py::test_memory_show_unknown_exits_1` |
 
@@ -650,10 +650,10 @@ Mandatory context checkpoints are enforced by hooks, not by prompts: PARTIAL, us
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/runtime/executor.py` | modify | — (`DefaultAgentExecutor._on_final_output`: PARTIAL path; budget-exhausted path; `ON_AGENT_END` repair turn) |
+| `src/walk/runtime/executor.py` | modify | — (`DefaultAgentExecutor._on_final_output`: PARTIAL path; `_block_budget` and `pause` attach the BUDGET/PAUSE handover to the checkpoint they already take; `ON_AGENT_END` repair turn) |
 | `src/walk/runtime/output_applier.py` | modify | — (`partial` event with `payload["handover_present"]`) |
-| `src/walk/orchestrator/builtin_hooks.py` | modify | `agent_end_requires_context_update`, `budget_exhausted_checkpoint_handover`, `project_pause_checkpoint_all` |
-| `src/walk/orchestrator/service.py` | modify | — (`pause(run_id)` → `checkpoint(PAUSE, handover=build_handover(reason="PAUSE"))`) |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `agent_end_requires_context_update` (the PAUSE/BUDGET handovers are written by the executor, E02-S08 Behavior 3) |
+| `src/walk/orchestrator/service.py` | modify | — (`pause(run_id)` delegates to `AgentExecutor.pause`; no checkpoint of its own) |
 | `tests/runtime/test_executor_partial.py` | create | — |
 | `tests/runtime/test_executor_agent_end_context.py` | create | — |
 | `tests/hooks/test_builtins_checkpoints.py` | create | — |
@@ -664,8 +664,8 @@ See INTERFACES.md §1.13 `AgentExecutor`, `CheckpointManager`; §1.1 `Orchestrat
 #### Behavior
 1. `FINAL_OUTPUT(status=PARTIAL)` without `output.handover` → `OutputInvalid("handover required for PARTIAL")` → one repair turn; second failure → run `FAILED`.
 2. PARTIAL with handover: `checkpoint(HANDOFF, handover=build_handover(reason="PARTIAL", partial_output=output))`, `ON_AGENT_HANDOFF` chain, workflow event `partial` with `payload.handover_present=True` (story table row IMPLEMENTING→IMPLEMENTING), run state `COMPLETED`, scheduler re-queues at once with `escalation_bump` when `output.effort_request` is an UPGRADE (ADR-0011 D-6).
-3. `Orchestrator.pause(run_id)` → adapter `cancel`, `checkpoint(PAUSE, handover(reason="PAUSE"))`, run `PAUSED_BY_USER`; `pause()` without run id does it for every RUNNING run (`ON_PROJECT_PAUSE` MUST).
-4. `ON_BUDGET_EXHAUSTED` MUST (priority 10): `checkpoint(HANDOFF, handover(reason="BUDGET"))`, run `BLOCKED_BUDGET`, `EscalationRequest(to_level=3)` persisted as `ApprovalRequest(kind="ESCALATION", approver=USER)`.
+3. `Orchestrator.pause(run_id)` → `AgentExecutor.pause(run_id)`: adapter `cancel`, one PAUSE checkpoint that now carries `handover(reason="PAUSE")` (built inside the executor), run `PAUSED_BY_USER`. `pause()` without run id fires `ON_PROJECT_PAUSE`, whose MUST builtin `builtin.pause_all_runs` (E02-S08) calls `AgentExecutor.pause` for every RUNNING run — no second checkpoint.
+4. Budget exhausted with hard action `BLOCK`: the executor's `_block_budget` takes `checkpoint(HANDOFF, handover(reason="BUDGET"))` in place of its plain PAUSE checkpoint and ends the run `BLOCKED_BUDGET`. The `ApprovalRequest(kind="ESCALATION", approver=USER)` comes from the `ON_BUDGET_EXHAUSTED` MUST builtin `builtin.budget_escalate` (E02-S08), which fires inside the run's task and therefore never checkpoints or stops the run (E02-S08 Behavior 3); Level-3 `EscalationRequest` routing is E05-S02.
 5. `ON_AGENT_END` MUST (priority 10): if `status != FAILED` and `context_updates` empty and `no_context_change_reason` is `None` → `HookFailed` is **not** raised directly; instead the executor, before firing `ON_AGENT_END`, validates this rule and issues one repair turn ("add context_updates or no_context_change_reason"); if still violated → `OutputInvalid`, run `FAILED`, `ON_TASK_FAILED` not fired (retry path is the normal repair budget). The hook itself asserts the invariant and raises `HookFailed` if reached in violation (defence in depth).
 6. `HANDOVER_CREATED` ledger count equals the number of `HO-*.md` files after any sequence of these triggers.
 
@@ -1014,7 +1014,7 @@ A `CodeGraphProvider` backed by the `graphify` CLI answers neighbourhood and imp
 | `src/walk/integrations/graphify/provider.py` | create | `GraphifyProvider` |
 | `src/walk/integrations/graphify/graph_file.py` | create | `GraphFile`, `load_graph_file` |
 | `src/walk/integrations/preflight.py` | modify | — (`graphify` component, non-required) |
-| `src/walk/integrations/bootstrap.py` | modify | — (append `graphify-out/` to repo `.gitignore`) |
+| `src/walk/orchestrator/bootstrap.py` | modify | — (append `graphify-out/` to repo `.gitignore`; ADR-0020) |
 | `src/walk/cli/composition.py` | modify | — (`code_graph = GraphifyProvider(...) if manifest.tools["graphify"].state == READY else None`) |
 | `tests/fakes/fake_code_graph_provider.py` | create | `FakeCodeGraphProvider` |
 | `tests/fixtures/graphify/graph.json` | create | — |
