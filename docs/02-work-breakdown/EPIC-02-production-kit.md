@@ -644,7 +644,7 @@ Also read: `walk/memory/{service,paths,sections,frontmatter}.py`, `walk/skills/l
 
 ### E02-S04 — `kernel-versions.yaml` and behavior-version pins
 
-**Status:** DONE (pending)
+**Status:** DONE (02077c1)
 **Type:** feat
 **Requirements:** §105, §24, §137
 **Depends on:** E02-S03
@@ -1265,7 +1265,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** TODO
+**Status:** BLOCKED
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1423,6 +1423,27 @@ Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.m
     - the `ON_PHASE_START` baseline needs `approve_artifact` (E02-S12, not a dependency), so it is deferred to E07-S02;
     - `remaining_work_check` can no longer set a payload flag (`HookContext` is frozen), so it counts and logs instead.
   - `ON_PROJECT_PAUSE` now pauses each run through the executor rather than checkpointing runs that keep running.
+- **BLOCKING (implementer, 2026-10-07, second pass): the story workflow's `partial` row fires `ON_AGENT_HANDOFF` with a payload that `builtin.handoff_checkpoint_and_handover` must reject, so registering the builtin as specified fails every PARTIAL IMPLEMENT run.**
+  - **Path, checked against the code.**
+    - `story_workflow.yaml` row `IMPLEMENTING --partial--> IMPLEMENTING` lists `hooks: [on_agent_handoff]`; TASK items use the same table.
+    - `DefaultOutputApplier.apply` raises `partial` for a PARTIAL IMPLEMENT output, from inside the run's own task (`DefaultAgentExecutor._complete`, after the END checkpoint).
+    - `DefaultWorkflowManager` fires the row's hooks from `uow.after_commit` with the payload `{from, to, event}` only (`workflow/service.py`). `TransitionContext.payload` (`handover_present`, ...) is not forwarded, and the hook payload has no `handover`, `checkpoint_id` or `handover_id`.
+    - With no ids, the builtin needs `ctx.payload["handover"]`, which is absent, so it raises `HookFailed`. That is exactly AC 7 ("without `handover` and without ids → `HookFailed`") and the Binding note ("a missing key is a contract error, never a silent pass").
+    - `HookFailed` propagates out of the after-commit callback and out of `apply`. `_complete` catches only `GuardRejected`, so `_drive` → `_fail_safely` ends the run **FAILED**. The item's `partial` transition has already committed, so the item stays IMPLEMENTING with a failed run.
+    - Today (no builtin) the run completes, but the PARTIAL `output.handover` is never written as a handover document: the END checkpoint takes no handover, and nothing else writes it. The story does not cover this firing site: the deferral table and Behavior 3–4 discuss only executor and recovery handoffs.
+  - **Decision needed (architect).** It changes a hook/transition contract across `workflow`, `runtime` and possibly a versioned workflow table, so it is not Level 0. Options:
+    - (A, proposed) On a PARTIAL IMPLEMENT output, the executor takes a `HANDOFF` checkpoint with `output.handover` before `apply`, like `_fall_back`, instead of (or before) the END checkpoint. It passes `checkpoint_id`/`handover_id` in `TransitionContext.payload`, and `DefaultWorkflowManager` forwards those keys into the row hooks' payload. The builtin is then a no-op there, project hooks see the handoff, and the PARTIAL handover is persisted. Files: `runtime/executor.py` (already listed), `workflow/service.py`, INTERFACES §1.3/§1.13, a PARTIAL executor test.
+    - (B) Remove `on_agent_handoff` from the `partial` row: a table change, so `story_workflow` 1.0 → 1.1 and an E02-S04 pin bump. The executor then fires `ON_AGENT_HANDOFF` itself with both ids on the PARTIAL path, and the PARTIAL handover is persisted as in (A).
+    - (C, not recommended) Make the builtin a no-op when the payload carries `event` (transition-fired). It contradicts AC 7 and the Binding note, and it hides the lost handover.
+  - **Verified as specified, ready once this is settled:**
+    - `ON_TASK_START` (`start_implementation`/`start_fix`/`rework_planned` rows, scheduler task): `ensure_branch` with the shared `git.branch:<id>` key.
+    - `ON_TASK_COMPLETE` rows: `remaining_work_check` never fails.
+    - `ON_TASK_CANCELLED` (feature `cancel` row, `run_id=None`): a no-op.
+    - `ON_BUDGET_EXHAUSTED` payload carries `budget_id` and `hard_action` (`budgets/service.py`).
+    - The executor's `ON_MODEL_FALLBACK` payload carries `checkpoint_id` and `handover_id`, and its `ON_AGENT_END` payload carries `checkpoint_id`.
+    - `RecoveryManager` lacks both ids on `ON_MODEL_FALLBACK`; this story adds them.
+    - `ON_RECOVERY_RESUME` carries `mode` and `handover_id`.
+  - No E02-S08 code was committed.
 - Commit subject: `feat: register builtin must hooks (E02-S08)`.
 
 #### Evidence (filled by implementer)
