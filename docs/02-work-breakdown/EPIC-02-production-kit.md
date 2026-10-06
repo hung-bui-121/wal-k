@@ -619,7 +619,7 @@ _pending_
 
 ### E02-S05 — `SkillRegistry` loading and builtin skills
 
-**Status:** DONE (pending)
+**Status:** DONE (65ef1d3)
 **Type:** feat
 **Requirements:** §28, §29, §30, §137
 **Depends on:** E01-S14
@@ -759,7 +759,7 @@ Level-0 decisions:
 
 ### E02-S06 — Skill projections for Claude and Codex, lock file, `walk skills list/sync`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §28, §29, §137, §138
 **Depends on:** E02-S05, E01-S21, E01-S22, E01-S25
@@ -792,6 +792,11 @@ Each adapter projects canonical skills into the run worktree in its native forma
 | `tests/skills/test_projection_roundtrip.py` | create | — |
 | `tests/skills/test_lockfile.py` | create | — |
 | `tests/cli/test_cmd_skills.py` | create | — |
+| `src/walk/skills/protocols.py` | modify | `SkillProjector.render` (contract addition, see Evidence) |
+| `src/walk/integrations/protocols.py`, `src/walk/integrations/git/provider.py`, `tests/fakes/fake_git_provider.py` | modify | `GitProvider.git_path` (Behavior 4, Pitfall) |
+| `src/walk/cli/composition.py` | modify | `skill_projectors`, `open_skill_registry`; registry with projection deps; sandbox `project_skills` |
+| `tests/integrations/git/test_provider.py`, `tests/model_router/test_fake_adapter.py`, `tests/skills/test_service.py` | modify | — |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.11 `render`, GitProvider `git_path`) |
 
 #### Interface contract
 See INTERFACES.md §1.11 `SkillProjector.project`, `SkillRegistry.project_all`; DOMAIN-MODEL §4.6 `SkillProjection`.
@@ -875,12 +880,66 @@ CLI: `walk skills list [--json]` (name, version, scope, source, roles); `walk sk
 
 #### Notes
 - ADR-0007 D-2; Invariant 11.
-- `NEW NAME:` `ClaudeSkillProjector`, `CodexSkillProjector`, `AGENTS_MD_START/END`, `INLINE_LIMIT_BYTES`, `ProjectionLock`, `LOCK_PATH`, `SkillProjectionRepository`, `FakeSkillProjector`.
+- `NEW NAME:` `ClaudeSkillProjector`, `CodexSkillProjector`, `AGENTS_MD_START/END`, `INLINE_LIMIT_BYTES`, `ProjectionLock`, `LOCK_PATH`, `SkillProjectionRepository`, `FakeSkillProjector`; from implementation: `SkillProjector.render`, `GitProvider.git_path`, `DefaultSkillRegistry(db=, ai_root=, exclude_path=)` with `ExcludePath`, `DefaultSandboxManager(project_skills=)`, `skills_app`, `skill_projectors`, `open_skill_registry`.
 - Pitfall: in a linked worktree `.git` is a file; always resolve `info/exclude` through git, never by path concatenation.
 - Commit subject: `feat: add provider skill projections and lock file (E02-S06)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`):
+```
+359 files already formatted
+All checks passed!
+Success: no issues found in 357 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.87%
+1117 passed, 3 deselected in 404.99s
+```
+Touched modules: `skills/lockfile.py`, `skills/repository.py`, `skills/protocols.py`, `runtime/sandbox.py`, `integrations/git/provider.py`, `claude/projector.py`, `cli/composition.py`, `cli/app.py` 100 %; `skills/service.py` 99 %; `codex/projector.py` 98 %; `cli/cmd_skills.py` 96 %.
+
+Demo on a scratch git repository. `walk bootstrap` is BLOCKED (E02-S03), so the database and project were seeded with the test helper `tests.cli.conftest.migrate`:
+```
+$ walk skills list --repo <tmp>/game
+name                      version  scope   source                                                  roles
+------------------------  -------  ------  ------------------------------------------------------  -----
+code-review-checklist     1.0      KERNEL  ...\src\walk\skills\builtin\code-review-checklist\SKILL.md  LEAD_DEV
+git-hygiene               1.0      KERNEL  ...\src\walk\skills\builtin\git-hygiene\SKILL.md         SENIOR_DEV,LEAD_DEV,QC
+qc-exploratory-testing    1.0      KERNEL  ...
+unity-csharp-conventions  1.0      KERNEL  ...
+walk-output-contract      1.0      KERNEL  ...
+$ walk skills sync --repo <tmp>/game
+projected 5 skills for 2 providers
+$ head .ai/agents/projections.lock.yaml
+projections:
+- skill: code-review-checklist
+  provider: claude
+  target_path: .claude/skills/code-review-checklist/SKILL.md
+  content_sha256: 63a84e6a73d90d0baff38438e555e17d054d858247523e9c0df39468b7e55061
+  generated_from_sha256: e165f612ee02731153f3c9e33db0c020e4955be908ff082bf1117a0065a7df50
+  generated_at: '2026-10-06T20:49:32.570578Z'
+$ tail -3 .git/info/exclude
+/.claude/skills/unity-csharp-conventions/SKILL.md
+/.claude/skills/walk-output-contract/SKILL.md
+/AGENTS.md
+```
+
+Contract additions (INTERFACES updated in this commit):
+- **`SkillProjector.render(skills, worktree_path) -> dict[str, bytes]`.** `project()` returns only a path and a hash, so `project_all` had no content to write. `render` returns every file of a provider's projection; it may read existing files (to keep the text around the Codex markers) and never writes. `project_all` performs every write (Behavior 1).
+- **`GitProvider.git_path(path, name)`** = absolute `git rev-parse --git-path <name>`. Behavior 4 and the Pitfall require resolving `info/exclude` through `GitProvider`, which had no such method. Implemented in `GitCliProvider` and `FakeGitProvider`; tested from a linked worktree.
+- **`DefaultSkillRegistry` gets keyword-only `db`, `ai_root`, `exclude_path`.** The last is a callable, because `walk.skills` may not import `GitProvider` (§2.2). Without them, `project_all` raises `ConfigError("skill projection is not configured ...")`.
+- **`DefaultSandboxManager` gets keyword-only `project_skills`** (async `(run, item, worktree)`). It runs after `add_worktree` and before the guard hooks. Any failure becomes `ConfigError("skill projection failed: ...")`, and `create` removes the new worktree (the branch is kept). The existing `post_create` extension list keeps its E01 semantics.
+
+Level-0 decisions:
+- `adopt` projects too: for an existing worktree, and before the guard hooks of a re-added one. A fallback continuation may switch provider (codex → claude) and needs its own projection (Invariant 1 parity). On failure the worktree is kept, because it may hold uncommitted work.
+- **Lock.** Target paths are worktree-relative POSIX paths, so the lock does not churn per run worktree. The DB rows keep absolute targets. Entries are merged per `(provider, skill, target)`: an entry whose hashes are unchanged keeps its `generated_at`, other providers' entries are kept, and the file is rewritten only when something changed. Re-runs are therefore byte-identical (AC 4). Orphan cleanup is E02-S07 (`regenerate`).
+- **Exclude entries** are anchored `/<relative path>` lines, appended once and written atomically. Paths come from `render` (Claude `SKILL.md` plus copied `references/`/`scripts/` files, Codex `AGENTS.md` plus linked large skills).
+- **Claude** content: front matter `name`, `description` (version dropped as Behavior 2 says), a blank line, then the body verbatim. YAML is dumped without line wrapping for stability. `references/` and `scripts/` are copied recursively from the canonical skill folder.
+- **Codex.** Managed section = start marker, a `## Skills` header line, one `### <name> (v<version>)` / description / body-or-link entry per skill, end marker. Each projection's `content_sha256` is the sha of its own entry text, which is what E02-S07 Behavior 1 attributes drift to. A body over `INLINE_LIMIT_BYTES` becomes `See .walk/skills/<name>/SKILL.md`, with that file (reduced front matter + body) written alongside. An existing `AGENTS.md` keeps everything before the first start marker and after the last end marker, which collapses duplicates into one section. Without markers the section is appended after a blank line.
+- **`walk skills sync`** projects for both kernel providers (`claude`, `codex`) whether or not the Claude SDK is installed, since projection needs no SDK. Targets are `--worktree` or `<repo>/.walk/projections/<provider>/`. It needs a bootstrapped repo (`.ai/kernel.db` with one project), otherwise exit 1 `no .ai/kernel.db; run 'walk bootstrap'`. `--json` prints the lock. `walk skills list --json` prints the summaries.
+- Composition: `build_kernel` now creates the git provider before the agent services, so the registry can resolve exclude files. `_skill_projection(router, skills)` uses the run's adapter projector and `for_role(run.role, contract.required_skills)`. `FakeModelAdapter.skill_projector()` now returns `FakeSkillProjector`, and the E01 e2e gate passes with projection active.
+- Superseded tests: `tests/skills/test_service.py::test_projection_and_drift_name_their_stories` becomes `test_drift_names_its_story`, and `tests/model_router/test_fake_adapter.py` no longer expects `skill_projector()` to raise.
+
+For the owner:
+- If a game repository tracks its own `AGENTS.md`, the Codex projection modifies a tracked file in the run worktree. `info/exclude` does not hide tracked files, so the managed section would reach the WIP commits. A repository that wants its own `AGENTS.md` needs a decision: for example, project into an untracked `AGENTS.override.md`, or exclude the managed block at commit time. Not addressed here.
 
 ---
 

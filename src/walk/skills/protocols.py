@@ -16,6 +16,14 @@ class SkillProjector(Protocol):
         """Pure: compute target path + content for this provider (no write)."""
         ...
 
+    def render(self, skills: list[Skill], worktree_path: str) -> dict[str, bytes]:
+        """Every file of this provider's projection of ``skills``: absolute path → content.
+
+        May read existing files of the worktree (e.g. to keep text around a managed section);
+        never writes. `SkillRegistry.project_all` performs the writes (E02-S06).
+        """
+        ...
+
 
 class SkillRegistry(Protocol):
     """§28-§29. Hosted by walk.skills."""

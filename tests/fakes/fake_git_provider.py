@@ -49,6 +49,11 @@ class FakeGitProvider:
         self._record("current_branch", path)
         return self.worktrees.get(path, "main")
 
+    async def git_path(self, path: str, name: str) -> str:
+        """``<path>/.git/<name>`` (no common git directory in the fake)."""
+        self._record("git_path", path, name)
+        return str(Path(path) / ".git" / name)
+
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str:
         """Create ``name`` at ``base``'s sha unless it exists."""
         self._record("ensure_branch", name, base, idempotency_key)

@@ -564,6 +564,12 @@ class SkillProjector(Protocol):
     def project(self, skill: Skill, worktree_path: str) -> SkillProjection:
         """Pure: compute target path + content for this provider (no write)."""
 
+    def render(self, skills: list[Skill], worktree_path: str) -> dict[str, bytes]:
+        """E02-S06: every file of the provider's projection (absolute path → bytes); may read, never writes.
+        `SkillRegistry.project_all` writes them (atomic), appends each path once to the worktree's
+        `info/exclude` (via GitProvider.git_path), upserts `skill_projections` and merges the lock
+        (`.ai/agents/projections.lock.yaml`, worktree-relative targets; unchanged entries keep `generated_at`)."""
+
 
 class SkillRegistry(Protocol):
     """§28–§29. Hosted by walk.skills."""
@@ -1063,6 +1069,8 @@ class GitProvider(Protocol):
 
     async def head(self, path: str) -> Sha: ...
     async def current_branch(self, path: str) -> str: ...
+    async def git_path(self, path: str, name: str) -> str:
+        """E02-S06: absolute `git rev-parse --git-path <name>` (e.g. `info/exclude`, shared by linked worktrees)."""
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str: ...
     async def add_worktree(self, path: str, branch: str) -> str: ...
     async def remove_worktree(self, path: str, *, force: bool = False) -> None: ...

@@ -86,6 +86,16 @@ class GitCliProvider:
         """Return ``git rev-parse --abbrev-ref HEAD`` in ``path`` (``HEAD`` when detached)."""
         return (await self._git(path, "rev-parse", "--abbrev-ref", "HEAD")).stdout.strip()
 
+    async def git_path(self, path: str, name: str) -> str:
+        """Absolute ``git rev-parse --git-path <name>`` in ``path``.
+
+        Raises:
+            GitError: ``path`` is not inside a git work tree.
+        """
+        out = (await self._git(path, "rev-parse", "--git-path", name)).stdout.strip()
+        resolved = Path(out) if Path(out).is_absolute() else Path(path) / out
+        return str(resolved.resolve())
+
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str:
         """Create branch ``name`` from ``base`` unless it exists; return ``name``.
 

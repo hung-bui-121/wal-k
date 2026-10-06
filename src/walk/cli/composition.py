@@ -66,8 +66,10 @@ from walk.model_router import (
 )
 from walk.model_router.adapters.claude import ClaudeAdapter
 from walk.model_router.adapters.claude.client import SdkClaudeClient, missing_sdk_options
+from walk.model_router.adapters.claude.projector import ClaudeSkillProjector
 from walk.model_router.adapters.codex import CodexAdapter
 from walk.model_router.adapters.codex.process import AsyncioCodexProcessLauncher
+from walk.model_router.adapters.codex.projector import CodexSkillProjector
 from walk.orchestrator import (
     DEFAULT_MAX_PARALLEL_AGENTS,
     DEFAULT_POLL_INTERVAL_S,
@@ -93,7 +95,7 @@ from walk.runtime import (
     PollingApprovalWaiter,
     RecoveryManager,
 )
-from walk.skills import DefaultSkillRegistry
+from walk.skills import DefaultSkillRegistry, SkillProjector
 from walk.telemetry import (
     DefaultEvidenceManager,
     DefaultLedgerManager,
@@ -104,11 +106,15 @@ from walk.telemetry import (
 from walk.tools import DefaultToolRegistry, load_tool_specs
 from walk.workflow import (
     TABLES_DIR,
+    Bug,
     DefaultWorkflowManager,
     PhaseRepository,
     Project,
     ProjectRepository,
+    Story,
+    Task,
     WorkflowRepository,
+    WorkItem,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -131,6 +137,8 @@ _CLAUDE_SDK: Final = "claude_agent_sdk"
 _GIT: Final = "git"
 _JITTER: Final = 0.1  # ARCHITECTURE §5.1 retry backoff jitter: up to +10 %
 _NO_PROJECT: Final = "no project in .ai/kernel.db; run 'walk bootstrap'"
+_NO_DATABASE: Final = "no .ai/kernel.db; run 'walk bootstrap'"
+_GIT_EXCLUDE: Final = "info/exclude"
 _PROBE_TIMEOUT_S: Final = 30  # `claude --version` health probe
 
 
@@ -301,14 +309,14 @@ def build_kernel(
     effort = DefaultEffortManager(
         StaticCostEstimator(), ledger, hooks, clock, _effort_approval, project_key=key
     )
-    tools, permissions, agents, renderer = _agent_services(
-        db, ai_root, ledger, hooks, ids, clock, key
+    runner = o.subprocess_runner or AsyncioSubprocessRunner()
+    git = o.git or GitCliProvider(repo, runner, ledger, idempotency, clock, project_key=key)
+    tools, permissions, agents, renderer, skills = _agent_services(
+        db, ai_root, ledger, hooks, ids, clock, key, git
     )
     memory = DefaultMemoryManager(
         ai_root, MemoryIndexRepository(db), ledger, hooks, ids, clock, project_key=key
     )
-    runner = o.subprocess_runner or AsyncioSubprocessRunner()
-    git = o.git or GitCliProvider(repo, runner, ledger, idempotency, clock, project_key=key)
     integrations = _integrations(repo, runner, credentials, tools, clock)
     runs = AgentRunRepository(db, clock=clock)
     checkpoints = DefaultCheckpointManager(
@@ -345,7 +353,11 @@ def build_kernel(
         agents, context, tools, budgets, PhaseRepository(db), clock, project_key=key
     )
     sandbox = DefaultSandboxManager(
-        repo, git, list(project.protected_branches), default_branch=project.default_branch
+        repo,
+        git,
+        list(project.protected_branches),
+        default_branch=project.default_branch,
+        project_skills=_skill_projection(router, skills),
     )
     waiter = PollingApprovalWaiter(
         ApprovalRepository(db), clock, permissions=permissions, sleep=sleep
@@ -538,8 +550,15 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
     ids: IdSequenceStore,
     clock: Clock,
     key: ProjectKey,
-) -> tuple[DefaultToolRegistry, DefaultPermissionManager, DefaultAgentManager, TemplateRenderer]:
-    """Tools, permissions, the agent manager and the prompt renderer (kernel + project files)."""
+    git: GitProvider,
+) -> tuple[
+    DefaultToolRegistry,
+    DefaultPermissionManager,
+    DefaultAgentManager,
+    TemplateRenderer,
+    DefaultSkillRegistry,
+]:
+    """Tools, permissions, the agent manager, the prompt renderer and the skill registry."""
     tools = DefaultToolRegistry(load_tool_specs([]))
     constitutions = ConstitutionLoader(_AGENT_DEFAULTS, ai_root / "agents" / "roles")
     policies = PolicyLoader(_AGENT_DEFAULTS / "policies.yaml", ai_root / "agents" / "policies.yaml")
@@ -554,18 +573,81 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
         project_key=key,
     )
     renderer = TemplateRenderer(_AGENT_TEMPLATES, ai_root / "agents" / "templates")
+    skills = _skills(ai_root, policies, db, git)
     agents = DefaultAgentManager(
-        constitutions, policies, permissions, tools, renderer, skills=_skills(ai_root, policies)
+        constitutions, policies, permissions, tools, renderer, skills=skills
     )
-    return tools, permissions, agents, renderer
+    return tools, permissions, agents, renderer, skills
 
 
-def _skills(ai_root: Path, policies: PolicyLoader) -> DefaultSkillRegistry:
-    """Kernel built-ins plus `.ai/agents/skills`; role defaults from the runtime policies."""
+def _skills(
+    ai_root: Path, policies: PolicyLoader, db: Database, git: GitProvider
+) -> DefaultSkillRegistry:
+    """Kernel built-ins plus `.ai/agents/skills`; role defaults from the runtime policies.
+
+    Projections are recorded in ``db`` and the lock under ``ai_root``; worktree exclude files
+    are resolved through ``git`` (E02-S06).
+    """
     defaults = {
         role: policies.load(role).default_skills for role in AgentRole if role not in _ACTORS
     }
-    return DefaultSkillRegistry(_BUILTIN_SKILLS, ai_root / "agents" / "skills", defaults)
+
+    async def exclude_path(worktree: str) -> str:
+        return await git.git_path(worktree, _GIT_EXCLUDE)
+
+    return DefaultSkillRegistry(
+        _BUILTIN_SKILLS,
+        ai_root / "agents" / "skills",
+        defaults,
+        db=db,
+        ai_root=ai_root,
+        exclude_path=exclude_path,
+    )
+
+
+def _skill_projection(
+    router: DefaultModelRouter, skills: DefaultSkillRegistry
+) -> Callable[[AgentRun, WorkItem, str], Awaitable[None]]:
+    """The sandbox step projecting the run's skills for the run's provider (E02-S06)."""
+
+    async def project(run: AgentRun, item: WorkItem, worktree: str) -> None:
+        contract = item.contract if isinstance(item, Story | Task | Bug) else None
+        required = list(contract.required_skills) if contract is not None else []
+        chosen = skills.for_role(run.role, required)
+        projector = router.adapter_for(run.model_id).skill_projector()
+        await skills.project_all([projector], worktree, chosen)
+
+    return project
+
+
+def skill_projectors(clock: Clock | None = None) -> list[SkillProjector]:
+    """The projectors of the kernel's providers (claude, codex), independent of SDK presence."""
+    time = clock or SystemClock()
+    return [ClaudeSkillProjector(clock=time), CodexSkillProjector(clock=time)]
+
+
+def open_skill_registry(
+    repo: Path, *, clock: Clock | None = None
+) -> tuple[DefaultSkillRegistry, Database]:
+    """The skill registry of ``repo`` with projection support, and its open database.
+
+    Raises:
+        ConfigError: ``repo`` has no `.ai/kernel.db` (not bootstrapped), or the database holds
+            no project or several.
+    """
+    if not (repo / _AI_DIR / _DB_FILE).is_file():
+        raise ConfigError(_NO_DATABASE, detail={"repo": str(repo)})
+    time = clock or SystemClock()
+    db = open_database(repo)
+    MigrationRunner(db, "project").apply_pending()
+    key = _single_project(db).key
+    ids = IdSequenceStore(db)
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, time)
+    runner = AsyncioSubprocessRunner()
+    git = GitCliProvider(repo, runner, ledger, IdempotencyStore(db, time), time, project_key=key)
+    ai_root = repo / _AI_DIR
+    policies = PolicyLoader(_AGENT_DEFAULTS / "policies.yaml", ai_root / "agents" / "policies.yaml")
+    return _skills(ai_root, policies, db, git), db
 
 
 def build_status_reader(repo: Path) -> StatusBuilder:

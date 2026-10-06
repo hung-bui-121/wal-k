@@ -71,6 +71,19 @@ async def test_head_and_current_branch(git: GitCliProvider, tmp_game_repo: Path)
     assert git.provider == "git-cli"
 
 
+async def test_git_path_resolves_shared_files_from_a_linked_worktree(
+    git: GitCliProvider, tmp_game_repo: Path
+) -> None:
+    worktree = await _worktree(git, tmp_game_repo, "feat/git-path", "RUN-GITPATH")
+
+    from_root = await git.git_path(str(tmp_game_repo), "info/exclude")
+    from_worktree = await git.git_path(str(worktree), "info/exclude")
+
+    expected = (tmp_game_repo / ".git" / "info" / "exclude").resolve()
+    assert Path(from_root) == expected
+    assert Path(from_worktree) == expected
+
+
 async def test_ensure_branch_is_idempotent(
     git: GitCliProvider, tmp_game_repo: Path, idempotency: IdempotencyStore
 ) -> None:

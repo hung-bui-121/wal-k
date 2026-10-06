@@ -13,6 +13,7 @@ from walk.cli.cmd_ledger import ledger_app
 from walk.cli.cmd_memory import memory_app
 from walk.cli.cmd_phase import phase_app
 from walk.cli.cmd_run import run
+from walk.cli.cmd_skills import skills_app
 from walk.cli.cmd_status import status
 from walk.cli.cmd_work import work_app
 
@@ -27,6 +28,7 @@ app.add_typer(cost_app)
 app.add_typer(ledger_app)
 app.add_typer(memory_app)
 app.add_typer(phase_app)
+app.add_typer(skills_app)
 app.add_typer(work_app)
 app.command("doctor")(doctor)
 app.command("run")(run)

@@ -85,10 +85,8 @@ def test_for_role_missing_required_raises() -> None:
     assert raised.value.detail["missing"] == ["missing-skill", "other-missing"]
 
 
-async def test_projection_and_drift_name_their_stories() -> None:
+async def test_drift_names_its_story() -> None:
     registry = _registry()
 
-    with pytest.raises(ConfigError, match="E02-S06"):
-        await registry.project_all([], "/wt", [])
     with pytest.raises(ConfigError, match="E02-S07"):
         await registry.check_drift([], "/wt")

@@ -5,6 +5,7 @@ authorizer, the structured output is written to `.walk/output.json`, an invalid 
 reported as ``FINAL_OUTPUT(output=None, error=...)``, and no thinking text is ever emitted.
 """
 
+import hashlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,7 @@ from walk.model_router import (
     parse_agent_output,
 )
 from walk.permissions import PermissionDecision, PermissionEffect, ToolCallRequest
-from walk.skills import SkillProjector
+from walk.skills import Skill, SkillProjection, SkillProjector
 from walk.tools import ToolKind
 
 _INVALID_OUTPUT = '{"status": "BOGUS"}'
@@ -75,6 +76,37 @@ class FakeScript(WalkModel):
         description="Usage added by each tool call.",
     )
     resumable: bool = Field(default=True, description="Session ref allows native resume.")
+
+
+class FakeSkillProjector:
+    """`SkillProjector` of the fake adapters: ``<worktree>/.walk/fake-skills/<name>.md``."""
+
+    def __init__(self, provider: str, clock: Clock) -> None:
+        """Project for ``provider``, stamped by ``clock``."""
+        self.provider = provider
+        self._clock = clock
+
+    def project(self, skill: Skill, worktree_path: str) -> SkillProjection:
+        """Target file and the hash of the skill body (written verbatim by `render`)."""
+        return SkillProjection(
+            skill=skill.name,
+            provider=self.provider,
+            target_path=str(_fake_skill_path(worktree_path, skill)),
+            content_sha256=hashlib.sha256(skill.body_markdown.encode("utf-8")).hexdigest(),
+            generated_from_sha256=skill.content_sha256,
+            generated_at=self._clock.now(),
+        )
+
+    def render(self, skills: list[Skill], worktree_path: str) -> dict[str, bytes]:
+        """One file per skill holding its body."""
+        return {
+            str(_fake_skill_path(worktree_path, skill)): skill.body_markdown.encode("utf-8")
+            for skill in skills
+        }
+
+
+def _fake_skill_path(worktree_path: str, skill: Skill) -> Path:
+    return Path(worktree_path) / ".walk" / "fake-skills" / f"{skill.name}.md"
 
 
 def fake_descriptor(model_id: ModelId, provider: str, **overrides: object) -> ModelDescriptor:
@@ -204,13 +236,8 @@ class FakeModelAdapter:
         return state.usage if state is not None else _ZERO_USAGE
 
     def skill_projector(self) -> SkillProjector:
-        """Not available before E02-S06.
-
-        Raises:
-            ConfigError: Always.
-        """
-        msg = "skill projection available from E02-S06"
-        raise ConfigError(msg)
+        """A `FakeSkillProjector` for this adapter's provider."""
+        return FakeSkillProjector(self.provider, self._clock)
 
     def parse_output(self, raw: str) -> AgentOutput:
         """Delegate to `parse_agent_output`."""

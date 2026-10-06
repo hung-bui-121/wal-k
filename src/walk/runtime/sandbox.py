@@ -76,6 +76,7 @@ class DefaultSandboxManager:
         protected_branches: list[str],
         *,
         default_branch: str = "main",
+        project_skills: _PostCreate | None = None,
     ) -> None:
         """Wire the manager.
 
@@ -84,26 +85,39 @@ class DefaultSandboxManager:
             git: Branch, worktree and hook operations.
             protected_branches: Globs the guard hooks protect and `remove` never deletes.
             default_branch: Base of new work branches (``Project.default_branch``).
+            project_skills: Projects the run's skills for the run's provider into a worktree
+                (``SkillRegistry.project_all``, wired by the composition root; E02-S06).
         """
         self._repo_root = repo_root
         self._git = git
         self._protected = list(protected_branches)
         self._default_branch = default_branch
+        self._project_skills = project_skills
         # Extension point for E02-S06 (skill projections into the new worktree); empty here.
         self.post_create: list[_PostCreate] = []
 
     async def create(self, run: AgentRun, item: WorkItem) -> str:
-        """Ensure the item's branch, add `<repo>/.walk/worktrees/<run_id>`, install guard hooks.
+        """Ensure the branch, add the worktree, project the run's skills, install guard hooks.
 
-        The branch is created once per item (idempotency key ``git.branch:<item id>``) from
-        ``default_branch``; later runs of the item reuse it. Returns the absolute worktree
+        The worktree is `<repo>/.walk/worktrees/<run_id>`. The branch is created once per
+        item (idempotency key ``git.branch:<item id>``) from ``default_branch``; later runs of
+        the item reuse it. Returns the absolute worktree
         path; the caller stores it with the branch on the run.
+
+        Raises:
+            ConfigError: Skill projection failed; the new worktree has been removed (the
+                branch is kept).
         """
         branch = branch_name_for(item)
         await self._git.ensure_branch(
             branch, self._default_branch, idempotency_key=f"git.branch:{item.id}"
         )
         path = await self._git.add_worktree(str(self._worktree_path(run)), branch)
+        try:
+            await self._project(run, item, path)
+        except ConfigError:
+            await self._git.remove_worktree(path, force=True)
+            raise
         await self._git.install_guard_hooks(path, self._protected)
         for hook in self.post_create:
             await hook(run, item, path)
@@ -112,12 +126,14 @@ class DefaultSandboxManager:
     async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str:
         """Reuse ``previous``'s worktree for the child ``run`` (fallback, recovery, resume).
 
-        An existing directory is returned unchanged (uncommitted residue kept). A missing one is
+        An existing directory is kept (uncommitted residue included). A missing one is
         re-added on ``previous``'s branch with guard hooks (and the post-create extensions).
-        Never `create`: git checks a branch out in one worktree only.
+        Either way the skills are projected for ``run``, whose provider may differ from
+        ``previous``'s (fallback). Never `create`: git checks a branch out in one worktree only.
 
         Raises:
-            ConfigError: ``previous`` has no worktree.
+            ConfigError: ``previous`` has no worktree, or skill projection failed (the
+                worktree is kept: it may hold uncommitted work).
             GitError: From re-adding the worktree.
         """
         if previous.worktree_path is None:
@@ -125,9 +141,11 @@ class DefaultSandboxManager:
             raise ConfigError(msg, detail={"run_id": run.id, "previous_run_id": previous.id})
         path = previous.worktree_path
         if _is_dir(path):
+            await self._project(run, item, path)
             return path
         branch = previous.branch or branch_name_for(item)
         path = await self._git.add_worktree(path, branch)
+        await self._project(run, item, path)
         await self._git.install_guard_hooks(path, self._protected)
         for hook in self.post_create:
             await hook(run, item, path)
@@ -143,6 +161,16 @@ class DefaultSandboxManager:
             _LOG.info("protected branch kept", extra={"branch": run.branch, "run_id": run.id})
             return
         await self._git.delete_branch(run.branch, protected_branches=self._protected)
+
+    async def _project(self, run: AgentRun, item: WorkItem, path: str) -> None:
+        """Run the skill projection; any failure becomes `ConfigError` naming the run."""
+        if self._project_skills is None:
+            return
+        try:
+            await self._project_skills(run, item, path)
+        except Exception as exc:
+            msg = f"skill projection failed: {exc}"
+            raise ConfigError(msg, detail={"run_id": run.id, "worktree": path}) from exc
 
     def _worktree_path(self, run: AgentRun) -> Path:
         return (self._repo_root / WORKTREES_DIR / run.id).resolve()

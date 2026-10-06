@@ -115,6 +115,14 @@ class GitProvider(Protocol):
         """Return the checked-out branch name in ``path``."""
         ...
 
+    async def git_path(self, path: str, name: str) -> str:
+        """Absolute ``git rev-parse --git-path <name>`` of ``path`` (E02-S06).
+
+        In a linked worktree this resolves shared files such as ``info/exclude`` in the common
+        git directory; never build such paths by concatenation.
+        """
+        ...
+
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str:
         """Create ``name`` from ``base`` if absent; return the branch name."""
         ...

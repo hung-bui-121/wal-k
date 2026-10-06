@@ -343,8 +343,8 @@ async def test_health_toggle(fake_claude_adapter: FakeModelAdapter, fake_clock: 
 async def test_skill_projector_and_parse_output_delegate(
     fake_codex_adapter: FakeModelAdapter,
 ) -> None:
-    with pytest.raises(ConfigError, match="E02-S06"):
-        fake_codex_adapter.skill_projector()
+    projector = fake_codex_adapter.skill_projector()
+    assert projector.provider == "fake-codex"
     assert fake_codex_adapter.parse_output(DONE.model_dump_json()) == DONE
     assert fake_codex_adapter.usage("RUN-01J0000000000000000000ZZZZ").tool_calls == 0
 
