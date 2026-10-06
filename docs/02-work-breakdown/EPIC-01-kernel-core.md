@@ -228,7 +228,7 @@ Level-0 decisions (no contract change):
 
 ### E01-S02 — Provider CLI/SDK spike → ADR-0014
 
-**Status:** BLOCKED
+**Status:** DONE (pending)
 **Type:** docs
 **Requirements:** §6.1, §17, §21–§22, §128, §139
 **Depends on:** none
@@ -239,7 +239,8 @@ Level-0 decisions (no contract change):
 Every Codex CLI flag and Claude Agent SDK option assumed by ADR-0004 D-7/D-8 and ADR-0011 is verified against the installed tools, and the results (verified / deviation / consequence) are recorded in ADR-0014 so E01-S21/S22 implement against facts.
 
 #### Scope
-- In: probe scripts, manual execution against real CLIs, ADR-0014, approval of the `jinja2` dependency.
+- In: non-billable probe scripts (`--help`, SDK introspection), documentation review, ADR-0014, approval of the `jinja2` dependency.
+- Owner decision 2026-10-06: verify in theory first. No login and no billable model call in this story; rows that need a real run are marked `runtime check` and settled by E01-S21/E01-S22 integration tests and the E02-S02 project preflight.
 - Out: adapter code (E01-S21, E01-S22).
 
 #### Files
@@ -260,10 +261,10 @@ ADR-0014 follows `docs/00-governance/ADR-TEMPLATE.md`, `Status: Accepted`, and c
 | Claude Agent SDK | `query()` options `cwd`, `allowed_tools`, `permission_mode`, `can_use_tool`, `model`, `effort` (`low\|medium\|high\|xhigh\|max`), `max_turns`, `resume`; session id present in result/init messages; usage fields (input/output/cache-read tokens, cost); structured output mechanism (`output_format`/schema) or absence thereof |
 | Kernel | `jinja2` approved as runtime dependency (ADR-0004 D-4 templates) |
 
-Probe scripts print each flag probe and its raw output; they are run manually (real CLIs required) and the transcript is pasted into the ADR under "Evidence".
+Probe scripts print each flag probe and its raw output without logging in or calling a model; the transcript is pasted into the ADR under "Evidence".
 
 #### Behavior
-1. Each assumption row states `Verified` with the tool version, or `Deviation` with the observed behaviour.
+1. Each assumption row states `Verified` with the tool version and method (`docs`, `help`, `introspection`), `Deviation` with the observed behaviour, or `runtime check` with the story that settles it.
 2. Every `Deviation` row names the affected story (`E01-S21` or `E01-S22`) and the required mapping change in the adapter.
 3. If `--output-schema` is unavailable, the ADR records that `<worktree>/.walk/output.json` is the only output channel for Codex (ADR-0004 D-3 fallback remains the contract).
 4. If the SDK lacks `effort`, the ADR records the alternative parameter and E01-S21 maps `Effort` to it.
@@ -290,11 +291,11 @@ Probe scripts print each flag probe and its raw output; they are run manually (r
 - Commit: `docs: record provider cli and sdk verification in ADR-0014 (E01-S02)`.
 
 #### Evidence (filled by implementer)
-BLOCKED on 2026-10-06 (owner action required, not a planning gap):
-- Codex CLI is not installed on the implementation machine, and the runtime rows (JSON event kinds, `codex exec resume`, usage event, exit codes) need an authenticated `codex login` on the owner's OpenAI account.
-- The Claude Agent SDK rows (session id, usage and cost fields, structured output) need a real `query()` run, which spends the owner's Claude quota.
-- Unblock: owner installs Codex CLI (`npm i -g @openai/codex`), runs `codex login`, and confirms that the probes may spend a few requests on both accounts. Only E01-S21 and E01-S22 depend on this story; E01-S03..S20 proceed.
-
+Unblocked 2026-10-06 by the owner decision to verify in theory first (docs, `--help`, SDK introspection; no login, no billable call).
+- Tools probed: `codex-cli 0.160.1` via `npx -y @openai/codex` (not installed globally), `claude-agent-sdk 0.2.163` via `uv run --no-project --with claude-agent-sdk`.
+- Deviations recorded in ADR-0014: `codex exec resume` takes neither `--sandbox` nor `--cd` (E01-S22 uses subprocess `cwd` and `-c sandbox_mode=...`); SDK `allowed_tools` auto-approves and bypasses `can_use_tool` (E01-S21 restricts with `tools=[...]`, `allowed_tools=[]`, `permission_mode="default"`).
+- Runtime checks deferred: Codex exit codes, network default under `workspace-write` (E01-S22 now passes `network_access=false` explicitly), exact Codex `item.type` strings.
+- Gate: see the commit's check output (`tests/docs/test_adr_0014.py`: 6 passed).
 ---
 
 ### E01-S03 — SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup`
@@ -1608,7 +1609,7 @@ Level-0 decisions:
 
 ### E01-S12 — Budgets and cost: `BudgetManager`, `CostManager`, `walk cost`
 
-**Status:** DONE (pending)
+**Status:** DONE (4b56802)
 **Type:** feat
 **Requirements:** §20, §84, §85, §86
 **Depends on:** E01-S05, E01-S07
@@ -2835,6 +2836,7 @@ class ClaudeAdapter:
 - Optional (not gating): transcript of `uv run pytest -m integration tests/model_router/adapters/claude` against a logged-in SDK, if the implementer has credentials.
 
 #### Notes
+- ADR-0014 deviation (binding): the SDK's `allowed_tools` auto-approves and those calls never reach `can_use_tool`. Pass the kernel's PROVIDER_NATIVE tool names as `tools=[...]`, pass `allowed_tools=[]` and `permission_mode="default"`, so every call is authorised by the kernel. Behavior 1 and the `ClaudeQueryOptions` contract are read with this substitution. Structured output uses `output_format={"type": "json_schema", "schema": ...}` → `ResultMessage.structured_output`.
 - ADR-0004 D-1/D-2/D-7; ADR-0006 D-1 (enforcement point 2); ADR-0011 D-2/D-4; ADR-0014 (E01-S02) is authoritative for SDK option/field names, permission-result shape and structured-output support — the implementer reads it before coding `client.py` and `permissions.py`.
 - `NEW NAME:` `ClaudeClient`, `SdkClaudeClient`, `ClaudeQueryOptions`, `SdkMessage`, `ClaudeTranslationState`, `translate_message`, `to_tool_call_request`, `to_sdk_permission_result`, `NATIVE_TOOL_NAMES`, `map_claude_effort`, `ClaudeSkillProjector`, `FakeClaudeClient`; constructor builder callables (`system_prompt_builder`, `user_message_builder`) keep `rendering` out of the adapter.
 - Pitfall: `TEXT` events are diagnostics only; the executor must not persist them (E01-S27 rule).
@@ -2957,6 +2959,7 @@ Fixture event vocabulary (`tests/fixtures/codex/*.jsonl`, recorded by the E01-S0
 - Optional (not gating): `uv run pytest -m integration tests/model_router/adapters/codex` against a logged-in `codex` CLI.
 
 #### Notes
+- ADR-0014 deviation (binding): `codex exec resume` accepts neither `--sandbox` nor `--cd`. `build_resume_command` sets the working directory through the subprocess `cwd` and the sandbox through `-c sandbox_mode="workspace-write"`; AC 5's argv check is read with this substitution. Both commands also pass `-c sandbox_workspace_write.network_access=false` explicitly. Unknown `item.type` values are logged and skipped. The integration test records real exit codes and item types into ADR-0014.
 - ADR-0004 D-2/D-8; ADR-0006 D-5 (compensating controls — this story records decisions, E01-S25/S26/S27 enforce them); ADR-0009 D-5/D-8; ADR-0011 D-2; ADR-0014 authoritative for flags and event names.
 - `NEW NAME:` `CodexProcessLauncher`, `AsyncioCodexProcessLauncher`, `CodexProcess`, `CodexSandboxConfig`, `DEFAULT_SANDBOX_MODE`, `CODEX_BINARY`, `build_exec_command`, `build_resume_command`, `CodexEvent`, `parse_codex_line`, `translate_codex_event`, `CodexTranslationState`, `map_codex_effort`, `CodexSkillProjector`, `AGENTS_MD_START/END`, `FakeCodexProcessLauncher`, fixture folder `tests/fixtures/codex/`.
 - Architecture inconsistency to report: WBS §6 routes all subprocess calls through `walk.integrations.subprocess.SubprocessRunner`, but ARCHITECTURE §2.2 forbids `model_router → integrations`. This story therefore defines its own structurally equivalent `CodexProcessLauncher` inside the adapter package; the composition root may adapt one to the other. The architect should either allow `model_router → integrations (subprocess only)` or move `SubprocessRunner` to `walk.common`.

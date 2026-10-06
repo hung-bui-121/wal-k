@@ -246,6 +246,7 @@ class DefaultIntegrationManager:
 6. `walk doctor` calls `preflight(REQUIRED_DEFAULT)`, prints a table (`component | state | version | detail`) grouped by section, and exits 0 when all required are READY, 4 when `ConfigError` from rule 5, 1 on any other `WalkError`. `--json` prints `EnvironmentManifest.model_dump_json()`.
 7. `walk doctor` runs in-process (no daemon needed) and acquires `KernelLock` in shared mode only if the lock module supports it; otherwise it opens the DB read-only.
 8. `tools` status for CLI tools comes from `ToolRegistry.all()` entries with `kind == CLI`: each `executable` is probed with `<exe> --version` through the runner.
+9. Provider capability probe (ADR-0014, owner decision 2026-10-06: per-project runtime verification): when `codex` is READY, `codex exec --help` and `codex exec resume --help` are run and every flag in ADR-0014's Codex table must be present (missing flag → `MISCONFIGURED`, detail names the flag and ADR-0014); when the `claude` extra is installed, `ClaudeAgentOptions` is introspected for the ADR-0014 SDK options. No login and no model call; results are stored in the manifest so drift between machines is reported (§27).
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |

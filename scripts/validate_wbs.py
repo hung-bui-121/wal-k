@@ -107,6 +107,11 @@ def main() -> int:
         m = re.search(r"\*\*Status:\*\*\s*(.+)", body)
         if not m or not STATUS_RE.match(m.group(1).strip()):
             errors.append(f"{sid} ({fname}): illegal or missing Status")
+        elif sid in table and table[sid]["status"] != m.group(1).strip():
+            errors.append(
+                f"{sid} ({fname}): Status '{m.group(1).strip()}' differs from WBS table "
+                f"'{table[sid]['status']}'"
+            )
         m = re.search(r"\*\*Requirements:\*\*\s*(.+)", body)
         if not m or "§" not in m.group(1):
             errors.append(f"{sid} ({fname}): Requirements must cite §NN")
