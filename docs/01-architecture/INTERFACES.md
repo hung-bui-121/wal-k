@@ -193,6 +193,14 @@ class WorkflowManager(Protocol):
     async def set_done_dimension(self, feature_id: FeatureId, dimension: DoneDimension, done: bool, evidence_id: EvidenceId | None) -> Feature:
         """§6.5."""
 
+    async def children_states(self, feature_id: FeatureId) -> dict[WorkItemId, WorkItemState]:
+        """Child STORY/TASK items plus BUGs with related_feature_id == feature_id; CANCELLED items excluded.
+        Producer of guard payload key `children_states` (feature_workflow §3.1). E03-S17."""
+
+    async def open_blocker_bug_count(self, feature_id: FeatureId) -> int:
+        """BUGs with related_feature_id == feature_id, severity BLOCKER, state not in {COMPLETE, CANCELLED}.
+        Producer of guard payload key `open_blocker_bug_count` (`no_open_blocker_bugs`, §3.1). E03-S17."""
+
     # phases / RC
     async def phase_event(self, phase_id: PhaseId, event: str, ctx: TransitionContext) -> Phase: ...
     async def rc_event(self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext) -> ReleaseCandidate: ...
@@ -212,11 +220,14 @@ class ModelRouter(Protocol):
 
     async def select(self, role: AgentRole, policy: ModelPolicy, profile: TaskProfile, effort: Effort,
                      *, exclude: list[ModelId] = (), task_override: ModelId | None = None) -> RoutingDecision:
-        """INTERFACES §7.2 steps 1–6: ordered candidates (override, preferred, fallback) minus restricted/disabled/excluded;
+        """INTERFACES §5.3 steps 1–4: ordered candidates (override, preferred, fallback) minus restricted/disabled/excluded;
         reject on capability (§16), context window, effort support, health; first survivor wins. Ledger MODEL_SELECTED by caller."""
 
-    async def fallback(self, run: AgentRun, trigger: FallbackTrigger, profile: TaskProfile) -> RoutingDecision:
-        """INTERFACES §7.2 steps 7–10. Raises BlockedProvider when no candidate remains."""
+    async def fallback(self, request: FallbackRequest) -> RoutingDecision:
+        """INTERFACES §5.3 steps 7–9 — the decision only: max-fallback check, exclusion (whole provider for
+        PROVIDER_WIDE_TRIGGERS), CONTEXT_OVERFLOW / BUDGET_RESTRICTION re-ordering, then `select`. Returns is_fallback=True,
+        trigger=request.trigger. No ledger writes, no checkpoint, no run start (model_router may not import runtime,
+        ARCHITECTURE.md §2.2); the caller (runtime.AgentExecutor) owns steps 5, 6 and 10. Raises BlockedProvider. E01-S28."""
 
     def classify_error(self, exc: BaseException, adapter: "ModelAdapter") -> FallbackTrigger | None:
         """Maps adapter-specific exceptions/events to §21 triggers; None = not a fallback condition."""
@@ -231,7 +242,7 @@ class EffortManager(Protocol):
     """§17–§19. Hosted by walk.effort."""
 
     def resolve(self, policy: EffortPolicy, item: WorkItem, state: WorkItemState, escalation_bump: int, budget_headroom: dict[BudgetDimension, float]) -> EffortResolution:
-        """INTERFACES §7.1 algorithm. Pure."""
+        """INTERFACES §5.2 algorithm. Pure."""
 
     async def request_change(self, run_id: RunId, current: Effort, request: EffortRequest, policy: EffortPolicy,
                              headroom: dict[BudgetDimension, float]) -> Effort:
@@ -287,7 +298,7 @@ class ContextManager(Protocol):
     """§6.8, §40–§43. Hosted by walk.context."""
 
     async def build(self, request: ContextRequest) -> ContextBundle:
-        """INTERFACES §8.1 algorithm. Fires ON_CONTEXT_STALE for any POSSIBLY_STALE/INVALID item included."""
+        """INTERFACES §5.4 algorithm. Fires ON_CONTEXT_STALE for any POSSIBLY_STALE/INVALID item included."""
 
     def token_budget_for(self, effort: Effort, context_window_tokens: int, max_output_tokens: int) -> int:
         """LOW 20%, MEDIUM 35%, HIGH 50%, VERY_HIGH 60% of context_window_tokens minus max_output_tokens (ADR-0012).
@@ -323,7 +334,7 @@ class MemoryManager(Protocol):
         The `handovers` table row is written by runtime.CheckpointManager. Returns path."""
 
     async def assess_freshness(self, doc: MemoryDocument, head: Sha) -> FreshnessAssessment:
-        """INTERFACES §8.2."""
+        """INTERFACES §5.5."""
 
     async def rebuild_index(self) -> int:
         """Scan `.ai/**/*.md`, parse front matter, upsert memory_index. Returns doc count."""
@@ -454,12 +465,14 @@ class ToolRegistry(Protocol):
 
 
 class HookManager(Protocol):
-    """§32. Hosted by walk.hooks."""
+    """§32. Hosted by walk.hooks — registry and dispatcher only. Built-in callables live in
+    `walk.orchestrator.builtin_hooks` and are registered once by the composition root via
+    `register_builtins(manager, deps)` (ADR-0016)."""
 
-    def register(self, hook: Hook) -> None:
-        """Raises ConfigError if a project hook tries to disable/replace a `required` builtin."""
+    def register(self, hook: Hook, fn: HookCallable | None = None) -> None:
+        """`builtin` hooks need `fn`; project hooks pass None. Raises ConfigError on a duplicate (name, id) and if a project
+        hook tries to disable/replace a `required` builtin."""
 
-    def register_builtins(self) -> None: ...
     def load_project_hooks(self, path: str) -> list[Hook]:
         """`.ai/agents/hooks.yaml`."""
 
@@ -563,6 +576,10 @@ class SandboxManager(Protocol):
     async def create(self, run: AgentRun, item: WorkItem) -> str:
         """`git worktree add <repo>/.walk/worktrees/<run_id> <branch>` (branch = item.branch or feat/<id>-<slug>); installs guard hooks;
         writes projections; returns path."""
+
+    async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str:
+        """Child run (fallback / recovery / native resume) reuses previous.worktree_path unchanged; re-adds it on previous.branch
+        with guard hooks when the directory is missing. Never `create` for a child run (one branch, one worktree). E01-S28."""
 
     async def remove(self, run: AgentRun, *, keep_branch: bool = True) -> None: ...
 
@@ -799,6 +816,8 @@ class GitProvider(Protocol):
         """Collapse `wip(...)` checkpoint commits into one commit before PR (ADR-0002 §D-4)."""
     async def install_guard_hooks(self, path: str, protected_branches: list[str]) -> None: ...
     async def is_ancestor(self, ancestor: Sha, descendant: Sha, path: str) -> bool: ...
+    async def merge_base(self, a: str, b: str, path: str) -> Sha:
+        """`git merge-base a b`; refs or shas; no common ancestor → GitError. Squash base of the integration step (E03-S12)."""
     async def changed_between(self, a: Sha, b: Sha, path: str, *, paths: list[str] | None = None) -> list[str]:
         """Used by freshness classification (§42)."""
 ```
@@ -838,8 +857,10 @@ class UnityProvider(Protocol):
 class CiProvider(Protocol):
     """§62 orchestration of jobs for a commit; default implementation runs UnityProvider locally."""
 
-    async def run_pipeline(self, worktree_path: str, commit: Sha, jobs: list[str], *, idempotency_key: str) -> list[JobResult]:
-        """Fires ON_BUILD_START/SUCCESS/FAILURE and ON_TEST_RESULT; each result → EvidenceManager.record."""
+    async def run_pipeline(self, worktree_path: str, commit: Sha, jobs: list[str], *, idempotency_key: str,
+                           work_item_id: WorkItemId | None = None) -> list[JobResult]:
+        """Fires ON_BUILD_START/SUCCESS/FAILURE and ON_TEST_RESULT; each result → EvidenceManager.record.
+        `work_item_id` attributes hook contexts, evidence and BUILD_RESULT/TEST_RESULT ledger events to the item (E03-S11)."""
 ```
 
 ### 2.5 `AssetProvider` (§78–§80) `[Stage 8]`
@@ -962,6 +983,7 @@ Note: PHASE_REVIEW/USER_GATE at feature level are projections of the phase state
 | IDEA | `block` | — | BLOCKED | ON_TASK_BLOCKED | any |
 | READY | `start_implementation` | `dependencies_complete`, `branch_available`, `budget_available` | IMPLEMENTING | ON_TASK_START | KERNEL (scheduler) |
 | IMPLEMENTING | `submit_for_review` | `output_status == COMPLETED`, `has_commit`, `required_evidence_present(TESTED)` | READY_FOR_REVIEW | — | SENIOR_DEV |
+| IMPLEMENTING | `analysis_done` | `output_status_is_completed`, `analysis_only_task` (label `analysis-only`) | COMPLETE | ON_TASK_COMPLETE | KERNEL |
 | IMPLEMENTING | `partial` | `handover_present` | IMPLEMENTING (re-queue) | ON_AGENT_HANDOFF | SENIOR_DEV |
 | IMPLEMENTING | `block` | `escalations_non_empty` | BLOCKED | ON_TASK_BLOCKED | SENIOR_DEV |
 | READY_FOR_REVIEW | `start_review` | `reviewer_role != implementer_role`, `reviewer_run_model != implementer_model OR cross_model_review == false` | LEAD_DEV_REVIEW | — | KERNEL |
@@ -976,6 +998,8 @@ Note: PHASE_REVIEW/USER_GATE at feature level are projections of the phase state
 | BLOCKED | `unblock` | `blocker_resolved` | previous | — | ORCHESTRATOR, SCRUM_MASTER, USER |
 | any except COMPLETE | `cancel` | — | CANCELLED | ON_TASK_CANCELLED | USER |
 | IMPLEMENTING | `force_review` | — | READY_FOR_REVIEW | — | USER |
+
+`analysis_done` is the single completion path for non-code work (no commit, no review): the `OutputApplier` raises it instead of the table-mapped event when the item carries label `analysis-only` and the output status is `COMPLETED` (E06-S02). GDD readiness (E06-S02), phase plan (E06-S04), REWORK intake (E07-S06) and CHANGE analysis (E07-S07) tasks use it; later analysis tasks reuse it rather than adding rows.
 
 Integration for stories = squash WIP, push branch, open PR (kernel), run CI (§62); merge into the feature/integration branch is automatic for non-protected branches; merge to protected base is a protected action.
 
@@ -1127,7 +1151,7 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
     If the agent returns PARTIAL, the scheduler immediately re-queues with escalation_bump so the upgrade takes effect.
 ```
 
-### 5.3 Fallback (§21–§22) — `ModelRouter.select` / `fallback`
+### 5.3 Fallback (§21–§22) — `ModelRouter.select` / `fallback`, executor side effects, recovery
 
 ```text
  select(role, policy, profile, effort, exclude, task_override):
@@ -1144,16 +1168,33 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
       return RoutingDecision(m, effort, is_fallback = m not in policy.preferred, rejected)
  4. raise BlockedProvider(rejected)
 
- fallback(run, trigger, profile):
- 5. CheckpointManager.checkpoint(run, HANDOFF, handover=build_handover(run, reason="FALLBACK", partial_output))   # §22 before switching
- 6. fire ON_MODEL_FALLBACK (chains ON_AGENT_HANDOFF); ledger MODEL_FALLBACK{trigger, from=run.model_id}
- 7. if run.fallbacks >= max_fallbacks_per_run → run.state = BLOCKED_PROVIDER; escalate(level=3) ; stop
- 8. exclude = [run.model_id] + models of same provider if trigger ∈ {PROVIDER_OUTAGE, QUOTA_EXHAUSTED, RATE_LIMIT}
-    if trigger == CONTEXT_OVERFLOW: profile.estimated_context_tokens = measured; prefer larger window
-    if trigger == BUDGET_RESTRICTION: prefer cheaper (sort surviving by output cost asc)
- 9. decision = select(run.role, policy, profile, run.effort, exclude=exclude); decision.is_fallback = True; decision.trigger = trigger
-10. new_run = AgentExecutor.start(agent with decision.model_id, item, purpose, handover=handover, parent_run_id=run.id)
-    run.state = HANDED_OVER; handover.to_run_id = new_run.id      # §132 "Claude assumes SeniorDev role, reads handover, continues"
+ fallback — split between runtime.AgentExecutor (side effects) and ModelRouter.fallback(FallbackRequest) (decision); E01-S28:
+ 5. [executor] handover = build_handover(run, reason="FALLBACK", latest PARTIAL_OUTPUT or None)
+               ckpt = CheckpointManager.checkpoint(run, HANDOFF, handover=handover)              # §22 before switching
+ 7. [router]   if request.fallbacks_so_far >= request.max_fallbacks → raise BlockedProvider([(current_model_id, "max_fallbacks")])
+ 8. [router]   exclude = [current_model_id] + every model of the same provider if trigger ∈ PROVIDER_WIDE_TRIGGERS
+               (= {PROVIDER_OUTAGE, QUOTA_EXHAUSTED, RATE_LIMIT})
+               CONTEXT_OVERFLOW: profile.estimated_context_tokens = measured_context_tokens; survivors by context window desc
+               BUDGET_RESTRICTION: survivors by output_cost_per_mtok_usd asc
+ 9. [router]   decision = select(role, policy, profile, effort, exclude=exclude); decision.is_fallback = True; decision.trigger = trigger
+               (pure: no ledger, no checkpoint, no run start)
+ 6. [executor] ledger MODEL_FALLBACK{trigger, from=run.model_id, to=decision.model_id, handover_id, checkpoint_id, rejected};
+               fire ON_MODEL_FALLBACK with the same payload (chains ON_AGENT_HANDOFF; the handoff attachment is a no-op because
+               checkpoint_id and handover_id are present — ARCHITECTURE.md §4.1)
+10. [executor] one UnitOfWork: run.state = HANDED_OVER, item unassigned, ledger AGENT_RUN_ENDED{state: HANDED_OVER, trigger};
+               new_run = AgentExecutor.start(agent with decision.model_id/effort, item, purpose, handover=handover,
+                                             parent_run_id=run.id, routing=decision); new_run.fallbacks = run.fallbacks + 1
+               close_handover(handover.id, new_run.id)       # §132 "Claude assumes SeniorDev role, reads handover, continues"
+    BlockedProvider (step 7 or 9) → run.state = BLOCKED_PROVIDER; ledger ERROR{kind: BLOCKED_PROVIDER}; ApprovalRequest(ESCALATION, USER)
+               (§21 level 3); item unassigned; ON_TASK_FAILED. The HANDOFF checkpoint and handover remain for a manual resume.
+
+ Execution order is 5 → 7–9 → 6 → 10 (the ledger event names the target model, so it follows the decision).
+
+ recovery path (ARCHITECTURE.md §5.3 step 5, runtime.RecoveryManager) — not a FallbackRequest:
+    decision = select(role, policy, profile, ckpt.effort, exclude=[ckpt.model_id] if that adapter is unhealthy else [])
+    if decision.model_id != ckpt.model_id → ledger MODEL_FALLBACK{trigger: PROVIDER_OUTAGE, from: ckpt.model_id, to: decision.model_id}
+                                            and fire ON_MODEL_FALLBACK
+    the interrupted run ends HANDED_OVER; the new run starts with the handover (reason RECOVERY) and parent_run_id = interrupted run
 ```
 
 ### 5.4 Context-first retrieval (§40, §42) — `ContextManager.build` (ADR-0012)

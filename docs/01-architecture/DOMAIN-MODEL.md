@@ -1000,6 +1000,14 @@ class AgentInput(WalkModel):
     instructions_markdown: str = Field(default="", description="Rendered task prompt (kernel-owned template, versioned)")
 
 
+class TriageVerdict(WalkModel):
+    """Structured TRIAGE result (§10.8: QC finds severity; Lead Dev triages owner and may confirm or change severity). E03-S15."""
+    severity: Severity
+    owner_role: AgentRole
+    rationale: str
+    propose_wont_fix: bool = False
+
+
 class AgentOutput(WalkModel):
     """§126 structured output — every listed field present. Persisted (never chain-of-thought, §22)."""
     status: AgentOutputStatus                         # Status
@@ -1019,6 +1027,8 @@ class AgentOutput(WalkModel):
     debate_position: DebatePosition | None = None                         # §45 (walk.debate.models)
     observations: list[ObservationDraft] = Field(default_factory=list)    # §96
     no_context_change_reason: str | None = Field(default=None, description="Required if context_updates is empty and status != FAILED")
+    triage: TriageVerdict | None = Field(default=None, description="Required for purpose TRIAGE with status COMPLETED")   # E03-S15
+    reopen_bugs: list[BugId] = Field(default_factory=list, description="QC only: closed bugs that regressed (raises regression_reopen)")   # E03-S15
 ```
 
 ### 4.3 `walk.effort` (§17–§19)
@@ -1033,7 +1043,7 @@ class EffortRequest(WalkModel):
 
 
 class EffortResolution(FrozenModel):
-    """Result of INTERFACES.md §7.1 algorithm; written as EFFORT_SET ledger payload."""
+    """Result of INTERFACES.md §5.2 algorithm; written as EFFORT_SET ledger payload."""
     role_default: Effort
     complexity_component: Effort
     risk_bump: int
@@ -1290,6 +1300,9 @@ class HookResult(FrozenModel):
     status: Literal["OK", "FAILED", "SKIPPED", "TIMEOUT"]
     duration_ms: int
     message: str = ""
+
+
+HookCallable = Callable[[HookContext], Awaitable[None]]   # built-in implementations live in walk.orchestrator.builtin_hooks (ADR-0016)
 ```
 
 ### 4.7 `walk.memory` — project memory documents (§22, §33, §36–§39, §42)
@@ -1306,7 +1319,7 @@ class Freshness(WalkModel):
 
 
 class FreshnessAssessment(FrozenModel):
-    """Result of INTERFACES.md §8.2 classification."""
+    """Result of INTERFACES.md §5.5 classification."""
     status: FreshnessStatus
     reason: str
     changed_relevant_files: list[str] = Field(default_factory=list)
@@ -1666,6 +1679,23 @@ class RoutingDecision(FrozenModel):
     trigger: FallbackTrigger | None = None
 
 
+MAX_FALLBACKS_PER_RUN = 2                                   # ARCHITECTURE.md §5.5
+
+
+class FallbackRequest(FrozenModel):
+    """Input of ModelRouter.fallback (INTERFACES.md §5.3 steps 7–9). Carries plain data instead of an AgentRun because
+    model_router may not import runtime (ARCHITECTURE.md §2.2). Built by runtime.AgentExecutor. E01-S28."""
+    role: AgentRole
+    policy: ModelPolicy                                     # walk.agents.models
+    current_model_id: ModelId
+    trigger: FallbackTrigger
+    profile: TaskProfile
+    effort: Effort
+    fallbacks_so_far: int = Field(description="AgentRun.fallbacks of the failing run (chain count)")
+    max_fallbacks: int = MAX_FALLBACKS_PER_RUN
+    measured_context_tokens: int | None = None              # CONTEXT_OVERFLOW only
+
+
 class ProviderSessionRef(FrozenModel):
     """Opaque provider-side session handle enabling native resume (Claude session_id / Codex thread id)."""
     provider: str
@@ -1794,8 +1824,21 @@ class LedgerEvent(FrozenModel):
     outcome: Literal["OK", "FAILED", "DENIED", "SKIPPED"] | None = None
     payload: JsonDict = Field(default_factory=dict, description="Kind-specific structured detail (e.g. from/to states, trigger, sha)")
     behavior_versions: dict[str, str] = Field(default_factory=dict, description="§82 'with which version' — workflow/constitution/skill versions in effect")
+```
 
+Ledger payload contracts that other stories read (keys are normative; a writer may add keys, never drop or rename these). Writers per `ARCHITECTURE.md` §4.3.
 
+| Kind | `work_item_id` / `run_id` | Payload keys | Writer (story) | Read by |
+|---|---|---|---|---|
+| `PROJECT_STARTED` | — / — | `kernel_instance`, recovery counts from `RecoveryReport` (`interrupted`, `resumed_native`, `restarted_with_handover`, `requeued`, `failed`) | `Orchestrator.start` (E01-S29) | status, reports |
+| `MODEL_FALLBACK` | failing item / failing run | executor path: `trigger`, `from`, `to`, `handover_id`, `checkpoint_id`, `rejected`; recovery path: `trigger` (= `PROVIDER_OUTAGE`), `from`, `to` | `AgentExecutor` / `RecoveryManager` (E01-S28) | `ON_MODEL_FALLBACK` hooks, retrospective `fallbacks` metric |
+| `RECOVERY_RESUMED` | item / new run | `from_run_id`, `mode` (`native` \| `handover`), `checkpoint_seq`, `handover_id` | `RecoveryManager` (E01-S28) | reports |
+| `BUG_CREATED` | the bug / creating run | `bug_id`, `parent_id`, `severity`, `related_feature_id`, `found_in_run_id`, `found_against_commit`, `external_ref` | `Orchestrator` via `BugIntake` (E03-S14) | `top_defect` (E07-S08), reports |
+
+`BUG_CREATED.parent_id` is the work item the defect is attributed to: `bug.parent_id` when set, else `bug.related_feature_id`, else `null`. `severity` is the bug's `Severity` value at creation (triage may change it later; the ledger keeps the creation value).
+
+```python
+# src/walk/telemetry/models.py (continued)
 class Evidence(FrozenModel):
     """§6.6 evidence record. Files live under `.ai/<features|bugs|phases>/<id>/evidence/`; `evidence` table indexes them."""
     id: EvidenceId

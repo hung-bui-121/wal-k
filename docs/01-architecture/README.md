@@ -20,5 +20,7 @@ Source of truth for requirements: `requirements/WAL_K_REQ.md` (cited as `§NN`).
 | [adr/ADR-0011-effort-mapping-per-provider.md](adr/ADR-0011-effort-mapping-per-provider.md) | `LOW..VERY_HIGH` → Claude `effort` / Codex `model_reasoning_effort` via configurable model families, role defaults, degradation and re-queue semantics. |
 | [adr/ADR-0012-context-ranking-algorithm.md](adr/ADR-0012-context-ranking-algorithm.md) | Mandatory + ranked context tiers, deterministic relevance × freshness × role-weight scoring, token budget by effort, source slicing. |
 | [adr/ADR-0013-agent-constitution-schema.md](adr/ADR-0013-agent-constitution-schema.md) | Markdown + front-matter constitution schema for the §12 fields, narrowing-only project overrides, model-independence lint. |
+| [adr/ADR-0015-unity-mcp-provider.md](adr/ADR-0015-unity-mcp-provider.md) | *Proposed.* Unity MCP as an optional `ToolKind.MCP` provider: in-house stdio client, protocol versions, tool bindings with fixed arguments, scrubbed server env. |
+| [adr/ADR-0016-builtin-hook-placement.md](adr/ADR-0016-builtin-hook-placement.md) | Built-in hook callables live in `walk.orchestrator.builtin_hooks`; `walk.hooks` stays registry + dispatcher; composition root registers them once. |
 
 Reading order for implementers: ADR-0001 → ARCHITECTURE → DOMAIN-MODEL → INTERFACES → remaining ADRs as referenced.

@@ -728,24 +728,24 @@ _pending_
 Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is registered as a `required=True` builtin hook with priority < 50, fires in its trigger path, and cannot be disabled by project configuration.
 
 #### Scope
-- In: `builtins.py`, `register_builtins()` body, wiring of hook callables to E01 services, exclusion table for later stories.
+- In: `walk.orchestrator.builtin_hooks` (`BuiltinHookDeps`, `builtin_hooks`, `register_builtins`; ADR-0016 — `walk.hooks` may not import runtime/integrations), wiring of hook callables to E01 services, exclusion table for later stories.
 - Out: ledger writes (done at §4.3 write points, WBS.md §3.5); project hooks (E02-S09); attachments listed in the exclusion table.
 
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/hooks/builtins.py` | create | `BuiltinHookDeps`, `builtin_hooks`, `register_builtins` |
-| `src/walk/hooks/service.py` | modify | `DefaultHookManager.register_builtins` delegates to `builtins.register_builtins(self, deps)` |
-| `src/walk/hooks/__init__.py` | modify | re-export `BuiltinHookDeps` |
-| `src/walk/cli/composition.py` | modify | — (builds `BuiltinHookDeps` and calls `register_builtins` after all services exist) |
+| `src/walk/orchestrator/builtin_hooks.py` | create | `BuiltinHookDeps`, `builtin_hooks`, `register_builtins` |
+| `src/walk/orchestrator/__init__.py` | modify | re-export `BuiltinHookDeps`, `register_builtins` |
+| `src/walk/cli/composition.py` | modify | — (builds `BuiltinHookDeps` and calls `register_builtins(hook_manager, deps)` once, after all services exist and before project hooks load; ADR-0016) |
 | `tests/hooks/test_builtins.py` | create | — |
 | `tests/hooks/test_builtins_required.py` | create | — |
 
 #### Interface contract
 ```python
-# src/walk/hooks/builtins.py
+# src/walk/orchestrator/builtin_hooks.py  (ADR-0016)
 class BuiltinHookDeps(WalkModel):
     """Protocol-typed service handles the builtin hooks call (arbitrary_types_allowed)."""
+    hooks: HookManager                     # nested fire (ON_MODEL_FALLBACK → ON_AGENT_HANDOFF, ON_AGENT_START → ON_CONTEXT_STALE)
     checkpoints: CheckpointManager
     memory: MemoryManager
     git: GitProvider
@@ -768,9 +768,9 @@ Registered MUST hooks (id → behaviour; all `required=True`, `kind="builtin"`, 
 | `ON_TASK_COMPLETE` | `builtin.remaining_work_check` | 10 | reads feature/bug doc; if section `Remaining Work` non-empty and not `- none` → `telemetry.counter("remaining_work_nonempty")` and payload flag `remaining_work_present=True` (does not fail; §6.5 guard decides) |
 | `ON_AGENT_START` | `builtin.freshness_check` | 10 | for each memory doc id in `ctx.payload["context_doc_ids"]`: `memory.assess_freshness`; non-CURRENT → `fire(ON_CONTEXT_STALE)` (E04-S04 adds flagging; here fires only) |
 | `ON_AGENT_CHECKPOINT` | `builtin.wip_commit` | 10 | no-op guard asserting `ctx.payload["wip_commit_done"] is True` (the commit is made inside `CheckpointManager.checkpoint`; the hook fails closed if the invariant is violated) |
-| `ON_AGENT_END` | `builtin.final_checkpoint` | 10 | `checkpoints.checkpoint(run, END)` |
-| `ON_AGENT_HANDOFF` | `builtin.handoff_checkpoint_and_handover` | 10 | `checkpoints.checkpoint(run, HANDOFF, handover=ctx.payload["handover"])` (which writes the handover document) |
-| `ON_MODEL_FALLBACK` | `builtin.fallback_chain` | 10 | `fire(ON_AGENT_HANDOFF, ctx)` |
+| `ON_AGENT_END` | `builtin.final_checkpoint` | 10 | no-op when `ctx.payload` carries `checkpoint_id` (the executor's END checkpoint, E01-S27 Behavior 10(b)); else `checkpoints.checkpoint(run, END)` |
+| `ON_AGENT_HANDOFF` | `builtin.handoff_checkpoint_and_handover` | 10 | no-op when `ctx.payload` carries both `checkpoint_id` and `handover_id` (E01-S28 Behavior 3 already checkpointed and wrote the handover); else `checkpoints.checkpoint(run, HANDOFF, handover=ctx.payload["handover"])` (which writes the handover document) |
+| `ON_MODEL_FALLBACK` | `builtin.fallback_chain` | 10 | `hooks.fire(ON_AGENT_HANDOFF, ctx)` with the payload forwarded unchanged — creates no checkpoint itself, so with `checkpoint_id` + `handover_id` present the chained handoff hook is a no-op and project hooks on `ON_AGENT_HANDOFF` still observe the fallback |
 | `ON_BUDGET_EXHAUSTED` | `builtin.budget_block` | 10 | `checkpoints.checkpoint(run, PAUSE)`; `executor.pause(run_id)` → state `BLOCKED_BUDGET` via executor API; `permissions.request_approval(kind="ESCALATION", approver=USER, …)` |
 | `ON_PROTECTED_ACTION_REQUESTED` | `builtin.pause_for_approval` | 10 | `executor.pause(run_id)` → `PAUSED_FOR_APPROVAL` |
 | `ON_TASK_CANCELLED` | `builtin.cancel_cleanup` | 10 | `executor.cancel(run_id, reason)`; sandbox removal is performed by executor |
@@ -787,6 +787,7 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 5. `builtin.freshness_check` fires `ON_CONTEXT_STALE` once per non-CURRENT doc with payload `{doc_id, status, reason}`.
 6. Hooks never write ledger events directly (WBS.md §3.5); `HookManager.fire` records `HOOK_EXECUTED`/`HOOK_FAILED`.
 7. `HookManager.register(hook)` with `kind="project"` and `id` equal to a required builtin id, or `enabled=False` targeting a required id, raises `ConfigError` (enforced in E01-S07; re-tested here with the real builtin set).
+8. No duplicate checkpoints (ARCHITECTURE §4.1): `builtin.final_checkpoint` is a no-op when the payload carries `checkpoint_id`; `builtin.handoff_checkpoint_and_handover` is a no-op when it carries both `checkpoint_id` and `handover_id`. A no-op still returns normally, so `HOOK_EXECUTED` (status OK) is recorded; it does not read `handover`, so the rule 2 missing-key check applies only on the checkpointing path.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
@@ -801,14 +802,15 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 | 8 | Given a stale doc id When `fire(ON_AGENT_START)` Then one `ON_CONTEXT_STALE` execution recorded | `tests/hooks/test_builtins.py::test_agent_start_fires_context_stale_for_stale_docs` |
 | 9 | Given project hook with id `builtin.final_checkpoint` and `enabled=False` When `register` Then `ConfigError` | `tests/hooks/test_builtins_required.py::test_project_cannot_disable_required_builtin` |
 | 10 | Given `fire(ON_AGENT_END)` Then exactly one `END` checkpoint and no direct ledger write by the hook (ledger count unchanged except `HOOK_EXECUTED`, `CHECKPOINT_CREATED`) | `tests/hooks/test_builtins_required.py::test_hooks_do_not_duplicate_ledger_events` |
+| 11 | Given an `ON_AGENT_END` payload with `checkpoint_id` and an `ON_MODEL_FALLBACK` payload with `checkpoint_id` and `handover_id` When both are fired Then no new checkpoint row and no new `.ai/handovers/` document exist, `ON_AGENT_HANDOFF` was fired once, and all three builtin executions are `OK` | `tests/hooks/test_builtins_required.py::test_checkpoint_hooks_noop_when_executor_already_checkpointed` |
 
 #### Evidence required
 - Quality gate output.
 - Demo: `walk run --once` on a bootstrapped repo then `walk ledger query --kind HOOK_EXECUTED --limit 5` → shows `builtin.memory_index` under `ON_PROJECT_START`.
 
 #### Notes
-- ARCHITECTURE §4.1 (table), §4.3; ADR-0009 D-7; WBS.md §3.5.
-- `NEW NAME:` `BuiltinHookDeps`, `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `path`, `remaining_work_present`.
+- ARCHITECTURE §4.1 (table), §4.3; ADR-0009 D-7; ADR-0016 (module placement and single registration call site); WBS.md §3.5.
+- `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`), `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `path`, `remaining_work_present`.
 - Pitfall: `ON_MODEL_FALLBACK → ON_AGENT_HANDOFF` is a nested `fire`; ensure `HookManager.fire` is re-entrant (no shared mutable state).
 - Commit subject: `feat: register builtin must hooks (E02-S08)`.
 
@@ -1552,7 +1554,7 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 2. Invariant 7: every protected action resolves to `REQUIRE_APPROVAL(USER)` and `set-autonomy` is the only path changing `autonomy_level_max`.
 3. Invariant 10: no code path other than `approve_artifact` writes under `.ai/approved/`; `verify_approved_artifacts` runs at startup.
 4. Invariant 11: no provider-specific skill content outside `adapters/*/projector.py`; `walk skills check-drift` clean on the demo repo.
-5. MUST hooks: every row of ARCHITECTURE §4.1 is registered in `builtins.py` or listed in the E02-S08 deferral table with a story id.
+5. MUST hooks: every row of ARCHITECTURE §4.1 is registered in `src/walk/orchestrator/builtin_hooks.py` or listed in the E02-S08 deferral table with a story id; `src/walk/hooks/` imports nothing from `walk.runtime`, `walk.integrations` or `walk.orchestrator` (ADR-0016).
 6. Secret hygiene: `grep -rE` over `tests/` and `.ai/` fixtures with `SECRET_PATTERNS` yields only the deliberate test samples inside `tests/memory/test_secrets.py` and `tests/runtime/test_boundary.py`.
 7. Each defect → one `E02-Bnn` story using the template, `Depends on: E02-R01`, linked here; `BLOCKER` severity noted when it breaks the gate.
 8. Commit `docs: review epic 02 stories s01-s16 (E02-R01)` and push.
@@ -1563,7 +1565,7 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 | 1 | Given each story commit When diffed against its Files table Then no unlisted file without justification | `tests/e2e/test_e02_gate.py::test_bootstrap_creates_production_kit` (re-run as part of review; manual check recorded in Evidence) |
 | 2 | Given each acceptance row When `pytest <nodeid>` Then passes | `tests/e2e/test_e02_gate.py::test_doctor_passes_and_writes_manifest` |
 | 3 | Given the demo repo When `walk doctor --strict` Then exit 0 | `tests/cli/test_cmd_doctor_fix.py::test_strict_clean_exit_zero` |
-| 4 | Given §4.1 table When compared with `builtins.py` + deferral table Then every row accounted for | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
+| 4 | Given §4.1 table When compared with `walk.orchestrator.builtin_hooks` + deferral table Then every row accounted for | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
 | 5 | Given fixtures When scanned for secrets Then only deliberate samples | `tests/memory/test_secrets.py::test_contains_secret_patterns_and_negative` |
 
 #### Evidence required

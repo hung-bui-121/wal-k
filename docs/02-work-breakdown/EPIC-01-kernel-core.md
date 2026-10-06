@@ -687,7 +687,7 @@ A deterministic, synchronous, priority-ordered hook dispatcher with timeouts, fa
 
 #### Scope
 - In: `hooks.models`, `hooks.protocols`, `DefaultHookManager` engine, `HookExecutionRepository`, `HookFailed`.
-- Out: MUST attachment table (E02-S08), `hooks.yaml` parsing (E02-S09) — `register_builtins` registers nothing and `load_project_hooks` raises `NotSupported` until then.
+- Out: MUST attachment table (E02-S08 — the callables live in `walk.orchestrator.builtin_hooks` and are registered by the composition root through `register(hook, fn)`, ADR-0016; `walk.hooks` has no `register_builtins`), `hooks.yaml` parsing (E02-S09) — `load_project_hooks` raises until then.
 
 #### Files
 | Path | Action | Public symbols |
@@ -710,7 +710,6 @@ class HookFailed(PermanentError): """A FAIL_CLOSED hook failed; carries hook_id 
 class DefaultHookManager:
     def __init__(self, repo: HookExecutionRepository, ledger: LedgerManager, clock: Clock, *, callables: dict[str, HookCallable] | None = None) -> None: ...
     def register(self, hook: Hook, fn: HookCallable | None = None) -> None: ...   # builtin: fn required (or resolvable callable_path); project: fn None
-    def register_builtins(self) -> None: ...                                       # no-op in this story (E02-S08)
     def load_project_hooks(self, path: str) -> list[Hook]: ...                     # raises NotSupported until E02-S09
     async def fire(self, name: HookName, ctx: HookContext) -> list[HookResult]: ...
     def hooks_for(self, name: HookName) -> list[Hook]: ...
@@ -2791,7 +2790,7 @@ A run that hits a transient provider error is retried with backoff; a run whose 
 | `src/walk/runtime/sandbox.py` | modify | `DefaultSandboxManager.adopt` |
 | `src/walk/runtime/recovery.py` | create | `RecoveryManager`, `RecoveryReport` |
 | `src/walk/runtime/__init__.py` | modify | re-exports |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§1.4 `fallback` signature, §1.13 `SandboxManager.adopt`, §5.3 step ownership) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.4 `fallback` signature, §1.13 `SandboxManager.adopt`, §5.3 step ownership — already applied by the architect 2026-10-06; edit only if the implementation deviates) |
 | `tests/model_router/test_fallback.py` | create | — |
 | `tests/runtime/test_executor_retry.py` | create | — |
 | `tests/runtime/test_executor_fallback.py` | create | — |
@@ -2881,9 +2880,9 @@ class RecoveryManager:
 
 #### Notes
 - INTERFACES §5.3 steps 5–10; ARCHITECTURE §4.3 (`MODEL_FALLBACK`, `RETRY`, `RECOVERY_RESUMED` are `runtime.AgentExecutor` write points; `RecoveryManager` is in the same package and writes them on its behalf), §5.1, §5.3, §5.5; ADR-0002 D-5/D-6; ADR-0004 D-5/D-6; ADR-0011 D-6.
-- Architecture inconsistency (resolved here, needs architect confirmation): INTERFACES §1.4 declares `ModelRouter.fallback(run: AgentRun, …)` and §5.3 puts checkpointing and `AgentExecutor.start` inside it, but ARCHITECTURE §2.2 forbids `model_router → runtime`. This story splits it: the router owns the decision (steps 7–9, `FallbackRequest`), the executor owns the side effects (steps 5, 6, 10). INTERFACES §1.4/§5.3 are updated in this commit.
+- Architecture inconsistency resolved (architect, 2026-10-06): ARCHITECTURE §2.2 forbids `model_router → runtime`, so the router owns the decision (steps 7–9, `FallbackRequest`) and the executor owns the side effects (steps 5, 6, 10). INTERFACES §1.4/§1.13/§5.3, DOMAIN-MODEL §4.10 (`FallbackRequest`, `MAX_FALLBACKS_PER_RUN`) and §4.12 (`MODEL_FALLBACK`/`RECOVERY_RESUMED` payload contracts) and ARCHITECTURE §5.3 (recovery `MODEL_FALLBACK`, interrupted run `HANDED_OVER`) already carry this design.
 - `NEW NAME:` `FallbackRequest`, `MAX_FALLBACKS_PER_RUN`, `PROVIDER_WIDE_TRIGGERS`, `RETRY_DELAYS_S`, `RESUME_INSTRUCTION`, `SandboxManager.adopt`, `RecoveryManager`, `RecoveryReport` (`RecoveryManager` is already referenced by E02-S11), ledger payload keys `kind="INTERRUPTED"|"BLOCKED_PROVIDER"`, `mode`.
-- Cross-epic coordination (non-blocking): E02-S08 `builtin.fallback_chain` fires `ON_AGENT_HANDOFF`, whose MUST attachment checkpoints and writes a handover; the HANDOFF checkpoint and handover already exist when `ON_MODEL_FALLBACK` fires here. The payload carries `checkpoint_id` and `handover_id`; E02-S08's handoff hook must be a no-op when both are present.
+- Cross-epic coordination (non-blocking): E02-S08 `builtin.fallback_chain` fires `ON_AGENT_HANDOFF`, whose MUST attachment checkpoints and writes a handover; the HANDOFF checkpoint and handover already exist when `ON_MODEL_FALLBACK` fires here. The payload carries `checkpoint_id` and `handover_id`; E02-S08's handoff hook is a no-op when both are present (E02-S08 Behavior 8, ARCHITECTURE §4.1).
 - Pitfall: git refuses to check out one branch in two worktrees; never call `sandbox.create` for a child run (rule 5). The old run's task must be fully finished (adapter cancelled, stream closed) before the child run starts in the same directory.
 - Pitfall: `sleep` is injected so tests never wait and stay deterministic; jitter lives only in the default `sleep` wrapper built by the composition root.
 - Commit subject: `feat: add model fallback with handover, retries and startup recovery (E01-S28)`.
@@ -2973,7 +2972,7 @@ class DefaultOrchestrator:
 6. Start: (12) `handover = checkpoints.latest_open_handover(item.id)`; (13) `run = executor.start(agent, item, route.purpose, handover=handover, routing=routing, effort_resolution=resolution)`; in one `UnitOfWork` `idempotency.put(key, "schedule", run.id)`; when a handover was passed, `checkpoints.close_handover(handover.id, run.id)`; `started += 1`. An exception from `start` is logged, counted (`scheduler.start_failed`) and does not abort the tick.
 7. `tick` never raises for a single item's failure; it raises only when the project row is missing (`ConfigError`).
 8. `StatusBuilder.build()`: `project_key`, `paused`, `current_phase` (`PhaseRepository.get(project.current_phase_id)` or `None`), `phase_progress` = item count per `WorkItemState` for the current phase (all items when no phase), `gdd_coverage = {}` (E09-S04), `active_runs` = runs in `RUNNING|PAUSED_FOR_APPROVAL|PAUSED_BY_USER`, `blocked_items` = ids of `BLOCKED` items, `pending_approvals` from the injected callable (`[]` when `None`; E02-S11 wires it), `open_debates = []`, `model_usage` = `UsageReport` per `model_id` summed from `COST_RECORDED` ledger payloads (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd`; `turns`/`tool_calls`/`duration_s` 0), `qc_status = {}`, `build_status = None`, `budgets = budgets.applicable(BudgetSubject(project_key))`, `open_improvement_candidates = 0`.
-9. `DefaultOrchestrator.start()` (ARCHITECTURE §3.4 steps 4–6; steps 1–3 belong to the daemon, E01-S30, and E02): `hooks.register_builtins()`; `report = recovery.recover()`; ledger `PROJECT_STARTED` (payload `kernel_instance`, recovery counts); fire `ON_PROJECT_START`; snapshot `status`; then loop until `stop()`: `started = await tick()`, refresh the status snapshot, `await asyncio.wait_for(wake_event.wait(), poll_interval_s)` (timeout is normal), clear the event. `wake()` sets the event. `tick()` delegates to `Scheduler.tick`.
+9. `DefaultOrchestrator.start()` (ARCHITECTURE §3.4 steps 5–6; steps 1–3 belong to the daemon, E01-S30, and E02; step 4 — builtin hook registration — is done by the composition root before `start`, ADR-0016): `report = recovery.recover()`; ledger `PROJECT_STARTED` (payload `kernel_instance`, recovery counts); fire `ON_PROJECT_START`; snapshot `status`; then loop until `stop()`: `started = await tick()`, refresh the status snapshot, `await asyncio.wait_for(wake_event.wait(), poll_interval_s)` (timeout is normal), clear the event. `wake()` sets the event. `tick()` delegates to `Scheduler.tick`.
 10. `stop(drain=True)`: ends the loop; `drain=True` → `executor.pause(run_id)` for every running run (PAUSE checkpoint, `PAUSED_BY_USER`); `drain=False` → adapters cancelled without checkpoint and runs left `RUNNING`, so the next start's recovery resumes them from their latest checkpoint. `run_once(wait_runs=True)` = startup steps of rule 9, one `tick`, then waits until `executor.running()` is empty (so fallback and repair continuations started by the executor are included), then `stop(drain=False)`; returns the number started by the tick. `status()` returns the latest snapshot (built at least once in `start`/`run_once`).
 11. Deferred methods raise `ConfigError("implemented in <ID>")`: `submit_feature` → E03-S09, `plan_phase` → E06-S04, `start_phase` → E07-S02, `request_phase_review` → E07-S04, `decide_phase` → E07-S05, `handle_escalation` → E05-S02, `pause`/`resume`/`cancel_work_item` → E02-S13, `force_review` → E03-S16.
 

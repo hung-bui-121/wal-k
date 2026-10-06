@@ -263,7 +263,7 @@ Whenever the GDD index changes, the kernel runs a readiness analysis — determi
 | `src/walk/workflow/guards.py` | modify | guard `analysis_only_task` |
 | `src/walk/workflow/models.py` | modify | `WorkItemDraft.labels` (skip if E03-S09 already added draft labels — E06-X01 verifies) |
 | `src/walk/workflow/service.py` | modify | — (`create` copies `draft.labels` to the item) |
-| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§3.2 `analysis_done` row; §4.1 `WorkItemDraft.labels`) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§3.2 `analysis_done` row already applied by the architect 2026-10-06; §4.1 `WorkItemDraft.labels` added here) |
 | `src/walk/runtime/output_applier.py` | modify | — (label `analysis-only` + status `COMPLETED` → event `analysis_done` instead of the table-mapped event) |
 | `src/walk/agents/templates/ANALYSIS.md.j2` | modify | — (`gdd_readiness` block) |
 | `src/walk/cli/composition.py` | modify | — (builds `GddReadinessAnalyzer`; calls `register(run_completion_handler)`) |
@@ -383,7 +383,7 @@ New table row (`story_workflow.yaml`, applies to STORY and TASK): `IMPLEMENTING 
 
 #### Notes
 - §50 "small detail: agent decides; major product decision: escalate" is the MINOR/MAJOR split of Behavior 4; §58 "BLOCKED rather than inventing" is `blocked_areas`, consumed by E06-S04.
-- `NEW NAME:` see epic header (S02 row); plus label `analysis-only`, guard `analysis_only_task`, event `analysis_done` and its `story_workflow.yaml` row (INTERFACES §3.2 has no completion path for non-code tasks; E05-S03 set the precedent of planner-added rows marked `NEW NAME:`). E07 intake/change-analysis tasks can reuse the same label — E07-X01 to decide; because `RunCompletionHandler.register` rejects duplicate `(kind, purpose, event)` keys, a second `ANALYSIS`/`analysis_done` consumer must add a label branch to `on_completion` (or E07-X01 extends the handler to multiple entries).
+- `NEW NAME:` see epic header (S02 row); plus label `analysis-only`, guard `analysis_only_task`, event `analysis_done` and its `story_workflow.yaml` row (INTERFACES §3.2 has no completion path for non-code tasks; E05-S03 set the precedent of planner-added rows marked `NEW NAME:`). E07 REWORK intake (E07-S06) and CHANGE analysis (E07-S07) tasks reuse the same label and row (architect decision 2026-10-06, INTERFACES §3.2 — later analysis tasks reuse it instead of adding rows); because `RunCompletionHandler.register` rejects duplicate `(kind, purpose, event)` keys, a second `ANALYSIS`/`analysis_done` consumer must add a label branch to `on_completion` (or E07-X01 extends the handler to multiple entries).
 - Pitfall: the analyzer runs post-apply, after the task is already `COMPLETE`; never raise events on the task from `on_task_completed`.
 - Commit subject: `feat: analyse gdd readiness and route findings by autonomy (E06-S02)`.
 

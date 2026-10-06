@@ -640,7 +640,7 @@ _pending_
 | `src/walk/orchestrator/scheduler.py` | modify | `Scheduler.check_cross_model` |
 | `src/walk/orchestrator/errors.py` | modify | `CrossModelReviewUnsatisfiable(GuardRejected)` |
 | `src/walk/model_router/service.py` | modify | — (`DefaultModelRouter.select` appends `(model_id, "cross_model_review")` to `RoutingDecision.rejected` when the implementer model is deferred) |
-| `src/walk/hooks/builtins.py` | modify | `builtin.qc_cross_model` (on `ON_READY_FOR_QC`) |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `builtin.qc_cross_model` (on `ON_READY_FOR_QC`) |
 | `tests/orchestrator/test_router.py` | create | — |
 | `tests/orchestrator/test_cross_model.py` | create | — |
 | `tests/model_router/test_select_cross_model.py` | create | — |
@@ -734,7 +734,7 @@ Every structured `AgentOutput` intent is executed by the kernel in the ARCHITECT
 | `src/walk/runtime/models.py` | modify | `ChangeDiscrepancy`, `OutputApplyReport` |
 | `src/walk/workflow/service.py` | modify | — (`raise_event` merges `ctx.payload` into the transition hooks' `HookContext.payload`; E01-S09 rule 3 widened) |
 | `src/walk/workflow/repository.py` | modify | `WorkflowRepository.set_external_ref` |
-| `src/walk/hooks/builtins.py` | modify | `BuiltinHookDeps.work`, `BuiltinHookDeps.integrations`, `BuiltinHookDeps.workflow`; hooks `builtin.work_provider_sync`, `builtin.task_blocked_sync`, `builtin.commit_comment` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `BuiltinHookDeps.work`, `BuiltinHookDeps.integrations`, `BuiltinHookDeps.workflow`; hooks `builtin.work_provider_sync`, `builtin.task_blocked_sync`, `builtin.commit_comment` |
 | `src/walk/cli/composition.py` | modify | — (wires the new deps; constructs `DefaultOutputApplier` with `ToolInvoker`, `IntegrationManager`, `GitProvider`) |
 | `tests/runtime/test_output_applier_full.py` | create | — |
 | `tests/runtime/test_output_events.py` | create | — |
@@ -844,7 +844,7 @@ Kernel commit message format (`NEW NAME:`): `<prefix>(<ITEM-ID>): <first line of
 
 #### Notes
 - ARCHITECTURE §3.2 step 6, §4.1 (`ON_STATE_TRANSITION`, `ON_TASK_BLOCKED`, `ON_COMMIT` rows), §4.3, §5.4; ADR-0006 D-2 (kernel-executed side effects; permission evaluated against the acting role), ADR-0006 consequence ("`AgentOutput.changes` must match the real diff"); ADR-0005 D-6; WBS.md §3.4, §3.5.
-- Ownership fix: E02-S08 lists `ON_STATE_TRANSITION → WorkProvider.transition` and `ON_TASK_BLOCKED` under E03-S03, while E03-S03 Notes assign them to E03-S08. They are implemented **here** (E03-S03 has no `hooks/builtins.py` in its Files table). E03-S01 Scope already assigns `ON_COMMIT → WorkProvider.comment` to E03-S08.
+- Ownership fix: E02-S08 lists `ON_STATE_TRANSITION → WorkProvider.transition` and `ON_TASK_BLOCKED` under E03-S03, while E03-S03 Notes assign them to E03-S08. They are implemented **here** (E03-S03 has no `orchestrator/builtin_hooks.py` in its Files table; module placement per ADR-0016). E03-S01 Scope already assigns `ON_COMMIT → WorkProvider.comment` to E03-S08.
 - `NEW NAME:` `output_events.yaml` / `OutputEventTable` / `load_output_event_table` / `OUTPUT_EVENTS_PATH`; `ChangeDiscrepancy`, `OutputApplyReport`; `DefaultOutputApplier.reconcile_changes/commit_changes/guard_payload`; `WorkflowRepository.set_external_ref`; builtin ids `builtin.work_provider_sync`, `builtin.task_blocked_sync`, `builtin.commit_comment`; idempotency key `work.link:{from}:{to}:{kind}` (ARCHITECTURE §5.4 has none for links); kernel commit message format `<prefix>(<ID>): <summary>`; `BuiltinHookDeps.work/integrations/workflow`; payload keys `implementer_role`, `implementer_model_id`, `run_id`, `blocked_reason` written by the applier (WBS §3.4 lists the scheduler as the writer of `implementer_*` — the applier writes them for IMPLEMENT runs so later REVIEW/QC guards can read them from the transition history).
 - Also read: E01-S27 is not yet written; `src/walk/runtime/output_applier.py` and `models.py` are the assumed file names. E01-S27's "OutputApplier core" presumably hard-codes the IMPLEMENT rows; this story replaces that with the YAML table — delete the hard-coded mapping in the same commit.
 - Pitfall: `with_idempotency` joins the active `UnitOfWork` (E03-S03 rule 5). Steps 4–5 must each open their own UoW so a provider failure for the second draft does not roll back the first item.
@@ -882,7 +882,7 @@ A user feature entered with `walk feature add` becomes `Feature(IDEA)` with a fe
 | `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.submit_feature`; run-completion path calls `RunCompletionHandler.handle` |
 | `src/walk/orchestrator/commands.py` | modify | — (command kind `feature.add` → `submit_feature` + `wake`) |
 | `src/walk/runtime/output_applier.py` | modify | — (`guard_payload` adds `feature_context_sections`, `approved_artifact_ids`, `user_feature` for FEATURE runs) |
-| `src/walk/hooks/builtins.py` | modify | — (`builtin.ensure_branch` uses `branch_name_for`/`base_branch_for`) |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | — (`builtin.ensure_branch` uses `branch_name_for`/`base_branch_for`) |
 | `src/walk/cli/cmd_feature.py` | create | `feature_app`, `feature_add` |
 | `src/walk/cli/app.py` | modify | — (registers `feature` group) |
 | `src/walk/cli/composition.py` | modify | — (wires `RunCompletionHandler`, `FeatureFlow`) |
@@ -1149,15 +1149,15 @@ _pending_
 | `src/walk/integrations/protocols.py` | modify | — (`CiProvider.run_pipeline` gains keyword-only `work_item_id: WorkItemId \| None = None`) |
 | `src/walk/integrations/errors.py` | modify | `CiJobUnknown(ConfigError)` |
 | `src/walk/integrations/__init__.py` | modify | re-export `LocalCiProvider`, `CiConfig`, `load_ci_config` |
-| `src/walk/hooks/builtins.py` | modify | hooks `builtin.build_evidence_recorded` (ON_BUILD_SUCCESS, ON_BUILD_FAILURE), `builtin.test_evidence_recorded` (ON_TEST_RESULT) |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | hooks `builtin.build_evidence_recorded` (ON_BUILD_SUCCESS, ON_BUILD_FAILURE), `builtin.test_evidence_recorded` (ON_TEST_RESULT) |
 | `src/walk/cli/composition.py` | modify | — (constructs `LocalCiProvider` with the real `UnityBatchProvider` or `KernelOverrides.unity`) |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§2.4 `run_pipeline` signature: `work_item_id` kwarg) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§2.4 `run_pipeline` signature: `work_item_id` kwarg — already applied by the architect 2026-10-06; edit only if the implementation deviates) |
 | `tests/integrations/test_ci.py` | create | — |
 | `tests/integrations/test_ci_config.py` | create | — |
 | `tests/hooks/test_builtins_ci.py` | create | — |
 
 #### Interface contract
-`CiProvider.run_pipeline` per `INTERFACES.md` §2.4 plus one keyword-only argument (documented in INTERFACES in this commit):
+`CiProvider.run_pipeline` per `INTERFACES.md` §2.4 plus one keyword-only argument (INTERFACES §2.4 already carries it):
 
 ```python
 async def run_pipeline(self, worktree_path: str, commit: Sha, jobs: list[str], *, idempotency_key: str,
@@ -1236,7 +1236,7 @@ Ledger payloads: `BUILD_RESULT {job, job_kind, ok, commit, duration_s, summary, 
 
 #### Notes
 - §62 ("CI does not need to be an LLM agent"), INTERFACES §2.4 docstring (hooks + evidence), ARCHITECTURE §4.1 (`ON_BUILD_*`, `ON_TEST_RESULT` rows), §4.3, §5.4 (`ci.job:` key); WBS §3.5; E02-S08 deferral table (`ON_BUILD_*`/`ON_TEST_RESULT → evidence` assigned here).
-- `NEW NAME:` `LocalCiProvider`, `.ai/project/ci.yaml`, `CiConfig`, `CiJobSpec`, `load_ci_config`, `job_kind_for`, `CI_CONFIG_PATH`, `CiJobUnknown`, job-name form `build:<BuildTarget>` (relied on by E11-S03), builtin hook ids `builtin.build_evidence_recorded`, `builtin.test_evidence_recorded`, `run_pipeline(..., work_item_id=)` kwarg (INTERFACES change made in this commit).
+- `NEW NAME:` `LocalCiProvider`, `.ai/project/ci.yaml`, `CiConfig`, `CiJobSpec`, `load_ci_config`, `job_kind_for`, `CI_CONFIG_PATH`, `CiJobUnknown`, job-name form `build:<BuildTarget>` (relied on by E11-S03), builtin hook ids `builtin.build_evidence_recorded`, `builtin.test_evidence_recorded`, `run_pipeline(..., work_item_id=)` kwarg (INTERFACES §2.4 updated by the architect).
 - Pitfall: the per-job key includes the job **name**, not the kind, so `build:Android` and `build:iOS` on the same commit are distinct.
 - Commit subject: `feat: add local ci provider with build and test evidence (E03-S11)`.
 
@@ -1271,7 +1271,7 @@ A STORY/TASK/BUG that reaches `INTEGRATION` (after Lead Dev approval) is integra
 | `src/walk/integrations/git/provider.py` | modify | `GitCliProvider.merge_base` |
 | `tests/fakes/fake_git_provider.py` | modify | `FakeGitProvider.merge_base` |
 | `src/walk/cli/composition.py` | modify | — (constructs `IntegrationStep`) |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§2.3 `merge_base`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§2.3 `merge_base` — already applied by the architect 2026-10-06; edit only if the implementation deviates) |
 | `tests/orchestrator/test_integration_step.py` | create | — |
 | `tests/integrations/git/test_provider_remote.py` | modify | — |
 
@@ -1348,7 +1348,7 @@ class IntegrationStep:
 
 #### Notes
 - INTERFACES §3.2 note "Integration for stories = squash WIP, push branch, open PR (kernel), run CI (§62); merge into the feature/integration branch is automatic for non-protected branches; merge to protected base is a protected action"; ADR-0002 D-4; ADR-0006 D-2 (kernel performs merges), §92; ARCHITECTURE §5.4.
-- `NEW NAME:` `IntegrationStep`, `IntegrationOutcome`, `IntegrationResult`, `squash_message` (format `<kind>(<ID>): <title>`), `GitProvider.merge_base` (INTERFACES change in this commit), integration worktree path `.walk/worktrees/int-<ID>`, approval payload action `git.merge_protected` with `run_id=None`, counters `integration.error`, `integration.merge_denied`, payload keys `failed_jobs`, `pr_url`, `merged_sha`.
+- `NEW NAME:` `IntegrationStep`, `IntegrationOutcome`, `IntegrationResult`, `squash_message` (format `<kind>(<ID>): <title>`), `GitProvider.merge_base` (INTERFACES §2.3 updated by the architect), integration worktree path `.walk/worktrees/int-<ID>`, approval payload action `git.merge_protected` with `run_id=None`, counters `integration.error`, `integration.merge_denied`, payload keys `failed_jobs`, `pr_url`, `merged_sha`.
 - Also read: E01-S29 is not yet written; `orchestrator/scheduler.py` and `service.py` are the assumed names (WBS §3.7). The tick's agent admission (INTERFACES §5.1) is unchanged; this story appends a kernel-step phase after step 14.
 - Pitfall: `ci_failed` from `INTEGRATION` on a BUG has no hook in `bug_workflow` (INTERFACES §3.3) — do not rely on `ON_BUILD_FAILURE` for bugs; the provider comment and context append in rule 8 are done by the step for every kind.
 - Commit subject: `feat: add story integration step with squash pr ci and merge (E03-S12)`.
@@ -1483,7 +1483,7 @@ An item in `QC` gets an independent QC run (different role, preferably different
 | `src/walk/orchestrator/qc_flow.py` | create | `QcFlow`, `BugIntake`, `BUG_CONTEXT_INTAKE_SECTIONS` |
 | `src/walk/runtime/output_applier.py` | modify | — (QC precondition rule; `guard_payload` adds `created_bug_ids`, `qc_report_present`) |
 | `src/walk/workflow/service.py` | modify | — (`create(BugDraft)` fills `contract.acceptance_criteria` and `contract.required_evidence`) |
-| `src/walk/hooks/builtins.py` | modify | hooks `builtin.bug_created` (ON_BUG_CREATED), `builtin.qc_evidence_recorded` (ON_QC_RESULT) |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | hooks `builtin.bug_created` (ON_BUG_CREATED), `builtin.qc_evidence_recorded` (ON_QC_RESULT) |
 | `src/walk/cli/composition.py` | modify | — (registers `QcFlow`, `BugIntake` on the `RunCompletionHandler`) |
 | `tests/orchestrator/test_qc_flow.py` | create | — |
 | `tests/runtime/test_output_applier_qc.py` | create | — |
@@ -1514,7 +1514,7 @@ class BugIntake:
 
 Ledger payloads (`NEW NAME:` payload shapes):
 - `QC_RESULT {verdict: "APPROVED"|"REJECTED", workflow_event, run_id, model_id, evidence_ids, bug_ids, findings: int, fix_loops, reopen_count?}` with `work_item_id`, `role=QC`.
-- `BUG_CREATED {bug_id, severity, related_feature_id, found_in_run_id, found_against_commit, external_ref}` with `work_item_id=<bug id>`.
+- `BUG_CREATED {bug_id, parent_id, severity, related_feature_id, found_in_run_id, found_against_commit, external_ref}` with `work_item_id=<bug id>`; `parent_id = bug.parent_id or bug.related_feature_id` (may be `null`), `severity` = the bug's severity at creation. Normative contract: DOMAIN-MODEL §4.12 "Ledger payload contracts" (E07-S08 `top_defect` groups by `parent_id`).
 
 Default bug contract (in `create(BugDraft)`): `goal = title` (unchanged), `acceptance_criteria = [f"Reproduction no longer reproduces: {reproduction}", f"Expected behaviour holds: {expected}"]`, `required_evidence = [AUTOMATED_TEST]` (regression test, guard `regression_test_evidence`), `owner_role` left to triage (E01-S08 rule 2), `reviewer_role = LEAD_DEV`, `priority` from severity (`BLOCKER→P0, MAJOR→P1, MINOR→P2, TRIVIAL→P3`).
 
@@ -1537,7 +1537,7 @@ Default bug contract (in `create(BugDraft)`): `goal = title` (unchanged), `accep
 | 1 | Given a STORY in `QC` implemented on `fake-codex/sim` When a tick runs Then one QC run for role QC on `fake-claude/sim` | `tests/orchestrator/test_qc_flow.py::test_qc_run_routed_to_qc_on_different_model` |
 | 2 | Given a QC `APPROVED` output with `QC_REPORT` evidence and CI `AUTOMATED_TEST` evidence on the story When applied and completed Then story `COMPLETE`, one `QC_RESULT{verdict: APPROVED}` ledger event, provider comment `QC APPROVED` | `tests/orchestrator/test_qc_flow.py::test_qc_approved_completes_story_and_records_result` |
 | 3 | Given a QC `APPROVED` output without `QC_REPORT` When applied Then no transition, run `FAILED` with `qc_without_report`, story still `QC` | `tests/runtime/test_output_applier_qc.py::test_qc_verdict_requires_qc_report` |
-| 4 | Given a QC `REJECTED` output with one finding and one `new_bugs` draft When applied and completed Then story `REWORK` with `fix_loops == 1`, `BUG-0001` in `DISCOVERY` with `related_feature_id`, `found_in_run_id`, `found_against_commit`, `.ai/bugs/BUG-0001.md` with the four intake sections, provider row with `walk:BUG-0001`, ledger `QC_RESULT{verdict: REJECTED, bug_ids: [BUG-0001]}` and `BUG_CREATED` | `tests/orchestrator/test_qc_flow.py::test_qc_rejected_creates_bug_and_triages` |
+| 4 | Given a QC `REJECTED` output with one finding and one `new_bugs` draft When applied and completed Then story `REWORK` with `fix_loops == 1`, `BUG-0001` in `DISCOVERY` with `related_feature_id`, `found_in_run_id`, `found_against_commit`, `.ai/bugs/BUG-0001.md` with the four intake sections, provider row with `walk:BUG-0001`, ledger `QC_RESULT{verdict: REJECTED, bug_ids: [BUG-0001]}` and `BUG_CREATED` with `parent_id` = the related feature and `severity` | `tests/orchestrator/test_qc_flow.py::test_qc_rejected_creates_bug_and_triages` |
 | 5 | Given a QC `APPROVED` output that also files a MINOR bug When completed Then story `COMPLETE` and the bug in `DISCOVERY` | `tests/orchestrator/test_qc_flow.py::test_qc_approved_with_bug_files_bug_and_passes` |
 | 6 | Given the completion replayed (recovery) When `on_qc_completed` and `intake` run again Then one `QC_RESULT`, one `BUG_CREATED`, one provider row, no extra transition | `tests/orchestrator/test_qc_flow.py::test_qc_completion_idempotent` |
 | 7 | Given a story `qc_rejected` When the next IMPLEMENT run starts Then `AgentInput.handover.reason == "REASSIGN"` with the QC findings and bug ids in `remaining_work` | `tests/orchestrator/test_qc_flow.py::test_rework_after_qc_rejection_receives_handover` |
@@ -1590,7 +1590,7 @@ A `BUG` in `DISCOVERY` runs the whole §64 loop on the unified state enum (ADR-0
 | `src/walk/orchestrator/scheduler.py` | modify | — (`ADMISSION_EVENTS` rows `(BUG, READY)`, `(BUG, REWORK)` → `start_fix`) |
 | `src/walk/orchestrator/bug_flow.py` | create | `BugFlow`, `BUG_OWNER_ROLES` |
 | `src/walk/cli/composition.py` | modify | — (registers `BugFlow`) |
-| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§4.2 `TriageVerdict`, `AgentOutput.triage`, `AgentOutput.reopen_bugs`) |
+| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§4.2 `TriageVerdict`, `AgentOutput.triage`, `AgentOutput.reopen_bugs` — already applied by the architect 2026-10-06; edit only if the implementation deviates) |
 | `tests/orchestrator/test_bug_flow.py` | create | — |
 | `tests/runtime/test_output_applier_bug.py` | create | — |
 | `tests/agents/test_contract_models.py` | modify | — |
@@ -1663,7 +1663,7 @@ class BugFlow:
 
 #### Notes
 - §64 loop (QC → BUG → Triage → Assign → Fix → Review → QC Re-test → Close/Reopen) mapped by ADR-0010 D-2: Triage=DISCOVERY, Assigned=READY, Fix=IMPLEMENTING, Review=READY_FOR_REVIEW/LEAD_DEV_REVIEW, Re-test=QC, Close=COMPLETE, Reopen=REWORK. ADR-0006 D-6 (`jira.reopen` ALLOW for QC). E03-S06 Scope Out assigns the TRIAGE structured verdict to this story.
-- `NEW NAME:` `TriageVerdict`, `AgentOutput.triage`, `AgentOutput.reopen_bugs` (DOMAIN-MODEL updated in this commit), `WorkflowRepository.apply_triage`, `BugFlow`, `BUG_OWNER_ROLES`, idempotency key `work.assign:{id}:{state_version}` (ARCHITECTURE §5.4 has no assign key), approval payload reason `wont_fix_proposed`.
+- `NEW NAME:` `TriageVerdict`, `AgentOutput.triage`, `AgentOutput.reopen_bugs` (DOMAIN-MODEL §4.2 updated by the architect), `WorkflowRepository.apply_triage`, `BugFlow`, `BUG_OWNER_ROLES`, idempotency key `work.assign:{id}:{state_version}` (ARCHITECTURE §5.4 has no assign key), approval payload reason `wont_fix_proposed`.
 - Pitfall: `submit_for_review` for BUG has different guards than for STORY (INTERFACES §3.3 vs §3.2); `output_events.yaml` maps both to the same event — the guard set comes from the bug table, so never special-case kinds in the applier beyond the payload keys.
 - Commit subject: `feat: add bug triage fix review and retest loop (E03-S15)`.
 
@@ -1699,7 +1699,7 @@ QC rejection loops are bounded: when a story/task/feature hits `max_fix_loops` o
 | `src/walk/workflow/tables/feature_workflow.yaml` | modify | — (`qc_rejected → REWORK`: effect `increment_fix_loops`; `qc_rejected → BLOCKED`: effect `store_resume_state_rework`) |
 | `src/walk/workflow/tables/bug_workflow.yaml` | modify | — (`reopen → BLOCKED`: effect `store_resume_state_rework`) |
 | `src/walk/runtime/output_applier.py` | modify | — (`guard_payload` adds `max_fix_loops`, `max_reopen` from `CircuitBreakerLimits`) |
-| `src/walk/hooks/builtins.py` | modify | hook `builtin.root_cause_escalation` (ON_TASK_FAILED); `BuiltinHookDeps.limits` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | hook `builtin.root_cause_escalation` (ON_TASK_FAILED); `BuiltinHookDeps.limits` |
 | `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.force_review`, `DefaultOrchestrator.resolve_root_cause_escalations` |
 | `src/walk/orchestrator/scheduler.py` | modify | — (tick step 0: `resolve_root_cause_escalations()`) |
 | `src/walk/orchestrator/commands.py` | modify | — (command kind `work.force_review`) |
@@ -1806,7 +1806,7 @@ A feature follows its children through the rest of `feature_workflow`: it starts
 | `src/walk/workflow/guards.py` | modify | — (`required_evidence_present` for FEATURE uses `payload["required_evidence_kinds"]`) |
 | `src/walk/runtime/output_applier.py` | modify | — (FEATURE QC `APPROVED`: `set_done_dimension(QC_ACCEPTED, evidence)` before the event; payload `children_states`, `open_blocker_bug_count`) |
 | `src/walk/cli/composition.py` | modify | — (constructs `FeatureProgress`) |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§1.3 `children_states`, `open_blocker_bug_count`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.3 `children_states`, `open_blocker_bug_count` — already applied by the architect 2026-10-06; edit only if the implementation deviates) |
 | `tests/orchestrator/test_feature_progress.py` | create | — |
 | `tests/workflow/test_service_children.py` | create | — |
 | `tests/workflow/test_readiness.py` | modify | — |
@@ -1886,7 +1886,7 @@ Done-dimension setting points (`NEW NAME:` rule set; MVP default `applicable_dim
 
 #### Notes
 - §6.5 (Feature Done = sum of applicable dimensions), Invariant 6 (ARCHITECTURE §7 row 6), INTERFACES §3.1 (feature rows, `KERNEL` actor for `start_implementation`, `all_children_integrated`, `integration_passed`, `ci_failed`), §3.2 note (merge to protected base is a protected action), ADR-0006 §92 list.
-- `NEW NAME:` `FeatureProgress`, `FeatureCiResult`, `FEATURE_REQUIRED_EVIDENCE`, `WorkflowManager.children_states`, `WorkflowManager.open_blocker_bug_count` (INTERFACES updated in this commit), payload key `required_evidence_kinds`, done-dimension setting-point table, FEATURE Definition-of-Ready checks `children_present`/`design_approved`, feature integration worktree `.walk/worktrees/int-<FEAT-id>`.
+- `NEW NAME:` `FeatureProgress`, `FeatureCiResult`, `FEATURE_REQUIRED_EVIDENCE`, `WorkflowManager.children_states`, `WorkflowManager.open_blocker_bug_count` (INTERFACES §1.3 updated by the architect), payload key `required_evidence_kinds`, done-dimension setting-point table, FEATURE Definition-of-Ready checks `children_present`/`design_approved`, feature integration worktree `.walk/worktrees/int-<FEAT-id>`.
 - WBS §3.4 lists `WorkflowManager` as writer of `children_states`/`open_blocker_bug_count`; this story adds the two query methods that compute them.
 - Pitfall: `FUNCTIONAL` is only meaningful once every child passed story-level QC — never set it at `all_children_integrated` time.
 - Commit subject: `feat: add feature progression ci and done dimensions (E03-S17)`.
