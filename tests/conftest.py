@@ -9,7 +9,8 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_id_factory import SequentialIdFactory
-from walk.persistence import Database, MigrationRunner
+from walk.persistence import Database, MigrationRunner, UnitOfWork
+from walk.workflow import Project, ProjectRepository
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -51,3 +52,17 @@ def db(tmp_path: Path) -> Iterator[Database]:
     MigrationRunner(database, "project").apply_pending()
     yield database
     database.close()
+
+
+@pytest.fixture
+async def project(db: Database) -> Project:
+    """The persisted project ``DEMO`` (one project per database)."""
+    demo = Project(
+        key="DEMO",
+        name="Demo",
+        repo_path=str(db.path.parent.parent),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    async with UnitOfWork(db) as uow:
+        await ProjectRepository(db).insert(demo, uow)
+    return demo

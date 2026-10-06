@@ -66,7 +66,7 @@ class Repository[T: WalkModel]:
         """Return the aggregate stored under ``key``, or ``None``."""
         sql = f"SELECT json FROM {self._table} WHERE {self._key} = ?"  # noqa: S608 - identifiers validated
         row = self._db.connect().execute(sql, (key,)).fetchone()
-        return None if row is None else self._model.model_validate_json(row[0])
+        return None if row is None else self._load(row[0])
 
     async def list_where(
         self,
@@ -92,7 +92,11 @@ class Repository[T: WalkModel]:
             sql += " LIMIT ?"
             bound.append(limit)
         rows = self._db.connect().execute(sql, bound).fetchall()
-        return [self._model.model_validate_json(row[0]) for row in rows]
+        return [self._load(row[0]) for row in rows]
+
+    def _load(self, raw: str) -> T:
+        """Deserialise one ``json`` column value; overridden for union aggregates."""
+        return self._model.model_validate_json(raw)
 
     def _row(self, obj: T) -> tuple[list[str], list[object]]:
         row: dict[str, object] = {self._key: getattr(obj, self._key)}

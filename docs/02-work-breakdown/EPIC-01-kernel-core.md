@@ -870,7 +870,7 @@ Level-0 decisions:
 
 ### E01-S07 — Hooks runtime core: `HookManager`
 
-**Status:** DONE (pending)
+**Status:** DONE (eb4f3e8)
 **Type:** feat
 **Requirements:** §32, §41, §138 (Tool Failure)
 **Depends on:** E01-S05
@@ -987,7 +987,7 @@ Level-0 decisions (no listed signature changed):
 
 ### E01-S08 — Work-item aggregates, repository, `WorkflowManager.create/get/query`, `walk work list/show`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §52, §54, §57, §81
 **Depends on:** E01-S04, E01-S05
@@ -1088,7 +1088,65 @@ CLI: `walk work list [--state S]... [--kind K]... [--phase ID]`, `walk work show
 - Commit: `feat: add work item aggregates, repository and work cli (E01-S08)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+81 files already formatted
+All checks passed!
+Success: no issues found in 78 source files
+Required test coverage of 85% reached. Total coverage: 99.84%
+215 passed in 7.36s
+```
+Touched modules: `workflow/models.py`, `protocols.py`, `errors.py`, `repository.py`, `service.py`, `cli/cmd_work.py`, `persistence/repository.py` each 100%.
+
+Demo (scratch repo seeded with a project, `FEAT-0001`, `STORY-0001` and `BUG-0001` through `DefaultWorkflowManager.create`):
+```
+$ walk work list --repo ./demo
+id          kind     state  title          owner
+----------  -------  -----  -------------  ----------
+FEAT-0001   FEATURE  IDEA   Inventory
+STORY-0001  STORY    IDEA   Pick up item   SENIOR_DEV
+BUG-0001    BUG      IDEA   Bag overflows
+$ walk work show FEAT-0001 --repo ./demo
+FEAT-0001  FEATURE  IDEA
+title: Inventory
+parent: -
+phase: -
+owner: -
+priority: P2  risk: MEDIUM
+contract: none
+transitions: none
+runs: none
+cost: none
+$ walk work show STORY-0001 --repo ./demo
+STORY-0001  STORY  IDEA
+...
+contract:
+  goal: Pick up loot
+  acceptance criteria:
+  - item in bag
+transitions: none
+runs: none
+cost: none
+$ walk work show NOPE-1 --repo ./demo
+error: work item not found: NOPE-1      (exit 1)
+```
+
+Architecture change, recorded as ADR-0018 (owner review requested):
+- ARCHITECTURE §2.2 forbade `workflow → hooks` and allowed `hooks → workflow`. This story's contract (`DefaultWorkflowManager(..., hooks: HookManager, ...)`) and `Transition.hooks: tuple[HookName, ...]` (INTERFACES §1.3) need the opposite direction. The same holds for budgets, effort, permissions, memory, context, decisions and debate in later stories. `hooks` therefore moves to the front of the L2 order: it imports only common/persistence/telemetry, and every later package may import it. The E01-S07 code already obeys this. The §2.2 table, ADR index and WBS §6 register are updated.
+
+Other contract alignments (docs updated in this commit):
+- INTERFACES §1.3 `TransitionContext`: `run_id`, `payload` and `phase` gain defaults (`None`, `{}`, `None`). E03-S03 builds `TransitionContext(actor_role=…, source=…, payload=…)` without the other two. The change is additive.
+- `apply_external_transition` is left out of the code `WorkflowManager` protocol and of `DefaultWorkflowManager`. Its `WorkProviderEvent` parameter is defined in `walk.integrations`, which `walk.workflow` may not import. INTERFACES §1.3 now carries an "Open (E03-S03)" note: that story must settle the event's placement.
+- Outside the Files table: `persistence/repository.py` gains a private `Repository._load(raw)` hook that `get`/`list_where` use. `WorkflowRepository` overrides it with a `TypeAdapter(WorkItem)`, the story's pitfall. No public symbol changed.
+
+Level-0 decisions:
+- Deferred methods raise `ConfigError("WorkflowManager.<m> is implemented in <story>")`. `table_for`/`raise_event` name E01-S09; `ready_items`/`check_definition_of_ready`/`set_done_dimension` name E01-S10; `phase_event`/`rc_event` name E01-S11; `children_states`/`open_blocker_bug_count` name E03-S17; `gdd_coverage` names E06-S06.
+- Parent rules: EPIC has no parent; FEATURE has none or an EPIC; STORY/TASK need a FEATURE parent (the story does not say "or none" for them); BUG has no `parent_id` and links through `related_feature_id`, which must exist. A missing parent or feature raises `WorkItemNotFound`. A wrong kind raises `ConfigError`. `WorkItemDraft(kind=BUG)` raises `ConfigError` (use `BugDraft`). A contract on an EPIC/FEATURE draft raises `ConfigError` instead of being silently dropped.
+- STORY/TASK copy `owner_role`, `priority` and `risk` from their contract. Bugs keep `owner_role=None` and `description=""`; `BugDraft.evidence_ids` is not stored on the bug (evidence linking belongs to the output applier). `created_at = updated_at = clock.now()`, and the ledger event `at` is the same instant. `WORK_ITEM_CREATED` carries `actor_role=actor`, `outcome="OK"` and payload `{kind, title, parent_id}`. `create` fires no hooks.
+- `phase_id` must name an existing `phases` row (`ConfigError`); `WorkflowRepository.phase_exists` reads it. `ProjectRepository.single()` returns the only project or raises `ConfigError("… found N")`. The `projects.updated_at` column records the write time, because `Project` has no such field.
+- Timestamp projection columns are fixed-width UTC text, so `ORDER BY created_at, id` is chronological. `query` treats empty filter lists as no filter, the same as the ledger.
+- CLI: `walk work list/show` open the DB read-only and exit 1 when it is missing. Like `db`/`ledger`, they accept `--repo/--json` after the subcommand. `show --json` is the item dump with a `contract` key that is always present (`null` for epics/features). Transitions/runs/cost are omitted from JSON until their stories exist; the text view prints `none`. `_TABLES_DIR` points at the packaged `walk/workflow/tables/` folder that E01-S09 creates.
+- Also read: ADR-0010 (state list for AC 1), ARCHITECTURE §2.2, E01-S09/S10/S11, E03-S03, E03-S17 and E06-S06 (owners of the deferred methods).
 
 ---
 

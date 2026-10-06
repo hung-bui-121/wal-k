@@ -8,6 +8,7 @@ import typer
 from walk import __version__
 from walk.cli.cmd_db import db_app
 from walk.cli.cmd_ledger import ledger_app
+from walk.cli.cmd_work import work_app
 
 app = typer.Typer(
     name="walk",
@@ -17,6 +18,7 @@ app = typer.Typer(
 )
 app.add_typer(db_app)
 app.add_typer(ledger_app)
+app.add_typer(work_app)
 
 
 def _version_callback(value: bool) -> None:

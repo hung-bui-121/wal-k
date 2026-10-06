@@ -133,29 +133,29 @@ A package may import only from packages in a **lower** layer, plus the same-laye
 
 Legend: `✔` = may import (`models`, `protocols`, `errors` only, unless noted) · `·` = forbidden. Rows import columns.
 
-Rows and columns are listed in **topological order**; a package may import only packages that appear *before* it. Within L2 the order is: `workflow, effort, budgets, permissions, tools, skills, hooks, integrations, memory, decisions, debate, context, agents, model_router`.
+Rows and columns are listed in **topological order**; a package may import only packages that appear *before* it. Within L2 the order is: `hooks, workflow, effort, budgets, permissions, tools, skills, integrations, memory, decisions, debate, context, agents, model_router` (`hooks` first: ADR-0018).
 
-| importer ↓ / imported → | common | persistence | telemetry | workflow | effort | budgets | permissions | tools | skills | hooks | integrations | memory | decisions | debate | context | agents | model_router | runtime | improvement | orchestrator |
+| importer ↓ / imported → | common | persistence | telemetry | hooks | workflow | effort | budgets | permissions | tools | skills | integrations | memory | decisions | debate | context | agents | model_router | runtime | improvement | orchestrator |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **common** | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **persistence** | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **telemetry** | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
-| **workflow** | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
-| **effort** | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
-| **budgets** | ✔ | ✔ | ✔ | ✔ | · | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
-| **permissions** | ✔ | ✔ | ✔ | ✔ | · | · | – | ✔ | · | · | · | · | · | · | · | · | · | · | · | · |
-| **tools** | ✔ | ✔ | ✔ | · | · | ✔ | · | – | · | · | · | · | · | · | · | · | · | · | · | · |
-| **skills** | ✔ | ✔ | ✔ | · | · | · | · | ✔ | – | · | · | · | · | · | · | · | · | · | · | · |
-| **hooks** | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | – | · | · | · | · | · | · | · | · | · | · |
-| **integrations** | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | ✔ | · | · | – | · | · | · | · | · | · | · | · | · |
-| **memory** | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | · | ✔ (GitProvider protocol only) | – | · | · | · | · | · | · | · | · |
-| **decisions** | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | · | · | ✔ | – | · | · | · | · | · | · | · |
-| **debate** | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | · | · | · | · | · | ✔ | – | · | · | · | · | · | · |
-| **context** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | ✔ (CodeGraphProvider protocol only) | ✔ | ✔ | · | – | · | · | · | · | · |
-| **agents** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · |
-| **model_router** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | ✔ | ✔ | – | · | · | · |
+| **hooks** | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| **workflow** | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| **effort** | ✔ | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| **budgets** | ✔ | ✔ | ✔ | ✔ | ✔ | · | – | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| **permissions** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | – | ✔ | · | · | · | · | · | · | · | · | · | · | · |
+| **tools** | ✔ | ✔ | ✔ | ✔ | · | · | ✔ | · | – | · | · | · | · | · | · | · | · | · | · | · |
+| **skills** | ✔ | ✔ | ✔ | ✔ | · | · | · | · | ✔ | – | · | · | · | · | · | · | · | · | · | · |
+| **integrations** | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | ✔ | · | – | · | · | · | · | · | · | · | · | · |
+| **memory** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | ✔ (GitProvider protocol only) | – | · | · | · | · | · | · | · | · |
+| **decisions** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | · | ✔ | – | · | · | · | · | · | · | · |
+| **debate** | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | · | · | · | · | ✔ | – | · | · | · | · | · | · |
+| **context** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | ✔ (CodeGraphProvider protocol only) | ✔ | ✔ | · | – | · | · | · | · | · |
+| **agents** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · |
+| **model_router** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | ✔ | ✔ | – | · | · | · |
 | **runtime** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | – | · | · |
-| **improvement** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | ✔ | ✔ | · | ✔ | ✔ | ✔ | · | ✔ | ✔ | · | – | · |
+| **improvement** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | ✔ | · | ✔ | ✔ | ✔ | · | ✔ | ✔ | · | – | · |
 | **orchestrator** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | – |
 | **cli** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
 

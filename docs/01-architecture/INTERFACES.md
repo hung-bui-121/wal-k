@@ -147,9 +147,9 @@ class Guard(Protocol):
 class TransitionContext(FrozenModel):
     actor_role: AgentRole
     source: TransitionSource
-    run_id: RunId | None
-    payload: JsonDict
-    phase: Phase | None
+    run_id: RunId | None = None
+    payload: JsonDict = Field(default_factory=dict)
+    phase: Phase | None = None
 
 
 class GuardResult(FrozenModel):
@@ -202,6 +202,8 @@ class WorkflowManager(Protocol):
         in ONE transaction: update state + state_version, insert work_item_transitions row, ledger WORK_ITEM_TRANSITION;
         then fires ON_STATE_TRANSITION and the transition's hooks. Raises GuardRejected / PermissionDenied."""
 
+    # Open (E03-S03): WorkProviderEvent is defined in walk.integrations, which walk.workflow may not
+    # import (ARCHITECTURE §2.2); E03-S03 settles its placement and adds this method to the code protocol.
     async def apply_external_transition(
         self, external_ref: str, external_status: str, event: WorkProviderEvent
     ) -> WorkItemTransition | None:
