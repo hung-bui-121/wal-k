@@ -2893,7 +2893,7 @@ Level-0 decisions:
 
 ### E01-S20 — Model router: `CapabilityRegistry`, `models.yaml`, `select`, `classify_error`, costing
 
-**Status:** DONE (pending)
+**Status:** DONE (5dc2131)
 **Type:** feat
 **Requirements:** §14, §15, §16, §17, §21 (select path), §23, §84, §137 (Inv. 1), §138 (Model Lock-In)
 **Depends on:** E01-S19, E01-S12
@@ -3081,7 +3081,7 @@ Level-0 decisions:
 
 ### E01-S21 — `ClaudeAdapter` (claude-agent-sdk)
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §17, §21, §22, §31 (per-call authorisation), §91 (tool allowlist, repository boundary), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API)
 **Depends on:** E01-S19, E01-S02
@@ -3189,7 +3189,68 @@ class ClaudeAdapter:
 - Commit subject: `feat: add claude agent sdk model adapter (E01-S21)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+244 files already formatted
+All checks passed!
+Success: no issues found in 242 source files
+Required test coverage of 85% reached. Total coverage: 99.96%
+765 passed, 1 deselected in 54.44s
+```
+Touched modules: `model_router/adapters/claude/*` 100%. The deselected test is the `@pytest.mark.integration` round trip (`test_adapter.py::test_real_sdk_round_trip`); it was written but not run (no billable call in this batch). `claude-agent-sdk` is not installed in the dev environment; `uv.lock` already pins `0.2.163` for the `claude` extra, so the lock file is unchanged.
+
+Contract changes (story-local, additive; INTERFACES.md does not define these names):
+- `ClaudeQueryOptions` gains `tools: list[str]`, per the binding ADR-0014 note. `allowed_tools` is always `[]` and `permission_mode` is always `"default"`.
+- `ClaudeAdapter.__init__` gains a keyword-only `sleep=asyncio.sleep`. This is the "injected sleep" of AC 8, and it follows the `TelemetryManager` precedent.
+- `ClaudeSkillProjector.__init__(clock: Clock | None = None)`: `ClaudeSkillProjector()` still works. The adapter passes its clock, so `generated_at` is deterministic in tests.
+
+Level-0 decisions:
+- **Model id.** `ClaudeQueryOptions.model` keeps the kernel `ModelId` (`claude/claude-opus-5-5`). `SdkClaudeClient` passes the part after `<provider>/` to the SDK.
+- **Output schema.** `output_schema` is always `AgentOutput.model_json_schema()`, sent as `output_format={"type": "json_schema", "schema": …}`.
+- **Tool set.** `tools` holds the SDK names of the session's `PROVIDER_NATIVE` tools, in session order, through the reverse of `NATIVE_TOOL_NAMES` (`edit` → `Edit`, `MultiEdit`). A native kernel tool with no SDK name is skipped, with a debug log. KERNEL/CLI/MCP tools are never passed.
+- **SDK client.**
+  - `SdkClaudeClient` uses `ClaudeSDKClient` (`connect` → `query` → `receive_response` → `disconnect`), because the `query()` function cannot be interrupted.
+  - The SDK is loaded with `importlib` on first use. A missing SDK raises `ConfigError` from `query` and makes `available()` return `(False, …)`.
+  - Sessions are registered for `interrupt` by the first session id seen: the init message's `data["session_id"]`, or any message's `session_id`.
+- **For owner attention: settings isolation.** `SdkClaudeClient` passes `setting_sources=[]`. With the SDK default, the CLI loads user/project/local settings, whose permission allow-rules would pre-approve tools and bypass `can_use_tool`. Projected skills (E02-S06) must therefore reach the SDK through its `skills` option or an explicit setting source; E02-S06 decides which.
+- **For owner attention: environment.** The SDK's subprocess transport merges `os.environ` into the Claude Code process environment. `env_allowlist` therefore adds variables but does not scrub any; E02-S01 has to address this, for example by running the SDK with a scrubbed parent environment.
+- **For owner attention: `health()`.** `available()` checks that the SDK is importable, the CLI is found (bundled with the SDK, else `claude` on PATH) and `--version` exits 0. Authentication cannot be checked without a billable call (ADR-0014), so a logged-out CLI fails on the first run as a mapped provider error.
+- **Event delivery.**
+  - One producer task consumes the SDK stream, so the SDK's anyio task groups stay in one task. Events, `can_use_tool` requests and failures reach the caller's generator through a queue.
+  - `TOOL_CALL_REQUESTED` is queued from `can_use_tool` before the authorizer is awaited.
+  - `tool_use` blocks are remembered by id. The matching `TOOL_CALL_RESULT` carries that request in `tool_call` and `tool_result={"ok", "content"}`. The executor's `record_result` needs the request, so this extends rule 3. Content is the string, or the joined `text` items of a list, truncated to 4096 UTF-8 bytes.
+- **Permission results.**
+  - Allow → `{"behavior": "allow", "updatedInput": None}`. `None` means "input unchanged": the SDK then sends the original input.
+  - Deny → `{"behavior": "deny", "message": reason}`, mapped to `PermissionResultDeny(message, interrupt=False)`.
+  - A `REQUIRE_APPROVAL` that reaches the adapter is denied (`approval not granted: <reason>`).
+  - An exception from the authorizer denies the call (fail closed) and fails the stream with that exception.
+- **Usage.**
+  - `input_tokens` = `input_tokens + cache_creation_input_tokens`, and `cache_read_tokens` = `cache_read_input_tokens`.
+  - `cost_usd` = `total_cost_usd` (0.0 when absent), `turns` = `num_turns`, `tool_calls` = `tool_use` blocks, `duration_s` = `duration_ms / 1000`.
+  - USAGE events carry the cumulative report of the `run_id`, so a resume under the same `run_id` adds to it. This is consistent with E01-S27's `adapter.usage()` metering.
+- **Result message.**
+  - A successful result yields `USAGE, FINAL_OUTPUT, ENDED`. A result with `is_error` yields `USAGE, ERROR(error=result text or subtype, trigger=None)`.
+  - Without an init message, `STARTED` is emitted from the result's `session_id`. A stream that ends without a result message raises `ProviderUnavailable`.
+  - The final output comes from `structured_output` when it is not `None` (a dict is serialised first), else from `read_output_file(session.output_path)`. With neither, the error is `no structured output and no output file at <path>`.
+- **Timeout.**
+  - A watchdog polls the injected clock every second through the injected `sleep`. At the deadline the adapter interrupts the session (when its id is known) and raises `Timeout(detail={"timeout_s"})`. An interrupt failure is logged and does not mask the `Timeout`.
+  - AC 8's client yields `init` and then never yields again, because `interrupt` needs a session id. A client that hangs before `init` still times out, without an interrupt (extra test).
+- **Error mapping.**
+  - Kernel `WalkError`s pass through.
+  - A class named `CLINotFoundError`, or `FileNotFoundError`, maps to `ConfigError`.
+  - A message matching `429` or `rate limit` maps to `RateLimited`.
+  - `overloaded`, a 5xx status, the SDK error class names (`ClaudeSDKError`, `CLIConnectionError`, `ProcessError`, `CLIJSONDecodeError`) and `OSError` map to `ProviderUnavailable`.
+  - Any other exception propagates unchanged, so programming errors are not disguised as outages. Mapped errors keep the original as `__cause__` and `detail["error_type"]`.
+- **For owner attention: resume.** `resume` only continues sessions that this adapter instance started. Their role and system prompt are remembered by session id, because neither `RunSession` nor `ProviderSessionRef` carries the role a `ToolCallRequest` needs. Any other ref raises `NotResumable`, which is acceptable under ADR-0004 D-6, but after a kernel restart Claude runs continue through handover rather than native resume.
+- `cancel` interrupts the session and the stream then ends with `ENDED`; an unknown run is a no-op. The health cache uses the injected clock (TTL 60 s).
+- **`to_tool_call_request`.**
+  - Paths come from `file_path`, `path` and `notebook_path` (strings only), plus the literal directory prefix of a `Glob` pattern. `Grep`'s regex `pattern` is not a path.
+  - Unknown names are lower-cased, with characters a `ToolName` cannot hold replaced by `_`. A name that does not start with a letter becomes `unknown`.
+- **`map_claude_effort`.**
+  - A supported level takes the family level's params over the ADR-0011 D-2 defaults.
+  - A degraded level uses the defaults of the chosen level plus `degraded_from`: the nearest lower level, else the lowest supported one.
+  - A descriptor with no levels raises `ConfigError`.
+- **`ClaudeSkillProjector`.** The content is `---\n<yaml name, description, version>---\n\n<body_markdown>`, rendered with `yaml.safe_dump` in that key order.
 
 ---
 
