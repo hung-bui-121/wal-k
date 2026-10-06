@@ -461,3 +461,768 @@ def load_debate_policy(self) -> DebatePolicy: ...   # defaults block merged with
 _pending_
 
 ---
+### E05-S04 — Debate runs and `DebatePosition` output (incl. `agrees_with_role`)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §45, §46, §6.7, §10.1, §23, §126, §137 (Inv. 5), §138 (Infinite Debate — budget)
+**Depends on:** E05-S03, E03-S07
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+For every IN_ROUND debate the scheduler starts exactly one `DEBATE` run per participant per round (INTERFACES §4 DEBATE row), each run receives the debate and the previous round's positions through `AgentInput.debate` and the `DEBATE` template, and the run's `AgentOutput.debate_position` is normalised by the kernel and submitted to `DebateManager.submit_position` — so rounds advance without any manual step.
+
+#### Scope
+- In: pure turn computation (`pending_turns`), `Scheduler.schedule_debate_turns` (tick step after work-item admission), `DefaultTaskRouter.route_debate`, kernel normalisation of `debate_position`, `DefaultOutputApplier` DEBATE branch, `DEBATE.md.j2` enrichment, fake-adapter helper for scripted positions.
+- Out: PO arbitration runs in ESCALATED_PO, debate → USER escalation, budget-exhaustion abandon (E05-S05); opening debates from review disagreement (E05-S08); `DebatePosition.agrees_with_role` field itself (added by E05-S03).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/debate/scheduling.py` | create | `DebateTurn`, `pending_turns`, `turn_idempotency_key` |
+| `src/walk/debate/normalise.py` | create | `normalise_position` |
+| `src/walk/debate/__init__.py` | modify | re-exports |
+| `src/walk/orchestrator/router.py` | modify | `DefaultTaskRouter.route_debate` |
+| `src/walk/orchestrator/scheduler.py` | modify | `Scheduler.schedule_debate_turns` (called from `tick`) |
+| `src/walk/runtime/applier.py` | modify | — (`DefaultOutputApplier.apply`: purpose `DEBATE` branch) |
+| `src/walk/runtime/errors.py` | modify | `MissingDebatePosition(OutputInvalid)` |
+| `src/walk/agents/templates/DEBATE.md.j2` | modify | — |
+| `src/walk/cli/composition.py` | modify | — (injects `DebateManager` into `Scheduler` and `DefaultOutputApplier`) |
+| `tests/fakes/fake_model_adapter.py` | modify | `debate_output` (test helper) |
+| `tests/debate/test_scheduling.py` | create | — |
+| `tests/debate/test_normalise.py` | create | — |
+| `tests/orchestrator/test_scheduler_debate.py` | create | — |
+| `tests/orchestrator/test_router.py` | modify | — |
+| `tests/runtime/test_applier_debate.py` | create | — |
+| `tests/agents/test_templates_debate.py` | create | — |
+
+#### Interface contract
+`AgentExecutor.start(..., debate=...)` (INTERFACES §1.13), `AgentInput.debate` / `AgentOutput.debate_position` (DOMAIN-MODEL §4.2), `DebateManager.submit_position` (INTERFACES §1.9), routing row `DEBATE | IN_ROUND | each participant | DEBATE` (INTERFACES §4). Deltas:
+```python
+# src/walk/debate/scheduling.py
+class DebateTurn(FrozenModel):
+    debate_id: DebateId
+    round: int
+    role: AgentRole
+    work_item_id: WorkItemId
+
+def pending_turns(debate: Debate, submitted: list[DebatePosition], running_roles: set[AgentRole]) -> list[DebateTurn]:
+    """Pure. [] unless debate.state == IN_ROUND and debate.work_item_id is not None.
+    One turn per participant (in `participants` order) with no position for debate.round and not in running_roles."""
+
+def turn_idempotency_key(turn: DebateTurn) -> str:
+    """f"debate:{debate_id}:{round}:{role}"."""
+
+# src/walk/debate/normalise.py
+def normalise_position(raw: DebatePosition, *, debate: Debate, run_id: RunId, role: AgentRole, model_id: ModelId) -> DebatePosition:
+    """Kernel-owned fields overwrite agent-supplied ones: debate_id, round=debate.round, role, model_id, run_id,
+    changed_from_previous=False (recomputed by DebateManager), at=now. agrees_with_role == role -> None.
+    agrees_with_role not in participants -> None. Text fields stripped; empty `position` -> MissingDebatePosition."""
+
+# src/walk/orchestrator/router.py
+class DefaultTaskRouter:
+    def route_debate(self, debate: Debate, role: AgentRole) -> RouteDecision:
+        """purpose='DEBATE'; profile.required_capabilities=[PLANNING, LONG_CONTEXT_REASONING]; profile.risk from the work item;
+        cross_model_review=False; role must be in debate.participants (PermissionDenied otherwise)."""
+
+# src/walk/orchestrator/scheduler.py
+class Scheduler:
+    async def schedule_debate_turns(self, capacity: int) -> int:
+        """Runs after INTERFACES §5.1 step 4; returns runs started (<= capacity)."""
+
+# src/walk/runtime/errors.py
+class MissingDebatePosition(OutputInvalid): ...
+
+# tests/fakes/fake_model_adapter.py
+def debate_output(position: str, *, agrees_with_role: AgentRole | None = None, confidence: float = 0.8,
+                  reasoning: str = "scripted", alternative: str = "") -> AgentOutput: ...
+```
+
+#### Behavior
+1. `Scheduler.tick` (INTERFACES §5.1) gains step 4b: after work-item admission, `schedule_debate_turns(max_parallel_agents - running_count)`; returned count is added to `started`. A paused project schedules no turns (step 1 unchanged).
+2. `schedule_debate_turns`: `DebateManager.list(states=[IN_ROUND])` ordered by `opened_at`; for each debate, `pending_turns(debate, positions_for(debate.id, debate.round), roles of running runs whose run.purpose == "DEBATE" and whose AgentInput.debate.id == debate.id)`; for each turn while capacity remains: skip if `IdempotencyStore.has(turn_idempotency_key(turn))`; `route = router.route_debate(debate, turn.role)`; budgets = `BudgetManager.ensure(TASK, item.id, policy.budget_policy)` plus the debate's `TASK:<DEB>:COST_USD` row; effort and model as §5.1 steps 9–10; `AgentManager.instantiate`; `AgentExecutor.start(agent, item, "DEBATE", debate=debate)`; record the key → run id.
+3. The work item named by `debate.work_item_id` may be in any state (typically `BLOCKED`); debate turns never raise a work-item event. Debates with `work_item_id is None` are skipped (epic planning decision).
+4. `RuntimePolicy.max_parallel_runs` per role is respected exactly as for work items; a role busy elsewhere is retried next tick.
+5. `DefaultOutputApplier.apply(run, output)` with `run.purpose == "DEBATE"`: requires `output.status == COMPLETED` and `output.debate_position is not None`, else `MissingDebatePosition` (run → `FAILED`, retried under the normal retry policy; the idempotency key is released on `FAILED`). It then applies findings/evidence/decisions/escalations as for other purposes, normalises the position with `normalise_position(..., debate=<reloaded via DebateManager.get>, run_id=run.id, role=run.role, model_id=run.model_id)` and calls `submit_position`; `AppliedEffects.workflow_event` is `None`.
+6. If the debate left IN_ROUND or advanced to another round before the output arrives (`DebateStateError` from `submit_position`), the position is dropped, a `Finding(severity="WARNING", summary="stale debate position")` is attached to the run and the run still ends `COMPLETED`.
+7. `DebatePosition.evidence_ids` is replaced by the ids of evidence recorded from this same output (`AppliedEffects.evidence_ids`) plus agent-supplied ids that exist in `evidence_records`; unknown ids are dropped (Invariant 5: an opinion carries only real evidence).
+8. `DEBATE.md.j2` renders: topic, category, round `n` of `max_rounds`, participants, the caller's professional bias (`agent.constitution.professional_bias`), every entry of `debate.final_positions` (role, position, reasoning, cost, risk, alternative, confidence) except the caller's own, the §45 field list, and the rule "set `agrees_with_role` to the participant whose position you now endorse, or leave it null to hold your own; you may change your opinion when stronger evidence appears (§45)"; output status options `COMPLETED`, `NEEDS_INPUT`, `FAILED`; includes `_output_contract.md.j2`. Round 1 renders "No previous positions."
+9. Rendering is deterministic (same debate and agent → byte-identical text) and contains no provider name.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given an IN_ROUND debate round 1 with participants `[SENIOR_DEV, LEAD_DEV]` and no positions When `pending_turns` Then two turns in participant order | `tests/debate/test_scheduling.py::test_pending_turns_one_per_participant` |
+| 2 | Given SENIOR_DEV already submitted and LEAD_DEV running Then `[]` | `tests/debate/test_scheduling.py::test_pending_turns_skips_submitted_and_running` |
+| 3 | Given an ESCALATED_PO debate or a debate without work item Then `[]` | `tests/debate/test_scheduling.py::test_pending_turns_only_in_round_with_item` |
+| 4 | Given raw position with `round=9`, `role=QC`, `agrees_with_role` = own role When normalised for LEAD_DEV round 2 Then round 2, role LEAD_DEV, `agrees_with_role is None`, `run_id` set | `tests/debate/test_normalise.py::test_kernel_fields_overwrite_agent_fields` |
+| 5 | Given `agrees_with_role=DESIGN_LEADER` not a participant Then normalised `agrees_with_role is None`; empty `position` Then `MissingDebatePosition` | `tests/debate/test_normalise.py::test_invalid_agreement_and_empty_position` |
+| 6 | Given `debate` with LEAD_DEV participant When `route_debate(debate, LEAD_DEV)` Then purpose `DEBATE`, `cross_model_review False`; non-participant Then `PermissionDenied` | `tests/orchestrator/test_router.py::test_route_debate_participants_only` |
+| 7 | Given one IN_ROUND debate on STORY-0001 and capacity 4 When `tick` Then two runs with purpose `DEBATE` started, each `AgentInput.debate.id == "DEB-0001"`, budget ids include `TASK:DEB-0001:COST_USD` | `tests/orchestrator/test_scheduler_debate.py::test_tick_starts_one_run_per_participant` |
+| 8 | Given the same tick executed twice Then still two runs (idempotency key `debate:DEB-0001:1:<role>`) | `tests/orchestrator/test_scheduler_debate.py::test_debate_turns_idempotent_across_ticks` |
+| 9 | Given capacity 1 Then one run started this tick and the second next tick | `tests/orchestrator/test_scheduler_debate.py::test_debate_turns_respect_capacity` |
+| 10 | Given a project paused Then no debate run started | `tests/orchestrator/test_scheduler_debate.py::test_paused_project_schedules_no_turns` |
+| 11 | Given a fake DEBATE run output `debate_output("Use ECS", confidence=0.9)` When applied Then one `debate_positions` row for round 1 role of the run, `DEBATE_POSITION` ledger, `workflow_event is None` | `tests/runtime/test_applier_debate.py::test_applier_submits_normalised_position` |
+| 12 | Given the second participant's output agreeing with the first When applied Then the debate is RESOLVED and an ACCEPTED decision exists (via E05-S03 `close_round`) | `tests/runtime/test_applier_debate.py::test_last_position_closes_round` |
+| 13 | Given a DEBATE output without `debate_position` When applied Then `MissingDebatePosition` and run `FAILED` | `tests/runtime/test_applier_debate.py::test_missing_position_fails_run` |
+| 14 | Given the debate moved to round 2 before a round-1 output arrives When applied Then no position row, WARNING finding "stale debate position", run `COMPLETED` | `tests/runtime/test_applier_debate.py::test_stale_position_dropped_with_finding` |
+| 15 | Given a position citing `EVD-9999` (unknown) and one evidence draft in the same output Then stored `evidence_ids` equals only the new evidence id | `tests/runtime/test_applier_debate.py::test_position_evidence_restricted_to_recorded` |
+| 16 | Given round 2 with LEAD_DEV's round-1 position When rendering DEBATE for SENIOR_DEV Then text contains LEAD_DEV's position and reasoning, "round 2 of 3", `agrees_with_role`, and not SENIOR_DEV's own previous position block | `tests/agents/test_templates_debate.py::test_debate_template_shows_other_positions` |
+| 17 | Given round 1 Then "No previous positions."; rendered twice Then byte-identical | `tests/agents/test_templates_debate.py::test_debate_template_round_one_and_deterministic` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: with a debate fixture DB, `walk run --once --json` then `walk runs list --json` shows two runs with `purpose == "DEBATE"`; after the fake outputs are applied `walk ledger query --kind DEBATE_POSITION --json` shows two events for `DEB-0001` round 1.
+
+#### Notes
+- INTERFACES §4 DEBATE rows, §5.1; ARCHITECTURE §3.2 step 6 (applier order); ADR-0004 (no chain-of-thought in positions — `reasoning` is the stated rationale only).
+- `NEW NAME:` `walk.debate.scheduling` (`DebateTurn`, `pending_turns`, `turn_idempotency_key`), `walk.debate.normalise.normalise_position`, `DefaultTaskRouter.route_debate`, `Scheduler.schedule_debate_turns` (tick step 4b), `MissingDebatePosition`, idempotency key `debate:<id>:<round>:<role>`, test helper `debate_output`. WBS §6 attributes `DebatePosition.agrees_with_role` to this story; the field is created in E05-S03 and produced here.
+- Debate ids follow DOMAIN-MODEL §2 (`DEB-` width 4, e.g. `DEB-0001`). E05-S03 Behavior 1, AC 6 and Notes say `DBT`; E05-X01 must correct E05-S03 to `DEB` (the `DebateId` pattern in `walk.common.ids` rejects `DBT-`).
+- Pitfall: the running-roles check must use the run's debate id, not only the role — the same role may participate in two debates concurrently.
+- Pitfall: `DEBATE` runs need a worktree only for reading; `SandboxManager.create` is reused unchanged, the `BoundaryAuditor` must report any write as a violation because the DEBATE template states the run never edits files (`allowed_paths=[]`).
+- Commit subject: `feat: schedule debate runs and submit agent positions (E05-S04)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S05 — Debate escalation PO → USER, round and budget limits
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §46, §50, §51, §10.2, §92, §137 (Inv. 5, 7), §138 (Infinite Debate — round limit, authority, escalation, budget)
+**Depends on:** E05-S04, E05-S02
+**Effort:** MEDIUM   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A debate that does not reach consensus within `max_rounds` is arbitrated by a PRODUCT_OWNER `DEBATE` run and, when the PO cannot resolve it (or no PO is enabled), by the user through an `ApprovalRequest`; a debate whose budget is exhausted is abandoned and handed to the user — so every debate terminates in RESOLVED or ABANDONED with an authority-owned outcome (§138 Infinite Debate).
+
+#### Scope
+- In: PO arbitration turn scheduling (`ESCALATED_PO`), applying the PO run's output (`po_resolved` / `po_unresolved`), `ESCALATION_RAISED` for every debate escalation through `DecisionManager`, user resolution of a debate via the E05-S02 approval path, debate-budget exhaustion → `abandon` + Level-3 escalation, `ON_DEBATE_RESOLVED` → escalation resolved + work item unblocked.
+- Out: PRODUCT_OWNER constitution content (E05-S06); CLI (`walk debates`, E05-S09); conflict detection (E05-S08).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/debate/scheduling.py` | modify | `pending_arbitration_turn`, `ARBITRATION_KEY_SUFFIX` |
+| `src/walk/debate/service.py` | modify | `DefaultDebateManager.po_unresolved`, `DefaultDebateManager.on_budget_exhausted` (escalations now go through `DecisionManager.escalate_from_debate`) |
+| `src/walk/decisions/service.py` | modify | `DefaultDecisionManager.escalate_from_debate` |
+| `src/walk/decisions/repository.py` | modify | `EscalationRepository.open_for_debate` |
+| `src/walk/orchestrator/scheduler.py` | modify | — (`schedule_debate_turns` also schedules arbitration turns) |
+| `src/walk/orchestrator/escalation.py` | modify | `EscalationRouter.on_approval_decided` (debate branch), `EscalationRouter.on_debate_resolved`, `register_debate_hooks` |
+| `src/walk/runtime/applier.py` | modify | — (DEBATE branch for runs of PRODUCT_OWNER in `ESCALATED_PO`) |
+| `src/walk/cli/composition.py` | modify | — (passes the `DebateManager` as `debates` to `EscalationRouter`; calls `register_debate_hooks`) |
+| `tests/debate/test_scheduling.py` | modify | — |
+| `tests/debate/test_service_escalation.py` | create | — |
+| `tests/decisions/test_service_escalate_debate.py` | create | — |
+| `tests/orchestrator/test_debate_arbitration.py` | create | — |
+| `tests/runtime/test_applier_debate_po.py` | create | — |
+
+#### Interface contract
+`DebateManager` (INTERFACES §1.9), table rows `ESCALATED_PO --po_resolved/po_unresolved-->`, `ESCALATED_USER --user_resolved-->`, `abandon` (INTERFACES §3.5), `PermissionManager.request_approval` (INTERFACES §1.10). Deltas:
+```python
+# src/walk/debate/scheduling.py
+ARBITRATION_KEY_SUFFIX = "po"
+def pending_arbitration_turn(debate: Debate, running_roles: set[AgentRole]) -> DebateTurn | None:
+    """Pure. A PRODUCT_OWNER turn (round = debate.round) when state == ESCALATED_PO, work_item_id set and PO not running."""
+# idempotency key: f"debate:{debate_id}:{ARBITRATION_KEY_SUFFIX}"
+
+# src/walk/decisions/service.py
+class DefaultDecisionManager:
+    async def escalate_from_debate(self, request: EscalationRequest, *, debate_id: DebateId,
+                                   work_item_id: WorkItemId | None, route: bool) -> Escalation:
+        """from_role=ORCHESTRATOR; row json `source_debate_id`; ledger ESCALATION_RAISED{to_level, category, question, debate_id};
+        fires ON_ESCALATION; awaits the sink only when route is True."""
+
+# src/walk/decisions/repository.py
+class EscalationRepository:
+    async def open_for_debate(self, debate_id: DebateId) -> list[Escalation]: ...   # json source_debate_id == id, unresolved
+
+# src/walk/debate/service.py
+class DefaultDebateManager:
+    async def po_unresolved(self, debate_id: DebateId, reason: str) -> Debate: ...   # ESCALATED_PO -> ESCALATED_USER
+    async def on_budget_exhausted(self, debate_id: DebateId) -> Debate: ...          # abandon + Level-3 escalation
+
+# src/walk/orchestrator/escalation.py
+class EscalationRouter:
+    def __init__(self, ..., debates: DebateManager | None, ...) -> None: ...         # was DebateOpener (E05-S02)
+    async def on_debate_resolved(self, ctx: HookContext) -> None: ...
+def register_debate_hooks(hooks: HookManager, router: EscalationRouter, debates: DebateManager) -> None:
+    """builtin.debate_resolved_unblock (ON_DEBATE_RESOLVED, prio 20, required) and
+    builtin.debate_budget_abandon (ON_BUDGET_EXHAUSTED, prio 15, required; acts only when budget.scope_id starts with 'DEB-')."""
+```
+`EscalationRequest` built by the debate for both levels: `to_level`, `category=debate.category`, `question=f"{debate.id}: {debate.topic}"`, `options=[p.position for p in final_positions] + [p.alternative for p in final_positions if p.alternative]` (de-duplicated, order kept), `recommendation=leading_position(final_positions).position` or `None`, `evidence_ids=` union of final positions' evidence.
+
+#### Behavior
+1. Every transition into `ESCALATED_PO` calls `decisions.escalate_from_debate(request(to_level=PO), route=False)`; every transition into `ESCALATED_USER` calls it with `to_level=USER, route=True` (the E05-S02 router then creates `ApprovalRequest(kind="escalation", approver=USER)`). The E05-S03 direct `ON_ESCALATION` firing in `DefaultDebateManager` is removed (the hook is now fired once, by `DecisionManager`).
+2. Scheduler: `schedule_debate_turns` also lists `ESCALATED_PO` debates and starts one PRODUCT_OWNER `DEBATE` run per debate via `pending_arbitration_turn` (key `debate:<id>:po`), routed with `route_debate` (PO is a valid arbiter even though not a participant — `route_debate` accepts `PRODUCT_OWNER` when state is `ESCALATED_PO`).
+3. Applier, run.role == PRODUCT_OWNER and debate state `ESCALATED_PO`: the first `output.decisions` proposal with `category == debate.category` is the arbitration. Present and `status == COMPLETED` → `debates.resolve(debate_id, outcome=proposal.position, by=Actor(PRODUCT_OWNER, run.model_id, run.id), rationale=proposal.rationale)` (event `po_resolved`, payload `{"output_status": "COMPLETED", "has_decision": True}`); that proposal is **not** passed to `DecisionManager.propose`. Otherwise (`NEEDS_INPUT`, `BLOCKED`, no matching proposal) → `po_unresolved(debate_id, reason=output.result[:200])`. Other proposals/escalations in the output are applied normally. A PO run that ends `FAILED` after retries → `po_unresolved(reason="po run failed")`.
+4. User resolution: `EscalationRouter.on_approval_decided` for an escalation whose json has `source_debate_id`: APPROVED → `debates.resolve(debate_id, outcome=approval.note or recommendation or options[0], by=Actor(role=USER), rationale=f"user approval {approval.id}")` (event `user_resolved`; decision owner USER, level USER); DENIED or EXPIRED → `debates.abandon(debate_id, reason="user denied")` with payload `by_user=True`; the escalation is resolved only on APPROVED.
+5. `on_debate_resolved(ctx)` (hook `ON_DEBATE_RESOLVED`): for every `open_for_debate(debate_id)` escalation → `EscalationRepository.resolve(id, decision_id)`; then `on_resolved` semantics of E05-S02 (unblock the work item only when it is `BLOCKED`). Idempotent.
+6. Budget: `builtin.debate_budget_abandon` on `ON_BUDGET_EXHAUSTED` with a budget whose `scope == TASK` and `scope_id` is a `DebateId` → `debates.on_budget_exhausted(debate_id)`: cancels running DEBATE runs of that debate (`AgentExecutor.cancel(run_id, "debate budget exhausted")`), `abandon(reason="budget_exhausted")` (guard payload `budget_ok=False`), then `escalate_from_debate(request(to_level=USER, question=f"{id} abandoned (budget exhausted): {topic}"), route=True)`. The user's approval of that escalation records a USER decision through the generic E05-S02 path (the debate stays ABANDONED; json `source_debate_id` is set but `on_approval_decided` skips `resolve` for ABANDONED debates and falls back to the E05-S02 decision path).
+7. Round limit (§46 "2–3 rounds", default 3) is enforced by E05-S03 `close_round`; this story adds no second counter. A debate never returns from `ESCALATED_*` to `IN_ROUND`.
+8. Every terminal path leaves exactly one of: an ACCEPTED decision with `debate_id` (RESOLVED) or an ABANDONED debate plus an open Level-3 escalation — never an orphaned non-terminal debate without a scheduled actor.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given an ESCALATED_PO debate with work item When `pending_arbitration_turn` Then a PRODUCT_OWNER turn; PO already running Then `None` | `tests/debate/test_scheduling.py::test_arbitration_turn_for_escalated_po` |
+| 2 | Given round 3 of 3 without consensus and PO enabled When `close_round` Then ESCALATED_PO, one `escalations` row `to_level=2` with json `source_debate_id`, `ESCALATION_RAISED` written once, `ON_ESCALATION` fired once, no approval request | `tests/debate/test_service_escalation.py::test_round_limit_registers_po_escalation_without_routing` |
+| 3 | Given PO disabled Then ESCALATED_USER, escalation `to_level=3`, sink called once, approval `kind="escalation"` pending | `tests/debate/test_service_escalation.py::test_round_limit_without_po_routes_to_user` |
+| 4 | Given `escalate_from_debate(route=False)` Then no sink call; `route=True` Then sink called after persist | `tests/decisions/test_service_escalate_debate.py::test_route_flag_controls_sink` |
+| 5 | Given an ESCALATED_PO debate on STORY-0001 When `tick` Then exactly one PRODUCT_OWNER run with purpose `DEBATE`; second tick Then none | `tests/orchestrator/test_debate_arbitration.py::test_po_turn_scheduled_once` |
+| 6 | Given the PO output COMPLETED with a DESIGN proposal "Keep double jump" for a DESIGN debate When applied Then debate RESOLVED, decision ACCEPTED owner PRODUCT_OWNER level PO `debate_id` set, no PROPOSED decision created from that proposal | `tests/runtime/test_applier_debate_po.py::test_po_arbitration_resolves_debate` |
+| 7 | Given the PO output `NEEDS_INPUT` When applied Then ESCALATED_USER and a Level-3 approval pending | `tests/runtime/test_applier_debate_po.py::test_po_needs_input_escalates_to_user` |
+| 8 | Given a PO proposal of another category Then treated as unresolved (ESCALATED_USER) | `tests/runtime/test_applier_debate_po.py::test_po_proposal_wrong_category_unresolved` |
+| 9 | Given an ESCALATED_USER debate's approval APPROVED with note "Ship ECS" Then debate RESOLVED, decision owner USER outcome "Ship ECS", escalation `resolved_decision_id` set, BLOCKED story unblocked | `tests/orchestrator/test_debate_arbitration.py::test_user_approval_resolves_debate_and_unblocks` |
+| 10 | Given the same approval DENIED Then debate ABANDONED, no decision, escalation unresolved, story still BLOCKED | `tests/orchestrator/test_debate_arbitration.py::test_user_denial_abandons_debate` |
+| 11 | Given an IN_ROUND debate with one running DEBATE run When its `TASK:DEB-0001:COST_USD` budget is exhausted Then run cancelled, debate ABANDONED reason `budget_exhausted`, one Level-3 escalation with `source_debate_id`, approval pending | `tests/debate/test_service_escalation.py::test_budget_exhaustion_abandons_and_escalates_to_user` |
+| 12 | Given `ON_BUDGET_EXHAUSTED` for budget `TASK:STORY-0001:COST_USD` Then the debate hook does nothing | `tests/orchestrator/test_debate_arbitration.py::test_budget_hook_ignores_non_debate_budgets` |
+| 13 | Given `ON_DEBATE_RESOLVED` fired twice for the same debate Then the escalation is resolved once and one `unblock` transition exists | `tests/orchestrator/test_debate_arbitration.py::test_debate_resolved_hook_idempotent` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the arbitration fixture: `walk ledger query --kind ESCALATION_RAISED --json` shows `to_level` 2 then 3 for `DEB-0001`; `walk approvals --pending --json` shows the `kind == "escalation"` request; `walk approve APV-0001 --note "Ship ECS"`; `walk decisions list --json` shows the ACCEPTED decision with `debate_id == "DEB-0001"` and `owner == "USER"`.
+
+#### Notes
+- ARCHITECTURE §5.5 (debate circuit breaker), §4.1 `ON_ESCALATION` ("any autonomy level ≥ 2 → ledger `ESCALATION_RAISED`"), §4.3 (`ESCALATION_RAISED` write point stays in `decisions.DecisionManager`); INTERFACES §4 row `DEBATE | ESCALATED_PO | PRODUCT_OWNER | DEBATE`.
+- `NEW NAME:` `DefaultDecisionManager.escalate_from_debate`, escalation row json key `source_debate_id`, `EscalationRepository.open_for_debate`, `DefaultDebateManager.po_unresolved/on_budget_exhausted`, `pending_arbitration_turn`, `ARBITRATION_KEY_SUFFIX`, `EscalationRouter.on_debate_resolved`, `register_debate_hooks`, builtin hook ids `builtin.debate_resolved_unblock`, `builtin.debate_budget_abandon`.
+- Import rule: `walk.debate` may not import `walk.permissions`, `walk.hooks` registration or `walk.orchestrator` (ARCHITECTURE §2.2), hence the USER approval is created by the E05-S02 router through the decisions sink and the hooks are registered from `walk.orchestrator.escalation`.
+- E05-S02 typed the router's debate dependency as the structural `DebateOpener`; this story widens it to `walk.debate.protocols.DebateManager` (S03 is merged by now). `DebateOpener` stays exported for tests.
+- Commit subject: `feat: escalate unresolved debates to po then user with budget stop (E05-S05)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S06 — PRODUCT_OWNER and DESIGN_LEADER constitutions and policies
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §10.2, §10.4, §12, §6.7, §127 (optional roles), §51, §137 (Inv. 1, 7), §138 (Over-Engineering — PO challenge, design challenge)
+**Depends on:** E05-X01, E03-S06
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The two optional early roles (§127) exist as complete ADR-0013 constitutions with their §10 professional bias and runtime policies, are switched on or off per project through `RuntimePolicy.enabled`, and every consumer of "enabled roles" (routing fallbacks, debate participant selection, `po_enabled`) reads the same source.
+
+#### Scope
+- In: `product_owner.md`, `design_leader.md` default constitutions (front matter + all D-3 body sections, arbitration guidance for PO); `policies.yaml` entries; `RuntimePolicy.enabled`; `DefaultAgentManager.list_roles/is_enabled`; composition wiring of `enabled_roles` / `po_enabled`.
+- Out: constitution narrowing on `escalation_rules`, D-3 rendering checks and the strict lint over project overrides (E05-S07); ART_DIRECTOR (E08-S01), PROCESS_ARCHITECT (E10-S07), UA_RELEASE (E11-S01); SCRUM_MASTER and GAME_DIRECTOR are not shipped by any epic (§127 lists them neither as MVP nor optional early roles).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/defaults/product_owner.md` | create | — |
+| `src/walk/agents/defaults/design_leader.md` | create | — |
+| `src/walk/agents/defaults/policies.yaml` | modify | — (`roles.PRODUCT_OWNER`, `roles.DESIGN_LEADER`, `enabled` key on every role) |
+| `src/walk/agents/models.py` | modify | `RuntimePolicy.enabled` |
+| `src/walk/agents/policy_loader.py` | modify | — (`enabled` merged like other scalars) |
+| `src/walk/agents/service.py` | modify | `DefaultAgentManager.list_roles`, `DefaultAgentManager.is_enabled` |
+| `src/walk/permissions/defaults.yaml` | modify | — (only if the ADR-0006 D-6 PRODUCT_OWNER / DESIGN_LEADER row is absent; verify E02-S10) |
+| `src/walk/cli/composition.py` | modify | — (`enabled_roles=agent_manager.list_roles`, `po_enabled=lambda: agent_manager.is_enabled(PRODUCT_OWNER)`) |
+| `tests/agents/test_defaults.py` | modify | — |
+| `tests/agents/test_optional_roles.py` | create | — |
+| `tests/orchestrator/test_router.py` | modify | — |
+
+#### Interface contract
+Constitution format: ADR-0013 D-2/D-3. `AgentManager.list_roles` (INTERFACES §1.2). Deltas:
+```python
+# src/walk/agents/models.py
+class RuntimePolicy(WalkModel):                       # DOMAIN-MODEL §4.2 fields +
+    enabled: bool = Field(default=True, description="Optional roles (§127) are scheduled only when enabled for the project")
+
+# src/walk/agents/service.py
+class DefaultAgentManager:
+    def list_roles(self) -> list[AgentRole]: ...       # roles with a default constitution AND load_runtime_policy(role).enabled
+    def is_enabled(self, role: AgentRole) -> bool: ... # False for roles without a constitution
+```
+Front matter fixed by this story:
+
+| Field | PRODUCT_OWNER | DESIGN_LEADER |
+|---|---|---|
+| `identity` | Product Owner | Design Leader |
+| `mission` | Maximize product value under constraints. (§10.2) | Protect player experience and game-design integrity. (§10.4) |
+| `responsibilities` | player value, scope, schedule, production cost, business value, product risk, debate arbitration | gameplay intention, mechanics, pacing, feedback, balance, progression, UX, feature depth, interaction between systems |
+| `authority.decision_scope` | `[PRODUCT]` | `[DESIGN]` |
+| `authority.max_autonomy_level` | 2 | 1 |
+| `authority.may_approve` | `[]` | `[GAMEPLAY_CONCEPT, MECHANIC_SPEC, UX_FLOW]` |
+| `authority.may_create_work` | `[FEATURE, STORY, TASK]` | `[TASK]` |
+| `professional_bias` | Player and business value per unit of cost and schedule; challenges over-engineering with cost evidence. | Functional does not necessarily mean finished; experience quality over implementation convenience. |
+| `risk_tolerance` | MEDIUM | MEDIUM |
+| `preferred_evidence` | `[PLAYER_TELEMETRY, PLAYTEST, PROJECT_DATA]` | `[PLAYTEST, GAMEPLAY_RECORDING, SCREENSHOT]` |
+| `escalation_rules` | monetization (3, PRODUCT); major feature removal (3); large scope increase (3); major schedule impact (3) | core gameplay change (3, DESIGN); cross-feature balance change (2, PRODUCT) |
+| `tool_permissions` | ADR-0006 D-6 row: ALLOW read tools; DENY file write tools; REQUIRE_APPROVAL(USER) `monetization.change` | same row |
+| `forbidden_actions` | "edit code or assets", "decide a Level-3 matter without the user", "override a user decision", "resolve a debate outside arbitration" | "edit code or assets", "approve own design", "decide technical architecture" |
+
+`policies.yaml`: both roles `enabled: false`, `model_policy.preferred: [claude/opus]`, `fallback: [codex/default]` (ADR-0011 D-3), `execution_strategy: review_only`, `max_parallel_runs: 1`; every existing role gains `enabled: true`.
+
+#### Behavior
+1. Both files load through `ConstitutionLoader` with `version: "1.0"`, `type: constitution`, all ADR-0013 D-3 body sections in order and no provider name.
+2. PRODUCT_OWNER `## Working Guidance` states the arbitration contract consumed by E05-S05: "When a debate is ESCALATED_PO, read every final position, choose one outcome, and return `status: COMPLETED` with exactly one `decisions` entry whose `category` equals the debate category, `position` is the chosen outcome and `rationale` names the product trade-off; return `NEEDS_INPUT` when the matter is Level 3 (§51) or the options lack the information to choose."
+3. DESIGN_LEADER `## Working Guidance` states that as a debate participant it defends player experience, cites playtest/recording evidence where available and concedes on stronger evidence (§45).
+4. `## Professional Bias` sections contain the §10.2 / §10.4 optimisation lists verbatim; PO's `## Conflict Behavior` contains "PO resolves trade-offs when specialized roles cannot reach consensus" (§10.2); LEAD_DEV's over-engineering clause (E03-S06) is unchanged.
+5. `list_roles()` returns the four MVP roles by default (PO/DL disabled); a project `policies.yaml` with `roles: {PRODUCT_OWNER: {enabled: true}}` adds PRODUCT_OWNER; `is_enabled` mirrors `list_roles`.
+6. Routing fallbacks of INTERFACES §4 use `list_roles()` (E03-S07): FEATURE/DISCOVERY routes to DESIGN_LEADER only when enabled; PHASE/REWORK to PRODUCT_OWNER only when enabled.
+7. `PermissionManager.rules_for(role, extra=constitution.tool_permissions)` for both roles yields no rule wider than `permissions/defaults.yaml`.
+8. Disabling a role never deletes its constitution; `AgentManager.load_constitution(PRODUCT_OWNER)` works while disabled (needed by `walk doctor` and E05-S07 lints).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the two new defaults When loaded Then valid, `version == "1.0"`, D-3 sections in order | `tests/agents/test_defaults.py::test_optional_constitutions_load_with_sections_in_order` |
+| 2 | Then PO `decision_scope == [PRODUCT]`, `max_autonomy_level == PO`; DL `decision_scope == [DESIGN]`, `max_autonomy_level == MULTI_AGENT` | `tests/agents/test_defaults.py::test_optional_role_authorities` |
+| 3 | Given the PO constitution Then `escalation_rules` contain the conditions "monetization", "major feature removal", "large scope increase", "major schedule impact", each `to_level == USER` | `tests/agents/test_optional_roles.py::test_po_escalation_rules_cover_level3_product_matters` |
+| 4 | Given both constitutions When `rules_for(role, extra=…)` Then no widening versus defaults and `monetization.change` requires USER approval | `tests/agents/test_defaults.py::test_optional_role_permissions_do_not_widen` |
+| 5 | Given PO body Then `Working Guidance` contains "exactly one `decisions` entry" and "NEEDS_INPUT"; `Professional Bias` contains the six §10.2 terms | `tests/agents/test_optional_roles.py::test_po_body_contains_arbitration_contract_and_bias` |
+| 6 | Given DL body Then `Professional Bias` contains the nine §10.4 terms and "Functional does not necessarily mean finished" | `tests/agents/test_optional_roles.py::test_design_leader_body_contains_bias` |
+| 7 | Given default policies When `list_roles()` Then exactly `[ORCHESTRATOR, LEAD_DEV, SENIOR_DEV, QC]`; with project `PRODUCT_OWNER.enabled: true` Then PO included and `is_enabled(PRODUCT_OWNER)` | `tests/agents/test_optional_roles.py::test_enabled_flag_controls_list_roles` |
+| 8 | Given PO disabled When `load_constitution(PRODUCT_OWNER)` Then the constitution is returned | `tests/agents/test_optional_roles.py::test_disabled_role_constitution_still_loads` |
+| 9 | Given DESIGN_LEADER enabled When `route(FEATURE, DISCOVERY)` Then DESIGN_LEADER/DESIGN; disabled Then ORCHESTRATOR/DESIGN | `tests/orchestrator/test_router.py::test_discovery_routes_to_design_leader_when_enabled` |
+| 10 | Given both new files When scanned with `lint_constitutions_provider_names` Then zero findings | `tests/agents/test_defaults.py::test_optional_constitutions_have_no_provider_names` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: in a bootstrapped repo with `PRODUCT_OWNER: {enabled: true}` in `.ai/agents/policies.yaml`, `walk doctor --strict` reports `constitutions: ok (6 roles, no provider names)`; `walk status --json` lists no PO run until a debate escalates.
+
+#### Notes
+- ADR-0013 D-2/D-3/D-5/D-7, ADR-0006 D-6, ADR-0011 D-3, §127; epic planning decision "optional roles are enabled when `RuntimePolicy.enabled`".
+- `NEW NAME:` `RuntimePolicy.enabled`, `DefaultAgentManager.is_enabled`, `policies.yaml` key `enabled`, PO/DL `escalation_rules` conditions "cross-feature balance change" (§51 does not list it; Level 2 by design leader judgement).
+- Parallelism: WBS §8 `{S01→S02} ∥ {S06→S07}` — this story does not touch `DEBATE.md.j2` (E05-S04); the arbitration contract lives in the PO constitution body, which is rendered into the system prompt by `render_constitution` (E01-S18).
+- Commit subject: `feat: add product owner and design leader constitutions (E05-S06)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S07 — Constitution schema enforcement: narrowing merge, provider-name lint, section rendering
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §12, §103, §104, §6.7, §137 (Inv. 1, 7, 13), §138 (Over-Engineering)
+**Depends on:** E05-S06
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+ADR-0013 D-3–D-5 are enforced completely and from one place: every structured field of a project override is merged in an explicit, per-field direction (only ever narrowing authority and autonomy), the provider-name lint has a single pattern shared by the loader and `walk doctor --strict`, and rendered constitutions follow the D-3 section order including appended project sections.
+
+#### Scope
+- In: per-field narrowing table (incl. `escalation_rules` and the correct direction for `forbidden_actions`), widening errors naming the field and the §104 route, a single `PROVIDER_NAME_PATTERN` in `walk.agents.lint`, required-section lint, override-text lint for `.ai/agents/roles/*.md`, D-3 rendering order with appended sections, doctor strict output per role.
+- Out: approving a widening through an improvement candidate (E10, ADR-0008); BoundaryAuditor protection of `.ai/agents/roles/` (E01-S25, ADR-0013 D-6); new role constitutions (E05-S06, E08-S01, E10-S07, E11-S01).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/agents/narrowing.py` | create | `NarrowingDirection`, `NARROWING_RULES`, `check_narrowing`, `merge_escalation_rules` |
+| `src/walk/agents/lint.py` | create | `PROVIDER_NAME_PATTERN`, `REQUIRED_BODY_SECTIONS`, `provider_name_hits`, `missing_body_sections` |
+| `src/walk/agents/constitution_loader.py` | modify | `ConstitutionLoader.load` (uses `check_narrowing`, lints raw override text) |
+| `src/walk/agents/rendering.py` | modify | `render_constitution` (D-3 order, appended sections last) |
+| `src/walk/agents/__init__.py` | modify | re-exports |
+| `src/walk/cli/lints.py` | modify | `PROVIDER_NAME_PATTERN` (re-export from `walk.agents.lint`), `lint_constitutions_provider_names` (delegates), `lint_constitution_overrides` |
+| `src/walk/cli/cmd_doctor.py` | modify | — (strict section: one line per role with a constitution, enabled or not) |
+| `tests/agents/test_narrowing.py` | create | — |
+| `tests/agents/test_lint.py` | create | — |
+| `tests/agents/test_constitution_loader.py` | modify | — |
+| `tests/agents/test_rendering.py` | modify | — |
+| `tests/cli/test_lints.py` | modify | — |
+
+#### Interface contract
+ADR-0013 D-2 (fields), D-3 (body order), D-4 (merge), D-5 (lint); `Constitution` (DOMAIN-MODEL §4.2). Deltas:
+```python
+# src/walk/agents/narrowing.py
+class NarrowingDirection(StrEnum):
+    REPLACE = "REPLACE"            # free scalar/list: override replaces
+    SUBSET = "SUBSET"              # override list must be a subset of default
+    SUPERSET = "SUPERSET"          # override list must contain every default element
+    NOT_HIGHER = "NOT_HIGHER"      # ordered value may only be lowered
+    STRICTER_RULES = "STRICTER_RULES"  # PermissionRule list: see Behavior 3
+    ESCALATION_RULES = "ESCALATION_RULES"  # see Behavior 4
+
+NARROWING_RULES: dict[str, NarrowingDirection] = {
+    "authority.decision_scope": SUBSET, "authority.max_autonomy_level": NOT_HIGHER, "authority.may_approve": SUBSET,
+    "authority.may_reject": SUBSET, "authority.may_create_work": SUBSET, "tool_permissions": STRICTER_RULES,
+    "forbidden_actions": SUPERSET, "escalation_rules": ESCALATION_RULES,
+}   # every other front-matter field: REPLACE; `role`, `id`, `type` may not change at all
+
+def check_narrowing(default: Constitution, override: JsonDict) -> list[str]:
+    """Returns violations as '<field>: <reason>' (empty = ok). Pure."""
+def merge_escalation_rules(default: list[EscalationRule], override: list[EscalationRule]) -> list[EscalationRule]: ...
+
+# src/walk/agents/lint.py
+PROVIDER_NAME_PATTERN: re.Pattern[str]      # r"(?i)\b(claude|codex|gpt|anthropic|openai|gemini|fake-codex|fake-claude)\b"
+REQUIRED_BODY_SECTIONS: tuple[str, ...] = ("Identity", "Mission", "Responsibilities", "Authority", "Professional Bias",
+    "Core Beliefs", "Decision Principles", "Risk Tolerance", "Preferred Evidence", "Conflict Behavior",
+    "Escalation Rules", "Forbidden Actions")          # D-3; "Working Guidance" optional
+def provider_name_hits(text: str) -> list[str]: ...   # sorted unique lower-cased matches
+def missing_body_sections(constitution: Constitution) -> list[str]: ...
+
+# src/walk/cli/lints.py
+def lint_constitution_overrides(roles_dir: Path) -> list[str]: ...   # '<file>: <finding>' per raw-text hit / narrowing violation
+```
+
+#### Behavior
+1. `ConstitutionLoader.load(role)` with a project override: parse; `check_narrowing(default, override_front_matter)`; any violation → `ConstitutionError("<field>: <reason>; widening requires a HIGH-risk improvement approval (§104)")` listing all violations; else merge per `NARROWING_RULES` (REPLACE fields replace, others take the override value which is already proven narrower).
+2. `SUBSET`, `SUPERSET`, `NOT_HIGHER` compare enum values; `max_autonomy_level` compares `AutonomyLevel` ints. `forbidden_actions` is `SUPERSET` (an override may add forbidden actions, never remove one) — this corrects the E01-S17 "subset" wording.
+3. `STRICTER_RULES` for `tool_permissions`: key = `(tool, command_pattern)`. For each override rule: if the key exists in the default, the effect may only move along `ALLOW → REQUIRE_APPROVAL → DENY` (and an approver may only change from an agent role to USER); a new key may only have effect `DENY` or `REQUIRE_APPROVAL`. Default rules omitted by the override are removed only when their effect is `ALLOW`; omitting a default `DENY`/`REQUIRE_APPROVAL` rule is a violation.
+4. `ESCALATION_RULES`: every default rule's `(condition, category)` must be present in the override with `to_level >=` the default's; extra rules are allowed. `merge_escalation_rules` returns default order followed by new override rules.
+5. `role`, `id` and `type` differing from the default → violation `"<field>: immutable"`.
+6. Raw override text (front matter + body) with any `provider_name_hits` → `ConstitutionError` naming the matches (D-5); kernel defaults are checked by the same function.
+7. Every kernel default constitution has no `missing_body_sections` (lint test over `src/walk/agents/defaults/*.md`); a project override may omit sections (defaults are kept).
+8. `render_constitution` emits D-3 sections in `REQUIRED_BODY_SECTIONS` order, then `## Working Guidance`, then project-appended sections in the order they appear in the override; same input → byte-identical output.
+9. `walk doctor --strict` constitutions block: one line per role with a constitution (`<ROLE>: ok` or the findings), using `lint_constitutions_provider_names` + `lint_constitution_overrides`; any finding → exit 1 (E02-S15 strict semantics). `PROVIDER_NAME_PATTERN` exists only in `walk.agents.lint`; `walk.cli.lints` re-exports it.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given LEAD_DEV default and override adding `DESIGN` to `decision_scope` and raising `max_autonomy_level` to 2 When `check_narrowing` Then two violations naming both fields | `tests/agents/test_narrowing.py::test_widening_authority_reported_per_field` |
+| 2 | Given an override removing a default `forbidden_actions` entry Then violation; adding one Then ok | `tests/agents/test_narrowing.py::test_forbidden_actions_superset_only` |
+| 3 | Given default `ALLOW review.approve` and override `DENY review.approve` Then ok; override `ALLOW git.merge_protected` (default REQUIRE_APPROVAL) Then violation; new key with `ALLOW` Then violation | `tests/agents/test_narrowing.py::test_tool_permissions_stricter_only` |
+| 4 | Given an override omitting a default `DENY` rule Then violation; omitting a default `ALLOW` rule Then ok | `tests/agents/test_narrowing.py::test_omitting_default_rules` |
+| 5 | Given an override lowering "core architecture migration" from 3 to 2 Then violation; raising "cross-team scope increase" to 3 and adding a new rule Then ok and merged order = defaults then new | `tests/agents/test_narrowing.py::test_escalation_rules_may_only_tighten` |
+| 6 | Given an override changing `role` Then violation `role: immutable` | `tests/agents/test_narrowing.py::test_identity_fields_immutable` |
+| 7 | Given `.ai/agents/roles/lead_dev.md` with a widening When `load(LEAD_DEV)` Then `ConstitutionError` mentioning `§104` and every violating field | `tests/agents/test_constitution_loader.py::test_widening_error_lists_all_fields_and_route` |
+| 8 | Given override body text "prefer Codex for refactors" When loaded Then `ConstitutionError` naming `codex` | `tests/agents/test_constitution_loader.py::test_override_body_provider_name_rejected` |
+| 9 | Given every kernel default constitution Then `missing_body_sections == []` and `provider_name_hits == []` | `tests/agents/test_lint.py::test_kernel_defaults_complete_and_model_independent` |
+| 10 | Given text "Use GPT-5 or fake-claude" Then hits `["fake-claude", "gpt"]` | `tests/agents/test_lint.py::test_provider_name_hits_sorted_unique` |
+| 11 | Given an override appending `## Studio Conventions` When rendered Then section order is D-3, `Working Guidance`, `Studio Conventions`; rendered twice byte-identical | `tests/agents/test_rendering.py::test_render_constitution_appended_sections_last` |
+| 12 | Given a roles dir with one clean and one widening override When `lint_constitution_overrides` Then exactly one finding prefixed by the widening file name | `tests/cli/test_lints.py::test_lint_constitution_overrides_reports_widening` |
+| 13 | Given `walk.cli.lints.PROVIDER_NAME_PATTERN` Then it is the same object as `walk.agents.lint.PROVIDER_NAME_PATTERN` | `tests/cli/test_lints.py::test_single_provider_name_pattern` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: in a bootstrapped repo add `.ai/agents/roles/lead_dev.md` with `authority: {decision_scope: [TECH, DESIGN]}`; `walk doctor --strict` exits 1 printing `LEAD_DEV: authority.decision_scope: widening ...`; remove `DESIGN` → `LEAD_DEV: ok`, exit 0.
+
+#### Notes
+- ADR-0013 D-3–D-5 complete; D-4 "widening requires a HIGH-risk improvement approval (§104)" is enforced here as a hard refusal — the approval path itself is E10.
+- `NEW NAME:` `walk.agents.narrowing` (`NarrowingDirection`, `NARROWING_RULES`, `check_narrowing`, `merge_escalation_rules`), `walk.agents.lint` (`PROVIDER_NAME_PATTERN` relocated from `walk.cli.lints`, `REQUIRED_BODY_SECTIONS`, `provider_name_hits`, `missing_body_sections`), `lint_constitution_overrides`; pattern additionally matches `gemini`, `fake-codex`, `fake-claude`.
+- Pitfall: E01-S17 Behavior 2 called `forbidden_actions` narrowing a "subset"; the correct direction is superset. Existing test `test_override_may_narrow` must keep passing — adjust its fixture only if it removed a forbidden action, and say so in the commit body.
+- Commit subject: `feat: enforce constitution narrowing, lint and section order (E05-S07)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S08 — Conflict detection → debate opening from review/design disagreement
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.7, §10.1 (detect conflicts, initiate debates), §45, §46, §133, §137 (Inv. 5), §138 (Infinite Debate, Over-Engineering)
+**Depends on:** E05-S04, E03-S13
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+When a non-debate run challenges the work it was given — a LEAD_DEV design or review that disagrees with a feature requirement, an implementer that disputes review findings — by returning a `debate_position`, the kernel detects the conflict, blocks the work item, opens a debate between the challenger and the category counterpart seeded with the challenger's round-1 position, and limits how many debates one item may spawn.
+
+#### Scope
+- In: pure conflict detection, category inference, seeding round 1, blocking the item with `blocked_reason`, dedup against an open debate, per-item debate limit with direct Level-3 escalation, output-contract instruction on how to challenge.
+- Out: debate runs and round progression (E05-S04); PO/USER escalation and unblocking on resolution (E05-S05); CLI (E05-S09).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/debate/conflicts.py` | create | `Conflict`, `CONFLICT_CATEGORY_BY_PURPOSE`, `detect_conflict` |
+| `src/walk/debate/models.py` | modify | `DebatePolicy.max_debates_per_item` |
+| `src/walk/debate/__init__.py` | modify | re-exports |
+| `src/walk/agents/defaults/policies.yaml` | modify | — (`debate.max_debates_per_item: 2`) |
+| `src/walk/runtime/conflict_handler.py` | create | `ConflictHandler` |
+| `src/walk/runtime/applier.py` | modify | — (`DefaultOutputApplier.apply` calls `ConflictHandler.handle` before raising the status-mapped workflow event) |
+| `src/walk/agents/templates/_output_contract.md.j2` | modify | — (challenge instructions) |
+| `src/walk/cli/composition.py` | modify | — (builds `ConflictHandler`) |
+| `tests/debate/test_conflicts.py` | create | — |
+| `tests/runtime/test_conflict_handler.py` | create | — |
+| `tests/runtime/test_applier_conflict.py` | create | — |
+| `tests/agents/test_output_contract_challenge.py` | create | — |
+
+#### Interface contract
+`AgentOutput.debate_position` (DOMAIN-MODEL §4.2), `DebateManager.open/submit_position/list` (INTERFACES §1.9), `select_participants` (E05-S02), `normalise_position` (E05-S04), `WorkflowManager.raise_event` (INTERFACES §1.3) with event `block` and payload keys `resume_state`, `blocked_reason` (WBS §3.4). Deltas:
+```python
+# src/walk/debate/conflicts.py
+CONFLICT_CATEGORY_BY_PURPOSE: dict[str, DecisionCategory] = {
+    "DESIGN": DecisionCategory.DESIGN, "PLAN": DecisionCategory.PRODUCT, "REVIEW": DecisionCategory.TECH,
+    "IMPLEMENT": DecisionCategory.TECH, "QC": DecisionCategory.QUALITY, "TRIAGE": DecisionCategory.QUALITY,
+}
+
+class Conflict(FrozenModel):
+    work_item_id: WorkItemId
+    challenger: AgentRole
+    category: DecisionCategory
+    topic: str                       # f"{item.id} {item.title}: {position.position}" truncated to 200 chars
+    position: DebatePosition         # the challenger's raw position
+
+def detect_conflict(*, purpose: str, role: AgentRole, output: AgentOutput, item: WorkItem) -> Conflict | None:
+    """Pure. None when purpose == 'DEBATE', output.debate_position is None, or output.status not in
+    {REJECTED, BLOCKED, NEEDS_INPUT, COMPLETED}. Category = first output.decisions[].category if any, else
+    CONFLICT_CATEGORY_BY_PURPOSE[purpose] (PROCESS for unknown purposes)."""
+
+# src/walk/debate/models.py
+class DebatePolicy(WalkModel):                 # E05-S03 fields +
+    max_debates_per_item: int = Field(default=2, ge=1, le=10, description="§138 Infinite Debate: debates one work item may open")
+
+# src/walk/runtime/conflict_handler.py
+class ConflictHandler:
+    def __init__(self, debates: DebateManager, decisions: DecisionManager, workflow: WorkflowManager,
+                 enabled_roles: Callable[[], list[AgentRole]], policy: DebatePolicy) -> None: ...
+    async def handle(self, run: AgentRun, item: WorkItem, conflict: Conflict) -> DebateId | None:
+        """Returns the opened debate id, or None when deduplicated or escalated (Behavior 3-4)."""
+```
+
+#### Behavior
+1. `DefaultOutputApplier.apply`: after evidence/decisions/escalations are applied and before the status-mapped workflow event, `detect_conflict(...)`; when a conflict is found `ConflictHandler.handle` runs and the status-mapped event is **not** raised (the item is blocked instead); `AppliedEffects.workflow_event == "block"`.
+2. `handle` normal path: `participants = select_participants(challenger, category, enabled_roles())`; `debate = debates.open(topic, category, participants, opened_by=challenger, work_item_id=item.id)`; the challenger's position is normalised (`normalise_position`, round 1, `run_id=run.id`) and submitted, so only the counterpart has a pending round-1 turn; `workflow.raise_event(item.id, "block", TransitionContext(actor_role=ORCHESTRATOR, source=KERNEL, run_id=run.id, payload={"resume_state": item.state, "blocked_reason": f"debate {debate.id}"}))`.
+3. Dedup: when `debates.list(states=<non-terminal>, work_item_id=item.id)` is non-empty, no debate opens; the position is attached to the run as `Finding(severity="WARNING", summary=f"conflict ignored: debate {id} already open")`; the status-mapped event is still suppressed and the item is blocked only if not already `BLOCKED`.
+4. Limit (§138): when the item already has `>= policy.max_debates_per_item` debates (any state), no debate opens; instead `decisions.escalate(EscalationRequest(to_level=USER, category, question=topic, options=[position.position, position.alternative] minus empties, recommendation=position.position), from_role=challenger, work_item_id=item.id, run_id=run.id)` and the item is blocked with `blocked_reason=f"escalation {escalation.id}"`.
+5. A `debate_position` returned by a run whose status is `APPROVED` or `FAILED` is ignored (no conflict; approvals cannot simultaneously disagree, failures are retried).
+6. The `_output_contract.md.j2` partial gains a "Challenging your input" paragraph: to disagree with a requirement, design or finding, fill `debate_position` (position, reasoning, evidence, cost, risk, alternative, confidence) and return `REJECTED` (reviewers/designers) or `BLOCKED` (implementers); the kernel opens a structured debate and the work item waits for its decision; never silently implement around a disagreement (§45, Invariant 5).
+7. The opened debate's `ON_DEBATE_OPENED` and `DEBATE_POSITION` events are the only ledger/hook effects of this story (write points unchanged); the `block` transition writes `WORK_ITEM_TRANSITION` through the state machine as usual.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a LEAD_DEV `DESIGN` output `REJECTED` with `debate_position` and no decisions When `detect_conflict` Then category `DESIGN`, challenger LEAD_DEV, topic starts with the feature id | `tests/debate/test_conflicts.py::test_design_rejection_with_position_is_conflict` |
+| 2 | Given the same output with a TECH proposal Then category `TECH` | `tests/debate/test_conflicts.py::test_first_proposal_category_wins` |
+| 3 | Given purpose `DEBATE`, or no `debate_position`, or status `APPROVED` Then `None` | `tests/debate/test_conflicts.py::test_non_conflicts` |
+| 4 | Given DESIGN_LEADER enabled When `handle` for a LEAD_DEV DESIGN conflict on FEAT-0001 Then debate participants `[LEAD_DEV, DESIGN_LEADER]`, one round-1 position by LEAD_DEV, FEAT-0001 `BLOCKED` with `blocked_reason == "debate DEB-0001"` and `resume_state == DESIGN` | `tests/runtime/test_conflict_handler.py::test_conflict_opens_seeded_debate_and_blocks_item` |
+| 5 | Given DESIGN_LEADER disabled Then participants `[LEAD_DEV, ORCHESTRATOR]` | `tests/runtime/test_conflict_handler.py::test_conflict_falls_back_to_orchestrator` |
+| 6 | Given an IN_ROUND debate already open on FEAT-0001 When another conflict arrives Then no new debate, WARNING finding "already open" | `tests/runtime/test_conflict_handler.py::test_conflict_deduplicated_against_open_debate` |
+| 7 | Given FEAT-0001 already has 2 debates (RESOLVED) When a third conflict arrives Then no debate, one Level-3 escalation, item BLOCKED with `blocked_reason` starting "escalation " | `tests/runtime/test_conflict_handler.py::test_debate_limit_escalates_to_user` |
+| 8 | Given a fake LEAD_DEV DESIGN run returning `REJECTED` + `debate_position` When applied Then `AppliedEffects.workflow_event == "block"`, the status-mapped event not raised, `DEBATE_OPENED` and one `DEBATE_POSITION` in the ledger | `tests/runtime/test_applier_conflict.py::test_applier_routes_conflict_to_debate` |
+| 9 | Given a SENIOR_DEV IMPLEMENT output `BLOCKED` with a `debate_position` disputing review findings Then a TECH debate `[SENIOR_DEV, LEAD_DEV]` opens | `tests/runtime/test_applier_conflict.py::test_implementer_disputes_review_findings` |
+| 10 | Given every template rendered When searching the output-contract partial Then "debate_position" and "Challenging your input" are present | `tests/agents/test_output_contract_challenge.py::test_output_contract_explains_challenge` |
+| 11 | Given `policies.yaml` `debate: {max_debates_per_item: 0}` When loaded Then `ConfigError` | `tests/debate/test_conflicts.py::test_max_debates_per_item_bounds` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the §133 fixture: after the fake LEAD_DEV design run, `walk work show FEAT-0001 --json` shows `state == "BLOCKED"` and `blocked_reason == "debate DEB-0001"`; `walk ledger query --kind DEBATE_OPENED --json` shows participants `["LEAD_DEV", "DESIGN_LEADER"]`.
+
+#### Notes
+- §10.1 "detect conflicts; initiate debates" is realised kernel-side (the Orchestrator role stays neutral and never authors positions); ARCHITECTURE §3.2 step 6 order is preserved — the conflict check sits between "decisions/escalations" and "workflow event".
+- `NEW NAME:` `walk.debate.conflicts` (`Conflict`, `CONFLICT_CATEGORY_BY_PURPOSE`, `detect_conflict`), `DebatePolicy.max_debates_per_item` + `policies.yaml` key, `walk.runtime.conflict_handler.ConflictHandler`, `blocked_reason` formats `debate <id>` / `escalation <id>`.
+- Pitfall: the item may already be `BLOCKED` (e.g. a NEEDS_INPUT path raised it earlier in the same apply); `block` from `BLOCKED` is not a table transition — check the state first.
+- Commit subject: `feat: open debates from agent disagreement with per-item limit (E05-S08)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S09 — `walk debates list/show`, `walk decisions override`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §44, §45, §46, §87, §93 (override decisions), §137 (Inv. 5, 9)
+**Depends on:** E05-S03, E05-S01
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** QC
+
+#### Goal
+The user can inspect debates (state, rounds, every position, resulting decision) from the CLI and override any accepted decision, with the override executed by the daemon when one runs and in-process otherwise.
+
+#### Scope
+- In: `walk debates list [--state S...] [--item ID] [--json]`, `walk debates show DEB_ID [--json]`, `walk decisions override DEC_ID --outcome TEXT --rationale TEXT`, `CommandConsumer` handler `decisions.override`, `KernelStatus.open_debates` population.
+- Out: `walk debates abandon` (not in INTERFACES §6; user abandons by denying the Level-3 approval, E05-S05); decision list/show (E04-S05).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/cli/cmd_debates.py` | create | `list_debates`, `show_debate` (typer commands `list`, `show`) |
+| `src/walk/cli/cmd_decisions.py` | modify | `override_decision` (typer command `override`) |
+| `src/walk/cli/app.py` | modify | — (registers `debates` group) |
+| `src/walk/orchestrator/commands.py` | modify | — (`CommandConsumer` handles `decisions.override` → `DecisionManager.override`) |
+| `src/walk/orchestrator/service.py` | modify | — (`DefaultOrchestrator.status().open_debates` = non-terminal debate ids) |
+| `tests/cli/test_cmd_debates.py` | create | — |
+| `tests/cli/test_cmd_decisions_override.py` | create | — |
+| `tests/orchestrator/test_commands_override.py` | create | — |
+
+#### Interface contract
+CLI rows of INTERFACES §6 (`walk decisions … override ID --outcome TEXT --rationale TEXT`, `walk debates list / show ID`); exit codes per INTERFACES §6; `DecisionManager.override` (INTERFACES §1.9); `KernelStatus.open_debates` (INTERFACES §1.1). Output shapes:
+```text
+walk debates list            -> table: ID | STATE | ROUND/MAX | CATEGORY | ITEM | PARTICIPANTS | DECISION
+walk debates list --json     -> [{"id","state","round","max_rounds","category","work_item_id","participants","decision_id","opened_at"}]
+walk debates show DEB_ID     -> header (topic, state, opened_by, budget id) + per round: role, confidence, agrees_with, position,
+                                reasoning, cost, risk, alternative, evidence ids + resulting decision id/outcome
+walk debates show --json     -> {"debate": Debate, "positions": [DebatePosition...]}   (model_dump(mode="json"))
+walk decisions override ...  -> "DEC-0001 OVERRIDDEN -> DEC-0002 ACCEPTED (owner USER)"; --json -> new Decision
+```
+Command row: `commands.name = "decisions.override"`, `args = {"decision_id", "outcome", "rationale"}`.
+
+#### Behavior
+1. `debates list/show` read SQLite directly (read-only connection), never through the daemon; `list` orders by `opened_at` descending; `--state` accepts `DebateState` values (invalid → exit 1).
+2. `show` of an unknown id → exit 1 with `debate not found: <id>`.
+3. `decisions override`: with the kernel lock held by a daemon → `CommandClient` (`decisions.override`), result printed from `command_results`; without a daemon → in-process `build_kernel(...)` + `DecisionManager.override`.
+4. Errors from `override` map to exit codes: `PermanentError` (not ACCEPTED, unknown id) → 1; nothing is written.
+5. The override's ledger event (`USER_OVERRIDE`) and documents are produced by E05-S01; the CLI adds nothing else to the ledger.
+6. `status().open_debates` lists ids of debates in `OPEN, IN_ROUND, CONSENSUS_CHECK, ESCALATED_PO, ESCALATED_USER`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given two debates (one RESOLVED, one IN_ROUND) When `walk debates list --json` Then two rows ordered newest first with `decision_id` set only on the resolved one | `tests/cli/test_cmd_debates.py::test_list_debates_json` |
+| 2 | Given `--state IN_ROUND` Then one row; `--state NOPE` Then exit 1 | `tests/cli/test_cmd_debates.py::test_list_debates_state_filter` |
+| 3 | Given a resolved debate with two rounds When `walk debates show DEB-0001` Then output contains both rounds, every role's position and the decision id | `tests/cli/test_cmd_debates.py::test_show_debate_rounds_and_decision` |
+| 4 | Given an unknown id When `show` Then exit 1 and message `debate not found` | `tests/cli/test_cmd_debates.py::test_show_unknown_debate_exit_1` |
+| 5 | Given no daemon and ACCEPTED `DEC-0001` When `walk decisions override DEC-0001 --outcome X --rationale Y` Then exit 0, `DEC-0002` ACCEPTED owner USER, `DEC-0001` OVERRIDDEN | `tests/cli/test_cmd_decisions_override.py::test_override_in_process` |
+| 6 | Given a PROPOSED decision When override Then exit 1, no new decision | `tests/cli/test_cmd_decisions_override.py::test_override_non_accepted_exit_1` |
+| 7 | Given a `decisions.override` command row When consumed by `CommandConsumer` Then `DecisionManager.override` called once and `command_results` holds the new decision id | `tests/orchestrator/test_commands_override.py::test_consumer_executes_override` |
+| 8 | Given an IN_ROUND and a RESOLVED debate When `status()` Then `open_debates == ["DEB-0002"]` | `tests/orchestrator/test_commands_override.py::test_status_lists_open_debates` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `walk debates list`, `walk debates show DEB-0001`, `walk decisions override DEC-0001 --outcome "Use addressables" --rationale "load time"`, `walk decisions list --json` on the E05-S05 fixture DB.
+
+#### Notes
+- INTERFACES §6 marks `walk debates` `[MVP minimal]`; WBS §3.7 lists `cmd_debates.py`.
+- `NEW NAME:` command name `decisions.override`; typer function names `list_debates`, `show_debate`, `override_decision`.
+- Commit subject: `feat: add debates cli and decision override command (E05-S09)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-S10 — Epic gate: §133 debate test (e2e)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §133, §44, §45, §46, §50, §51, §10.2, §6.7, §136 ("Debate → persisted decision"), §137 (Inv. 5, 7), §138 (Infinite Debate)
+**Depends on:** E05-S05, E05-S07, E05-S08, E05-S09
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+The §133 chain "feature requirement → Lead Dev disagrees → counter-position → structured debate → decision → persisted decision" runs end-to-end with fake adapters producing scripted positions, including the PO arbitration path and the user path, and every artefact (SQLite rows, `.ai/decisions/DEC-NNNN.md`, feature-context link, ledger sequence) is asserted.
+
+#### Scope
+- In: `tests/e2e/test_e05_gate.py`, fixtures `e05_scenario` (PO enabled) and `e05_user_scenario` (PO disabled) in `tests/e2e/conftest.py`.
+- Out: production code (defects become `E05-Bxx` bugfix stories).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/e2e/test_e05_gate.py` | create | — |
+| `tests/e2e/conftest.py` | modify | `e05_scenario`, `e05_user_scenario` fixtures |
+| `tests/fakes/fake_model_adapter.py` | modify | — (script selection by `(role, purpose, debate round)` if not already supported by E05-S04 `debate_output`) |
+
+#### Interface contract
+Fixture `e05_scenario(bootstrapped_repo) -> E05Scenario` (`WalkModel` in conftest): `handle: KernelHandle`, `feature_id: FeatureId`, `debate_id: DebateId`, `decision_id: DecisionId`, `repo: Path`. Project config written before kernel start: `.ai/agents/policies.yaml` → `roles: {PRODUCT_OWNER: {enabled: true}, DESIGN_LEADER: {enabled: true}}`, `debate: {max_rounds: 2}`. Adapters: `FakeModelAdapter` instances `fake-claude/sim` and `fake-codex/sim` (WBS §3.6), `LocalWorkProvider`, real temp git repo. Scripts:
+
+| Run (role / purpose / round) | Scripted output |
+|---|---|
+| ORCHESTRATOR / PLAN | `COMPLETED`, one STORY draft, context updates `Intent`, `Design Goal` |
+| DESIGN_LEADER / DESIGN (DISCOVERY) | `COMPLETED`, design goal "unlimited double jump" |
+| LEAD_DEV / DESIGN (1st) | `REJECTED`, `debate_position`: "Cap double jump at 2 per airtime", confidence 0.8, cost "2 days physics rework avoided", risk "tunnelling at high velocity" |
+| DESIGN_LEADER / DEBATE / r1, r2 | own position "Unlimited double jump is the core fantasy", confidence 0.7, `agrees_with_role=None` |
+| LEAD_DEV / DEBATE / r2 | holds "Cap double jump at 2 per airtime", `agrees_with_role=None` |
+| PRODUCT_OWNER / DEBATE (ESCALATED_PO) | `COMPLETED`, one DESIGN proposal "Allow 3 jumps per airtime; revisit after playtest", rationale "player value vs physics cost" |
+| LEAD_DEV / DESIGN (2nd, after unblock) | `COMPLETED`, `Architecture` section update |
+
+`e05_user_scenario` is identical except PRODUCT_OWNER disabled; after `ESCALATED_USER` the test runs `walk approve <APV> --note "Cap at 2"`.
+
+#### Behavior
+Scenario steps (each a test, executed in order via the fixture's cached state; `walk run --once` ticks until quiescent, max 30 ticks):
+1. `walk feature add "Double jump" --gdd GDD/movement.md#double-jump` creates FEAT-0001; ticks run PLAN and DISCOVERY design.
+2. The first LEAD_DEV DESIGN run returns `REJECTED` + `debate_position`: FEAT-0001 is `BLOCKED` with `blocked_reason == "debate DEB-0001"`; `DEB-0001` participants `[LEAD_DEV, DESIGN_LEADER]`, category `DESIGN`.
+3. Round 1: LEAD_DEV's seeded position plus one DESIGN_LEADER `DEBATE` run; agreement 0.5 < 0.75 → round 2; round 2: one run per participant; no consensus at `round == max_rounds == 2` → `ESCALATED_PO`.
+4. One PRODUCT_OWNER `DEBATE` run resolves: `DEB-0001` `RESOLVED`, `decision_id == "DEC-0001"`.
+5. `DEC-0001`: `status ACCEPTED`, `owner PRODUCT_OWNER`, `autonomy_level PO`, `debate_id DEB-0001`, `participants [LEAD_DEV, DESIGN_LEADER]`, 2 positions, `related_work_items [FEAT-0001]`; row in `decisions`; `.ai/decisions/DEC-0001.md` exists with `type: decision`, `status: ACCEPTED` and the nine E04-S05 sections; `.ai/features/FEAT-0001.md` section `Important Decisions` contains `DEC-0001`.
+6. FEAT-0001 is unblocked back to `DESIGN`; the second LEAD_DEV DESIGN run's `AgentInput.decisions` contains `DEC-0001`; it completes.
+7. Ledger order for `DEB-0001` (filtered by kind): `DEBATE_OPENED`, `DEBATE_POSITION` ×4, `ESCALATION_RAISED{to_level: 2}`, `DECISION_RECORDED`, `DEBATE_RESOLVED`; budget `TASK:DEB-0001:REVIEW_LOOPS` consumed 2.
+8. Invariant 5: no `decisions` row is `ACCEPTED` other than `DEC-0001`; `debate_positions` rows are not referenced as decisions; every ACCEPTED decision has an owner that is PRODUCT_OWNER, USER, KERNEL-with-debate, or a role whose `decision_scope` contains the category.
+9. User path (`e05_user_scenario`): after round 2 → `ESCALATED_USER`, `walk approvals --pending --json` lists one `kind == "escalation"` request; `walk approve APV-0001 --note "Cap at 2"` → debate `RESOLVED`, decision owner `USER`, outcome "Cap at 2", `autonomy_level USER`, FEAT-0001 unblocked.
+10. `walk debates show DEB-0001` and `walk decisions show DEC-0001` exit 0 and contain both rounds / the outcome.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the feature in DESIGN When LEAD_DEV rejects with a position Then FEAT-0001 BLOCKED and DEB-0001 opened with `[LEAD_DEV, DESIGN_LEADER]` | `tests/e2e/test_e05_gate.py::test_lead_dev_challenge_opens_debate` |
+| 2 | Given two rounds without consensus Then DEB-0001 reached ESCALATED_PO after exactly 4 positions | `tests/e2e/test_e05_gate.py::test_two_rounds_without_consensus_escalate_to_po` |
+| 3 | Given the PO arbitration Then DEB-0001 RESOLVED and DEC-0001 ACCEPTED owner PRODUCT_OWNER level PO | `tests/e2e/test_e05_gate.py::test_po_resolves_and_decision_accepted` |
+| 4 | Given DEC-0001 Then SQLite row and `.ai/decisions/DEC-0001.md` agree on status, outcome and sections | `tests/e2e/test_e05_gate.py::test_decision_persisted_in_sqlite_and_ai_folder` |
+| 5 | Given FEAT-0001 context Then `Important Decisions` lists DEC-0001 | `tests/e2e/test_e05_gate.py::test_decision_linked_to_feature_context` |
+| 6 | Given resolution Then FEAT-0001 back in DESIGN and the next LEAD_DEV run receives DEC-0001 and completes | `tests/e2e/test_e05_gate.py::test_feature_unblocked_and_decision_in_context` |
+| 7 | Given the ledger Then the DEB-0001 event sequence and REVIEW_LOOPS consumption match | `tests/e2e/test_e05_gate.py::test_ledger_sequence_and_round_budget` |
+| 8 | Given all decisions Then only DEC-0001 is ACCEPTED and every ACCEPTED owner is an authority | `tests/e2e/test_e05_gate.py::test_opinion_is_not_decision_invariant` |
+| 9 | Given PO disabled When the user approves the escalation with a note Then decision owner USER outcome "Cap at 2" and the feature unblocked | `tests/e2e/test_e05_gate.py::test_user_resolves_when_no_po` |
+| 10 | Given the completed scenario When `walk debates show` / `walk decisions show` Then exit 0 with rounds and outcome | `tests/e2e/test_e05_gate.py::test_cli_shows_debate_and_decision` |
+
+#### Evidence required
+- Quality gate output including `tests/e2e/test_e05_gate.py` (10 passed).
+- Demo transcript on the fixture repo: `walk debates list`, `walk debates show DEB-0001`, `walk decisions show DEC-0001`, `cat .ai/decisions/DEC-0001.md | head -30`, `walk ledger query --kind DEBATE_OPENED --kind DEBATE_POSITION --kind ESCALATION_RAISED --kind DEBATE_RESOLVED --json`.
+
+#### Notes
+- WBS §9 maps §136 "Debate → persisted decision" to this story; WBS §4 E05 gate text ("two rounds without consensus escalate to PO") is realised with project `debate.max_rounds: 2`, proving the round limit is configurable (§46).
+- Gate uses only fakes and a temp repo; no network. Any production change is a separate `bugfix` story; this commit touches tests only.
+- Commit subject: `feat: add epic 05 gate test for structured debate (E05-S10)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E05-R01 — Review E05
+
+**Status:** TODO
+**Type:** docs
+**Requirements:** §137 (Inv. 5, 7), §23, §44–§46, §51, §138 (Infinite Debate)
+**Depends on:** E05-S10
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** LeadDev   **Reviewer role:** QC
+
+#### Goal
+An independent agent instance (different model than the E05 implementer where possible, §23) verifies every E05 story against the Definition of Done and Invariants 5 and 7, recording defects as `bugfix` stories.
+
+#### Scope
+- In: stories E05-S01…S10 and their commits; `INTERFACES.md` / `DOMAIN-MODEL.md` / ADR-0010 / ADR-0013 deltas; WBS §6 register entries introduced by E05.
+- Out: fixing defects (each becomes `E05-Bxx`).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/02-work-breakdown/EPIC-05-multi-agent-reasoning.md` | modify | — (review record appended; `E05-Bxx` stories appended if any) |
+| `docs/02-work-breakdown/WBS.md` | modify | — (status rows, §6 register) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/adr/ADR-0013-agent-constitution-schema.md` | modify (only if drift found) | — |
+| `tests/architecture/test_decision_acceptance_paths.py` | create | — |
+| `tests/architecture/test_debate_tables_as_data.py` | create | — |
+
+#### Interface contract
+Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
+
+#### Behavior
+1. For each story: `git show <sha>`; Files table == changed files (extra files need commit-body justification); every acceptance-criterion test exists and passes; coverage ≥ 90 % for touched modules.
+2. Invariant 5 (Opinion ≠ Decision): the only code that sets `DecisionStatus.ACCEPTED` is `DefaultDecisionManager.record`; `DebatePosition` and `AgentOutput.decisions` never reach the `decisions` table as ACCEPTED without passing `record`.
+3. Invariant 7 (bounded autonomy): every `Decision` and `Escalation` row carries an `autonomy_level`/`to_level`; `classify` consults `project_autonomy_max` on every call; every Level-3 escalation has an `ApprovalRequest(approver=USER)` (query over the E05 gate DB).
+4. §46/§138: `debate_workflow.yaml` is loaded data (no state literal comparisons for debate transitions outside `walk/debate/state_machine.py`); `max_rounds` default 3 and configurable; every debate in the gate DB is terminal or has a scheduled actor.
+5. Import table (ARCHITECTURE §2.2): `walk.debate` imports none of `permissions`, `agents`, `runtime`, `orchestrator`; `walk.decisions` does not import `walk.debate`; `import-linter` green. The `HookManager` constructor dependency of `DefaultDecisionManager` (E04-S05) and `DefaultDebateManager` (E05-S03) is checked against the import-linter contract as configured in E01-S01; a violation is a defect against those stories.
+6. ADR-0013: all six shipped constitutions pass `missing_body_sections` and `provider_name_hits`; narrowing table covers every ADR-0013 D-4 field.
+7. Debate id prefix: code and docs use `DEB-` (DOMAIN-MODEL §2); any remaining `DBT` reference is a defect.
+8. `NEW NAME:` items of E05 are present in WBS §6 or listed in the review note for the architect.
+9. Defects → `E05-Bxx` stories using the template; commit `docs: review epic 05 stories E05-S01..S10 (E05-R01)`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given each E05 story When the DoD checklist is applied Then every box is checked or an `E05-Bxx` story exists | manual checklist recorded in Evidence |
+| 2 | Given `src/walk` When searching assignments of `DecisionStatus.ACCEPTED` Then they occur only in `walk/decisions/service.py` inside `record` | `tests/architecture/test_decision_acceptance_paths.py::test_accepted_status_set_only_by_record` |
+| 3 | Given `src/walk/debate` When parsed for comparisons against `DebateState` members outside `state_machine.py` and `scheduling.py` Then none drive transitions | `tests/architecture/test_debate_tables_as_data.py::test_debate_transitions_only_from_table` |
+| 4 | Given the E05 gate DB When querying Level-3 escalations Then each has a non-null `approval_request_id` | manual checklist recorded in Evidence |
+| 5 | Given the quality gate on `main` Then green with overall coverage ≥ 85 % | manual checklist recorded in Evidence |
+
+#### Evidence required
+- Checklist per story (ID → DoD items → OK/defect id).
+- Quality gate output on `main` after the review commit.
+- List of `E05-Bxx` stories created (or "none") and NEW NAME items forwarded to the architect.
+
+#### Notes
+- Tests 2–3 are architecture tests created by the reviewer (review tasks may add tests, never production code).
+- Commit subject: `docs: review epic 05 stories E05-S01..S10 (E05-R01)`.
+
+#### Evidence (filled by implementer)
+_pending_

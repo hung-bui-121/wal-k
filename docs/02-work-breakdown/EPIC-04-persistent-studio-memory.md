@@ -1191,11 +1191,11 @@ The §132 failover is proven with knowledge that exists only in `.ai/` files wri
 | `tests/fakes/fake_model_adapter.py` | modify | — (script helper `interrupt_after_tool_calls(n)` reused from E03-S20; `context_updates` scripted) |
 
 #### Interface contract
-Fixture `e04_scenario(tmp_game_repo) -> E04Scenario` (dataclass-free `WalkModel` in conftest): `handle: KernelHandle`, `feature_id`, `story_id`, `implementer_run_id`, `relevant_file: str`. Adapters: `fake-codex/sim` (implementer, scripted to be interrupted after checkpoint 2, i.e. tool call 20) and `fake-claude/sim` (fallback, scripted `COMPLETED` with `context_updates=[REPLACE "Remaining Work" → "- none"]`).
+Fixture `e04_scenario(tmp_game_repo) -> E04Scenario` (dataclass-free `WalkModel` in conftest): `handle: KernelHandle`, `feature_id`, `story_id`, `implementer_run_id`, `relevant_file: str`. Adapters: `fake-codex/sim` (implementer, scripted with `interrupt_after_tool_calls(20, ...)` from E03-S20: checkpoints `START` seq 1, `PERIODIC` seq 2 after call 10, `PERIODIC` seq 3 after call 20, then hangs) and `fake-claude/sim` (fallback, scripted `COMPLETED` with `context_updates=[REPLACE "Remaining Work" → "- none"]`).
 
 #### Behavior
 Scenario steps (each a test, executed in order via the fixture's cached state):
-1. Run the E03 §131 scenario until the story implementer's checkpoint `seq == 2`; the kernel is stopped (`Orchestrator.stop(drain=False)`); `USER` records `DEC-0001` (`TECH`, related to the feature, `affected_systems=["SaveSystem"]`) via `DefaultDecisionManager.record` before restart.
+1. Run the E03 §131 scenario until the story implementer's checkpoint `seq == 3` (the second `PERIODIC`, after tool call 20); the kernel is crashed with `simulate_crash` (E03-S20; `Orchestrator.stop()` would pause runs cleanly and recovery would not treat them as interrupted, ARCHITECTURE §5.3 step 1); `USER` records `DEC-0001` (`TECH`, related to the feature, `affected_systems=["SaveSystem"]`) via `DefaultDecisionManager.record` before restart.
 2. Modify and commit `relevant_file` (listed in `FeatureContext.relevant_files`) on the work branch outside the kernel.
 3. Restart with a new `kernel_instance`; recovery runs; `fake-codex` health is scripted unhealthy → fallback to `fake-claude`.
 4. Assertions on the new run's `AgentInput`: `context` has a `FEATURE_CONTEXT` item with `requires_verification=True` and freshness `POSSIBLY_STALE`/`relevant files changed`; `handover` equals `from_document(read .ai/handovers/HO-0001.md)`; a `DECISION` item for `DEC-0001` marked mandatory; `instructions_markdown` contains `## Verification required` and `## Continue from handover`.
