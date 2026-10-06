@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,10 +10,22 @@ from typer.testing import CliRunner
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_id_factory import SequentialIdFactory
+from walk.cli import cmd_work
 from walk.cli.app import app
+from walk.cli.composition import KernelSettings
+from walk.cli.daemon import run_daemon
+from walk.cli.ipc import CommandClient
+from walk.common.clock import SystemClock
+from walk.common.errors import Timeout
 from walk.common.roles import AgentRole
 from walk.hooks import DefaultHookManager, HookExecutionRepository
-from walk.persistence import Database, IdSequenceStore, MigrationRunner, UnitOfWork
+from walk.persistence import (
+    Database,
+    IdSequenceStore,
+    KernelLock,
+    MigrationRunner,
+    UnitOfWork,
+)
 from walk.telemetry import DefaultLedgerManager, LedgerRepository
 from walk.workflow import (
     TABLES_DIR,
@@ -210,3 +224,98 @@ def test_work_show_lists_transitions(repo: Path) -> None:
         runner.invoke(app, ["work", "show", "STORY-0001", "--json", "--repo", str(repo)]).output
     )
     assert [(t["from_state"], t["to_state"]) for t in shown["transitions"]] == [("IDEA", "READY")]
+
+
+def _serve_daemon(repo: Path, codes: list[int]) -> threading.Thread:
+    settings = KernelSettings(repo_path=repo, poll_interval_s=0.1)
+    thread = threading.Thread(
+        target=lambda: codes.append(asyncio.run(run_daemon(settings, once=False))), daemon=True
+    )
+    thread.start()
+    for _ in range(500):
+        if KernelLock.is_held(repo / ".ai"):
+            return thread
+        time.sleep(0.01)
+    msg = "daemon never took the lock"
+    raise AssertionError(msg)
+
+
+def _stop_daemon(repo: Path, thread: threading.Thread) -> None:
+    async def stop() -> None:
+        db = Database(repo / ".ai" / "kernel.db")
+        try:
+            client = CommandClient(db, SystemClock(), timeout_s=20)
+            await client.wait(await client.submit("stop", {}))
+        finally:
+            db.close()
+
+    asyncio.run(stop())
+    thread.join(timeout=30)
+    assert not thread.is_alive()
+
+
+def test_transition_routes_through_daemon(repo: Path) -> None:
+    codes: list[int] = []
+    thread = _serve_daemon(repo, codes)
+    try:
+        moved = runner.invoke(
+            app, ["work", "transition", "STORY-0001", "block", "--reason", "x", "--repo", str(repo)]
+        )
+        rejected = runner.invoke(
+            app, ["work", "transition", "STORY-0001", "unblock", "--repo", str(repo)]
+        )
+    finally:
+        _stop_daemon(repo, thread)
+
+    assert moved.exit_code == 0, moved.output
+    assert moved.stdout.strip() == "STORY-0001: IDEA -> BLOCKED"
+    assert rejected.exit_code == 2, rejected.output
+    assert codes == [0]
+    db = Database(repo / ".ai" / "kernel.db")
+    try:
+        commands = db.connect().execute(
+            "SELECT name, state FROM commands WHERE name = 'work.transition' ORDER BY id"
+        )
+        assert [tuple(row) for row in commands.fetchall()] == [
+            ("work.transition", "DONE"),
+            ("work.transition", "FAILED"),
+        ]
+        actor = db.connect().execute(
+            "SELECT actor_role, reason FROM work_item_transitions WHERE to_state = 'BLOCKED'"
+        )
+        assert tuple(actor.fetchone()) == ("USER", "x")
+    finally:
+        db.close()
+
+
+def test_transition_in_process_without_daemon(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = runner.invoke(app, ["work", "transition", "STORY-0001", "ready", "--repo", str(repo)])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "STORY-0001: IDEA -> READY"
+    assert KernelLock.is_held(repo / ".ai") is False
+
+    async def silent_daemon(*args: object) -> object:
+        del args
+        msg = "daemon not responding"
+        raise Timeout(msg)
+
+    monkeypatch.setattr(cmd_work, "run_mutation", silent_daemon)
+    timed_out = runner.invoke(
+        app, ["work", "transition", "STORY-0001", "start_implementation", "--repo", str(repo)]
+    )
+    assert timed_out.exit_code == 3
+    assert "daemon not responding" in timed_out.stderr
+
+
+def test_transition_without_project_exits_1(tmp_path: Path) -> None:
+    db = Database(tmp_path / ".ai" / "kernel.db")
+    MigrationRunner(db, "project").apply_pending()
+    db.close()
+
+    result = runner.invoke(
+        app, ["work", "transition", "STORY-0001", "ready", "--repo", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "walk bootstrap" in result.stderr

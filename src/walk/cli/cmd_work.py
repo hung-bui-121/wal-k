@@ -7,16 +7,15 @@ from typing import Annotated
 
 import typer
 
-from walk.cli.composition import open_database, open_workflow
+from walk.cli.composition import KernelHandle, open_database, open_workflow
+from walk.cli.daemon import transition_in_kernel
+from walk.cli.ipc import run_mutation
 from walk.cli.output import exit_with, render_json, render_table
-from walk.common.errors import ConfigError, WalkError
+from walk.common.errors import ConfigError, Timeout, WalkError
 from walk.common.models import JsonDict
-from walk.common.roles import AgentRole
 from walk.persistence import Database
 from walk.workflow import (
     StoryContract,
-    TransitionContext,
-    TransitionSource,
     WorkflowRepository,
     WorkItem,
     WorkItemKind,
@@ -29,6 +28,7 @@ work_app = typer.Typer(name="work", help="Work items (epics, features, stories, 
 _HEADERS = ("id", "kind", "state", "title", "owner")
 _NOT_AVAILABLE = "none"
 _DB_RELATIVE_PATH = Path(".ai") / "kernel.db"
+_EXIT_NO_DAEMON = 3  # INTERFACES §6: daemon not responding
 
 RepoOption = Annotated[
     Path | None,
@@ -134,20 +134,36 @@ def transition(
     json_output: JsonOption = False,
     repo: RepoOption = None,
 ) -> None:
-    """Raise EVENT on the item as USER; guards still apply (exit 2 when they reject)."""
+    """Raise EVENT on the item as USER; guards still apply (exit 2 when they reject).
+
+    Runs in the daemon when one holds the kernel lock (command ``work.transition``), else
+    in-process under the lock. Exit codes: 0 ok, 2 guard/permission, 1 other, 3 when the
+    daemon does not answer.
+    """
     facts = _parse_payload(payload)
-    if reason is not None:
-        facts["reason"] = reason
-    context = TransitionContext(
-        actor_role=AgentRole.USER, source=TransitionSource.USER, payload=facts
-    )
-    db = _open(ctx, repo, writable=True)
+    root = _repo_root(ctx, repo)
+    _open(ctx, repo, writable=True).close()  # the database must exist; never create it here
+    args: JsonDict = {
+        "work_item_id": item_id,
+        "event": event,
+        "reason": reason,
+        "payload": facts,
+    }
+
+    async def in_process(handle: KernelHandle) -> JsonDict:
+        return await transition_in_kernel(handle, args)
+
     try:
-        row = asyncio.run(open_workflow(db).raise_event(item_id, event, context))
+        result = asyncio.run(run_mutation(root, "work.transition", args, in_process))
+    except Timeout:
+        typer.echo("error: daemon not responding", err=True)
+        raise typer.Exit(code=_EXIT_NO_DAEMON) from None
     except WalkError as exc:
         exit_with(exc)
-    finally:
-        db.close()
+    if not result.ok:
+        typer.echo(f"error: {result.result.get('error')}", err=True)
+        raise typer.Exit(code=result.exit_code)
+    row = WorkItemTransition.model_validate(result.result["transition"])
     if _wants_json(ctx, json_output):
         typer.echo(render_json(row.model_dump(mode="json")))
     else:

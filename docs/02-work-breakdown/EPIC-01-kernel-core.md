@@ -4787,7 +4787,7 @@ Level-0 decisions:
 
 ### E01-S29 — `TaskRouter`, `Scheduler`, `Orchestrator` service
 
-**Status:** DONE (pending)
+**Status:** DONE (7120b93)
 **Type:** feat
 **Requirements:** §6.2, §10.1 (assign role), §56, §60, §87 (status snapshot), §89, §90, §125, §137 (Inv. 4 — role check only, 12)
 **Depends on:** E01-S28, E01-S13, E01-S10, E01-S11
@@ -5039,7 +5039,7 @@ Level-0 decisions:
 
 ### E01-S30 — Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.2, §56, §87, §89, §93 (transport only), §122, §125, §128, §137 (Inv. 1, 9, 12), §139 (local daemon)
 **Depends on:** E01-S29
@@ -5198,7 +5198,83 @@ async def run_daemon(settings: KernelSettings, *, once: bool, overrides: KernelO
 - Commit subject: `feat: add composition root, kernel lock, command channel and run/status cli (E01-S30)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+329 files already formatted
+All checks passed!
+Success: no issues found in 327 source files
+Required test coverage of 85% reached. Total coverage: 99.97%
+993 passed, 2 deselected in 292.60s
+```
+Touched modules: `cli/composition.py`, `daemon.py`, `ipc.py`, `cmd_run.py`, `cmd_status.py`, `cmd_work.py` 100%; `persistence/lock.py`, `instances.py` 100%; `orchestrator/commands.py` 100%.
+
+Demo on a fresh repository (`git init`, then the real CLI; the project row is inserted by a script because `walk bootstrap` arrives in E02-S03). The second `walk run` runs while another process (standing in for the first terminal) holds the lock:
+```
+$ walk --repo <repo> db migrate
+applied: 0001_init
+[exit 0]
+$ walk --repo <repo> run --once
+started 0 run(s)
+no project - run 'walk bootstrap'
+[exit 0]
+# project row inserted
+$ walk --repo <repo> run --once
+started 0 run(s)
+claude_agent_sdk is not installed; claude models are disabled
+models without an adapter disabled
+[exit 0]
+$ walk --repo <repo> status --json
+{
+  "project_key": "DEMO",
+  "paused": false,
+  "current_phase": null,
+  "phase_progress": {},
+  "gdd_coverage": {},
+  "active_runs": [],
+  "blocked_items": [],
+  "pending_approvals": [],
+  "open_debates": [],
+  "model_usage": {},
+  "qc_status": {},
+  "build_status": null,
+  "budgets": [],
+  "open_improvement_candidates": 0
+}
+[exit 0]
+# a first kernel process holds the lock
+$ walk --repo <repo> run
+error: kernel already running (pid 550984)
+[exit 1]
+```
+WBS §7.2 checkpoint: `walk run --once` with no ready work exits 0.
+
+The commit subject is shortened to `feat: add composition root, kernel lock and run/status cli (E01-S30)` (68 characters), because the prescribed one has 85 and the hook allows 72.
+
+Contract notes:
+- **`walk.cli.daemon.transition_in_kernel(handle, args)`** is an extra public helper. Both the daemon's `work.transition` handler and the in-process path of `walk work transition` (through `run_mutation`) raise the event with it, so the two paths cannot diverge.
+- `work.transition` args are `{work_item_id, event, reason, payload}`. `payload` keeps the existing `--payload` option (E01-S09). The result is `{to_state, transition}`, so the CLI prints the same row in both paths.
+- `command_results` has no `exit_code` column (DOMAIN-MODEL §6.2). `result_json` therefore holds the handler result plus `exit_code`; `CommandClient.wait` splits it back into `CommandResult.result`/`exit_code`.
+
+Level-0 decisions:
+- **`build_kernel`.**
+  - Any enabled model whose provider has no adapter is disabled with a warning. This covers the missing Claude SDK and test overrides, where the default codex/claude models have no adapter.
+  - Override adapters' descriptors are added for ids not in `models.yaml`.
+  - The kernel permission rules are the union of every default role's constitution `tool_permissions`.
+  - The project constitution for system prompts is `.ai/project/constitution.md`: its sections are rendered as `## <name>` blocks (`split_document`).
+  - Effort changes that need approval are refused (logged) until approvals are wired (E02-S11).
+  - The default `sleep` is `asyncio.sleep` with up to +10 % jitter.
+  - `CheckpointManager` and `SandboxManager` use the project's `default_branch` and `protected_branches`.
+  - `executor.on_run_finished` wakes the orchestrator. `build_kernel` is split into one private wiring helper (`_agent_services`) to stay within the statement limit.
+- **`KernelLock`.**
+  - On Windows (`msvcrt.locking`) the locked byte is at offset 1 MiB, past the holder JSON. Windows forbids other handles to read a locked byte range, so this keeps the holder readable, and `KernelLockHeld` can name the holder's pid. The pitfall note suggested byte 0.
+  - POSIX uses `fcntl.flock`; that branch is excluded from coverage (`pragma: no cover`, the gate runs on Windows).
+  - `acquire` is a no-op when the same object already holds the lock.
+- **`run_daemon`.**
+  - The project row is checked before `build_kernel`. A message printed then is ASCII (`no project - run 'walk bootstrap'`), because the em dash of the story text printed as `?` on a Windows console.
+  - In daemon mode, the orchestrator loop, the consumer and a heartbeat task run until a `stop` command or the loop ends. Then `orchestrator.stop(drain=True)` always runs, also when the task is cancelled, and a loop failure is re-raised (exit 1).
+- **`run_mutation`.** The in-process path maps `GuardRejected`/`PermissionDenied` to exit 2 and other kernel errors to 1, and builds a `CommandResult` with `command_id=0`. `walk work transition` still refuses to create a missing database, and a client `Timeout` exits 3 with `daemon not responding`.
+- `walk status --watch` reuses one read-only reader and stops on Ctrl+C. The table shows phase, items per state, active runs (run, item, role, model, state), blocked items, pending approvals and budgets.
+- Outside the Files table: `tests/cli/conftest.py` (migrated repository, the DEMO project, fake-model policies and overrides).
 
 ---
 

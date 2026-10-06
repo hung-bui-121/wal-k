@@ -16,7 +16,7 @@ from walk.common.ids import (
     RetrospectiveId,
     WorkItemId,
 )
-from walk.common.models import FrozenModel, WalkModel
+from walk.common.models import FrozenModel, JsonDict, WalkModel
 from walk.common.roles import AgentRole
 from walk.model_router.models import TaskProfile, UsageReport
 from walk.permissions.models import ApprovalRequest
@@ -85,3 +85,24 @@ class PhaseEvidencePackage(WalkModel):
     retrospective_id: RetrospectiveId | None = Field(
         default=None, description="Phase retrospective (§115), once written."
     )
+
+
+class Command(FrozenModel):
+    """A CLI request to the daemon (`commands` row; ADR-0009 D-3)."""
+
+    id: int = Field(description="Row id (AUTOINCREMENT).")
+    name: str = Field(description="Command name, e.g. 'wake', 'stop', 'work.transition'.")
+    args: JsonDict = Field(description="Command arguments.")
+    requested_at: datetime = Field(description="When the CLI submitted it.")
+    requested_by: str = Field(description="Who submitted it (USER by default).")
+    state: Literal["PENDING", "RUNNING", "DONE", "FAILED"] = Field(description="Processing state.")
+
+
+class CommandResult(FrozenModel):
+    """The daemon's answer to a `Command` (`command_results` row)."""
+
+    command_id: int = Field(description="Command answered.")
+    finished_at: datetime = Field(description="When the handler finished.")
+    ok: bool = Field(description="The handler succeeded.")
+    result: JsonDict = Field(description="Handler result, or the error description.")
+    exit_code: int = Field(description="CLI exit code (INTERFACES §6): 0, 1 or 2.")
