@@ -3081,7 +3081,7 @@ Level-0 decisions:
 
 ### E01-S21 — `ClaudeAdapter` (claude-agent-sdk)
 
-**Status:** DONE (pending)
+**Status:** DONE (e24d5e4)
 **Type:** feat
 **Requirements:** §6.1, §17, §21, §22, §31 (per-call authorisation), §91 (tool allowlist, repository boundary), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API)
 **Depends on:** E01-S19, E01-S02
@@ -3256,7 +3256,7 @@ Level-0 decisions:
 
 ### E01-S22 — `CodexAdapter` (`codex exec --json`)
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §17, §21, §22, §91 (sandbox, secret isolation), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API, sandbox technology)
 **Depends on:** E01-S19, E01-S02
@@ -3373,7 +3373,61 @@ Fixture event vocabulary (`tests/fixtures/codex/*.jsonl`, recorded by the E01-S0
 - Commit subject: `feat: add codex cli model adapter (E01-S22)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+261 files already formatted
+All checks passed!
+Success: no issues found in 259 source files
+Required test coverage of 85% reached. Total coverage: 99.96%
+801 passed, 2 deselected in 55.74s
+```
+Touched modules: `model_router/adapters/codex/*` 100%. The deselected tests are the `@pytest.mark.integration` round trips (Claude from E01-S21, and `codex/test_adapter.py::test_real_codex_round_trip`); they were written but not run in this batch. Real exit codes, `item.type` strings and usage semantics stay `runtime check` rows of ADR-0014 until the integration test runs on a logged-in machine.
+
+Contract changes (story-local and additive; none of these names is in INTERFACES.md):
+- **For owner attention: stdin.** `CodexProcessLauncher.launch(..., stdin_path: str | None = None)`. The command ends with `-` (prompt on stdin), but the contract's `launch` had no stdin channel. Passing the prompt as an argv argument would hit the Windows command-line limit. `build_exec_command` keeps its `prompt_file` keyword as specified; the file reaches the CLI through `stdin_path`, not the argv.
+- `CodexAdapter.__init__` gains a keyword-only `sleep=asyncio.sleep` for the clock-driven timeout watchdog (the same pattern as E01-S21).
+- `CodexSkillProjector.__init__(clock: Clock | None = None)` and `AsyncioCodexProcessLauncher.__init__(binary: str = CODEX_BINARY)`; the binary is used by the health probes.
+- `tests/fixtures/__init__.py` was added outside the Files table so that `tests.fixtures.codex` is a regular package.
+
+Level-0 decisions:
+- **Command lines.**
+  - `exec` argv: `codex exec --json --sandbox <mode> --cd <cwd> -c model=<model> -c model_reasoning_effort=<e> -c sandbox_workspace_write.network_access=<false|true> [-c sandbox_workspace_write.writable_roots=[…]] [--output-schema <path>] -`.
+  - `resume` argv: `codex exec resume <thread> --json -c sandbox_mode="workspace-write" <same -c flags> -`. It passes no `--output-schema`.
+  - The model is the part after `<provider>/`. It stays unquoted as ADR-0014 verified; the CLI falls back to the raw string when the value is not TOML.
+  - `writable_roots` is emitted only when non-empty, as a JSON array (a valid TOML array).
+- **Inputs.**
+  - `run` writes `<worktree>/.walk/prompt.md` (system prompt, a blank line, the user message) and `<worktree>/.walk/output.schema.json` (`AgentOutput.model_json_schema()`).
+  - `resume` writes the instruction to `.walk/prompt.md`.
+  - Whether Codex accepts pydantic's schema under `--output-schema` (strict structured output may demand `additionalProperties: false`) is a runtime check; `.walk/output.json` stays the fallback.
+- **Process.**
+  - The launched env is exactly `session.env_allowlist`, and cwd is the worktree.
+  - `argv[0]` is resolved with `shutil.which` on the kernel's PATH, which finds `codex.cmd` on Windows; not found → `FileNotFoundError` → `ConfigError`. Any other `OSError` at launch → `ProviderUnavailable`.
+  - Stdout lines may be up to 16 MiB, and stderr is drained concurrently.
+  - The health probes (`--version`, `login status`) inherit the kernel environment because they never run a model. `health()` reports `ok` only when both succeed, with detail `<version>; <login>`, cached for 60 s.
+- **Translation.**
+  - Events are acted on at `item.completed` only, and duplicate item ids are ignored. `reasoning` items are dropped.
+  - `agent_message` → `TEXT`, and the text is remembered.
+  - `command_execution` → `bash` pair with `tool_result={"ok": exit_code == 0, "exit_code", "output"}`; the output is truncated to 4096 UTF-8 bytes.
+  - `file_change` → `edit` pair. The paths come from `changes[].path`, and `tool_result={"ok": status != "failed", "changes"}`.
+  - Unknown item types are logged at INFO and skipped; non-JSON or untyped lines are logged at WARNING and skipped.
+  - `turn.failed` and `error` → `ERROR(trigger=None)`. The message comes from `message`, then `error.message`, then `error` as a string; the messages are kept in `CodexTranslationState.errors`.
+- **Usage.** Each `turn.completed` is treated as a delta and accumulated (runtime check):
+  - `input_tokens` = `input_tokens − cached_input_tokens`, because OpenAI's input count includes cached tokens and costing would otherwise price them twice. `cache_read_tokens` = `cached_input_tokens`.
+  - `output_tokens` = `output_tokens`; `reasoning_output_tokens` is not added (runtime check).
+  - `cost_usd` = 0.0, `turns` = the number of `turn.completed` events, `tool_calls` = the number of post-hoc pairs, and `duration_s` = 0, because Codex reports no duration.
+- **Advisory authorisation.** Every post-hoc `TOOL_CALL_RESULT` gets `kernel_decision = decision.effect.value`, so `ALLOW` is recorded too; E01-S27 checks `== "DENY"`. An authorizer exception fails the stream.
+- **For owner attention: approvals.** E01-S26's `authorize` pauses the run on `REQUIRE_APPROVAL`. For Codex, that means waiting for approval of an action that already happened. E01-S26/S27 should hand the Codex session an authorizer that never waits for approval.
+- **Process end.**
+  - Exit 0 → `FINAL_OUTPUT` from the last `agent_message` when it parses as `AgentOutput`, else from `read_output_file`, then the cumulative `USAGE` and `ENDED`.
+  - A non-zero exit checks stderr and the reported error messages:
+    - `rate.?limit|429` → `RateLimited`.
+    - `quota|usage limit|insufficient` → `QuotaExhausted`.
+    - Otherwise, when the CLI reported an `error`/`turn.failed`, the stream ends with that `ERROR` and no exception.
+    - Otherwise `ProviderUnavailable`, with `detail={"exit_code", "stderr_tail"}` (the last 2000 characters).
+  - Stdout read failures propagate unchanged.
+- **Timeout and cancel.** The timeout is a whole-run wall-clock bound, consistent with `RunSession.timeout_s` and E01-S21: when it passes, the process is killed and `Timeout(detail={"timeout_s"})` is raised. `cancel` kills the process and the stream then ends with `ENDED`. An abandoned or failed stream always kills its process.
+- **For owner attention: resume.** As in E01-S21, `resume` only continues threads this adapter instance started, with the role remembered by thread id, because a `ToolCallRequest` needs the role and `RunSession` does not carry it. Any other ref raises `NotResumable`.
+- **Projection.** `CodexSkillProjector` content is `## Skill: <name> (v<version>)\n\n<body_markdown>`, targeting `<worktree>/AGENTS.md`.
 
 ---
 

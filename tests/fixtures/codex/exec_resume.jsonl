@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thr_1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_5","type":"command_execution","command":"dotnet test --filter Fixed","aggregated_output":"Passed! 1 test","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"{\"status\": \"COMPLETED\", \"result\": \"fixed after resume\", \"no_context_change_reason\": \"fixture\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":500,"cached_input_tokens":400,"output_tokens":80,"reasoning_output_tokens":20}}
