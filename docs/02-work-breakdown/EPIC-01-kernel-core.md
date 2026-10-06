@@ -60,7 +60,7 @@ Conventions that apply to every story below (from WBS §3): implementation class
 
 ### E01-S01 — Project scaffold, `walk.common`, quality gate, `walk --version`
 
-**Status:** DONE (pending)
+**Status:** DONE (54f3361)
 **Type:** chore
 **Requirements:** §4 (objectives 12, 13), §7, §122, §125, §137 (Inv. 1), §2 (production orchestration kernel, not a coding-agent framework)
 **Depends on:** none
@@ -228,7 +228,7 @@ Level-0 decisions (no contract change):
 
 ### E01-S02 — Provider CLI/SDK spike → ADR-0014
 
-**Status:** TODO
+**Status:** BLOCKED
 **Type:** docs
 **Requirements:** §6.1, §17, §21–§22, §128, §139
 **Depends on:** none
@@ -290,7 +290,10 @@ Probe scripts print each flag probe and its raw output; they are run manually (r
 - Commit: `docs: record provider cli and sdk verification in ADR-0014 (E01-S02)`.
 
 #### Evidence (filled by implementer)
-_pending_
+BLOCKED on 2026-10-06 (owner action required, not a planning gap):
+- Codex CLI is not installed on the implementation machine, and the runtime rows (JSON event kinds, `codex exec resume`, usage event, exit codes) need an authenticated `codex login` on the owner's OpenAI account.
+- The Claude Agent SDK rows (session id, usage and cost fields, structured output) need a real `query()` run, which spends the owner's Claude quota.
+- Unblock: owner installs Codex CLI (`npm i -g @openai/codex`), runs `codex login`, and confirms that the probes may spend a few requests on both accounts. Only E01-S21 and E01-S22 depend on this story; E01-S03..S20 proceed.
 
 ---
 
