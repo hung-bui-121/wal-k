@@ -47,14 +47,14 @@ Parallel sets (WBS.md §8): `{S05→S06→S07} ∥ {S08→S09} ∥ {S10→S11→
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Secrets are resolved only through `CredentialStore` (environment → OS keyring → absent) and agent subprocesses receive a scrubbed environment built from a fixed allowlist, so no provider or Jira credential can reach an agent.
 
 #### Scope
 - In: `CredentialStore`, credential name catalogue (ADR-0009 D-8), injectable keyring backend, `AGENT_ENV_ALLOWLIST`, `scrubbed_env`, wiring into `RunSession.env_allowlist` for both real adapters.
 - Out: credential presence reporting in the manifest (E02-S02); secret-pattern scanning of written content (E02-S14); Jira credential use (E03-S04).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/integrations/credentials.py` | create | `CredentialStore`, `KeyringBackend` (Protocol), `SystemKeyringBackend`, `CREDENTIAL_NAMES` |
@@ -66,7 +66,7 @@ Secrets are resolved only through `CredentialStore` (environment → OS keyring 
 | `tests/integrations/test_credentials.py` | create | — |
 | `tests/runtime/test_sandbox_env.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 ```python
 # src/walk/integrations/credentials.py
 CREDENTIAL_NAMES: tuple[str, ...] = (
@@ -106,7 +106,7 @@ def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
 7. `DefaultAgentExecutor` builds `RunSession.env_allowlist = scrubbed_env(os.environ)`; `CodexAdapter` spawns with exactly that mapping; `ClaudeAdapter` passes it as the SDK `env` option.
 8. No module other than `credentials.py` imports `keyring` (ruff banned-api rule from ARCHITECTURE §2.3).
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given env `JIRA_API_TOKEN=abc` When `get("JIRA_API_TOKEN")` Then `SecretStr("abc")` and backend not called | `tests/integrations/test_credentials.py::test_get_prefers_environment_over_keyring` |
@@ -118,7 +118,7 @@ def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
 | 7 | Given env with `ANTHROPIC_API_KEY`, `JIRA_API_TOKEN`, `PATH`, `UNITY_EDITOR_PATH` When `scrubbed_env` Then only `PATH` and `UNITY_EDITOR_PATH` remain | `tests/runtime/test_sandbox_env.py::test_scrubbed_env_drops_secrets_and_keeps_allowlist` |
 | 8 | Given a Codex run via `FakeSubprocessRunner` When started Then the captured env has no key outside the allowlist | `tests/runtime/test_sandbox_env.py::test_codex_subprocess_env_is_scrubbed` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `uv run python -c "from walk.integrations import CredentialStore; print(CredentialStore({'JIRA_EMAIL':'a@b'}, None).presence()['JIRA_EMAIL'])"` → `ReadinessState.READY`.
 
@@ -141,14 +141,14 @@ _pending_
 **Effort:** HIGH   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 `IntegrationManager.preflight` detects every §26 component, writes `.ai/project/environment.yaml`, reports drift against the previous manifest, and `walk doctor` prints the result with exit code 4 when a required component is missing.
 
 #### Scope
 - In: `DefaultIntegrationManager` class with `preflight` only; detectors; manifest write/read/drift; `walk doctor` without flags.
 - Out: `ingest/reconcile/with_idempotency` (E03-S03); `--fix/--strict` (E02-S15); skill drift section (E02-S07); approved-artifact verification (E02-S12).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/integrations/preflight.py` | create | `detect_git`, `detect_unity`, `detect_codex_cli`, `detect_claude_sdk`, `detect_graphify`, `detect_dotnet`, `detect_credentials`, `detect_required_skills`, `REQUIRED_DEFAULT` |
@@ -162,7 +162,7 @@ _pending_
 | `tests/integrations/test_manifest.py` | create | — |
 | `tests/cli/test_cmd_doctor.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.12 `IntegrationManager.preflight`. Deltas:
 ```python
 # src/walk/integrations/preflight.py
@@ -203,7 +203,7 @@ class DefaultIntegrationManager:
 7. `walk doctor` runs in-process (no daemon needed) and acquires `KernelLock` in shared mode only if the lock module supports it; otherwise it opens the DB read-only.
 8. `tools` status for CLI tools comes from `ToolRegistry.all()` entries with `kind == CLI`: each `executable` is probed with `<exe> --version` through the runner.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given runner returning `git version 2.45.0` When `detect_git` Then READY with version `2.45.0` | `tests/integrations/test_preflight.py::test_detect_git_ready_with_version` |
@@ -217,7 +217,7 @@ class DefaultIntegrationManager:
 | 9 | Given git MISSING When `walk doctor` Then exit 4 | `tests/cli/test_cmd_doctor.py::test_doctor_exit_four_when_required_missing` |
 | 10 | Given `--json` When `walk doctor` Then stdout parses as `EnvironmentManifest` | `tests/cli/test_cmd_doctor.py::test_doctor_json_output_is_manifest` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk doctor` in a repo with git installed → table with `tools.git  ready  2.x`, exit 0; `walk doctor --json | head -c 200`.
 
@@ -241,14 +241,14 @@ _pending_
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 `walk bootstrap` turns a game repository into a Production Kit in one idempotent command: preflight, kernel defaults copied into `.ai/agents/`, `.ai/project/*` initialised from the GDD, `.ai/.gitignore`, DB created and migrated, `projects` row inserted, `ProductionKit` written.
 
 #### Scope
 - In: `Bootstrapper`, `cmd_bootstrap`, `.ai/` tree creation, `project.md`/`constitution.md` skeletons, `work-provider.yaml`, placeholder `kernel-versions.yaml` (content E02-S04), `production-kit.yaml`.
 - Out: version pin content (E02-S04); skill projection (E02-S06); Jira status validation (E03-S05); `com.walk.ci` package install (E03-S10).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/integrations/bootstrap.py` | create | `Bootstrapper`, `BootstrapOptions`, `BootstrapResult` |
@@ -263,7 +263,7 @@ _pending_
 | `tests/memory/test_skeletons.py` | create | — |
 | `tests/cli/test_cmd_bootstrap.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 ```python
 # src/walk/integrations/bootstrap.py
 class BootstrapOptions(WalkModel):
@@ -304,7 +304,7 @@ CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY
 7. `--provider jira` additionally requires the three Jira credentials present; absence → exit 4 with the missing names (status-map validation added in E03-S05).
 8. All writes go through `MemoryManager.write` (Markdown) or atomic `tmp + rename` helpers (YAML) — no direct `open().write` outside `walk.persistence`/`walk.memory` helpers (CONVENTIONS §2).
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given an empty temp git repo with `GDD/combat.md` When `run(options)` Then every path of ARCHITECTURE §8 `[MVP]` + `agents/` exists | `tests/integrations/test_bootstrap.py::test_bootstrap_creates_full_ai_tree` |
@@ -318,7 +318,7 @@ CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY
 | 9 | Given a successful run When reading `production-kit.yaml` Then it validates as `ProductionKit` with `kit_version` | `tests/integrations/test_bootstrap.py::test_bootstrap_writes_production_kit_file` |
 | 10 | Given a successful run When querying `projects` Then one row with `key`, `repo_path`, `work_provider` | `tests/integrations/test_bootstrap.py::test_bootstrap_inserts_project_row` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk bootstrap --provider local --key DEMO --name Demo --yes` → prints created paths; `tree .ai` (or `Get-ChildItem -Recurse .ai`) shows the layout; second run prints `nothing to do`.
 
@@ -342,14 +342,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Every builtin behaviour artifact is catalogued as a `BehaviorVersion`; bootstrap writes `.ai/project/kernel-versions.yaml` pinning the `DEFAULT` versions; startup validates pins; `walk version` lists them.
 
 #### Scope
 - In: improvement enums/models, `BehaviorVersionCatalog`, pin file schema + load + validate, bootstrap integration, startup step 3 check, `walk version`.
 - Out: `register_version`, rollout stages, changelog (E10-S05); using pinned versions to select among multiple builtin versions (E10-S05 — until then exactly one version per artifact exists and must equal the pin).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/improvement/__init__.py` | create | re-exports |
@@ -363,7 +363,7 @@ Every builtin behaviour artifact is catalogued as a `BehaviorVersion`; bootstrap
 | `tests/improvement/test_versions.py` | create | — |
 | `tests/cli/test_cmd_version.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 Models: DOMAIN-MODEL §3 (`RolloutStage`, `ImprovementRisk`, `CandidateState`) and §4.14 `BehaviorVersion`, verbatim.
 ```python
 # src/walk/improvement/versions.py
@@ -401,7 +401,7 @@ class KernelVersionPins(WalkModel):
 7. Startup (`DefaultOrchestrator.start`, ARCHITECTURE §3.4 step 3) calls `validate`; failure aborts startup with exit 1 and the guidance `run 'walk version' and update .ai/project/kernel-versions.yaml`.
 8. `walk version` works without a bootstrapped repo (prints kernel version only, pins section `(no project)`).
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given the kernel package When `scan()` Then one entry per workflow table, constitution, builtin skill and template, each with `version` and sha | `tests/improvement/test_versions.py::test_catalog_scans_all_builtin_artifacts` |
@@ -414,7 +414,7 @@ class KernelVersionPins(WalkModel):
 | 8 | Given cwd outside any repo When `walk version` Then exit 0 and `(no project)` | `tests/cli/test_cmd_version.py::test_version_without_project` |
 | 9 | Given a mismatched pin file When `DefaultOrchestrator.start()` Then startup raises `VersionPinError` before `ON_PROJECT_START` fires | `tests/improvement/test_versions.py::test_startup_fails_on_pin_mismatch` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk version` → `walk 0.1.0` + lines such as `WORKFLOW/story_workflow 1.0`, `CONSTITUTION/LEAD_DEV 1.0`, `SKILL/walk-output-contract 1.0`.
 
@@ -437,14 +437,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Canonical skills (`SKILL.md` + front matter) are loaded from kernel built-ins and `.ai/agents/skills/`, project skills shadow built-ins by name, `for_role` resolves role defaults plus required skills, and the five builtin skills ship with real content.
 
 #### Scope
 - In: `DefaultSkillRegistry.load/get/for_role`, front-matter schema, builtin skill folders, loader errors.
 - Out: `project_all` (E02-S06), `check_drift` (E02-S07), skill version pinning behaviour (E10-S05).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/skills/service.py` | create | `DefaultSkillRegistry` |
@@ -462,7 +462,7 @@ Canonical skills (`SKILL.md` + front matter) are loaded from kernel built-ins an
 | `tests/skills/test_service.py` | create | — |
 | `tests/skills/test_builtin_skills.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.11 `SkillRegistry` (`load`, `get`, `for_role`). Deltas:
 ```python
 # src/walk/skills/loader.py
@@ -498,7 +498,7 @@ class DefaultSkillRegistry:
 7. `policies.yaml` `default_skills`: ORCHESTRATOR `[walk-output-contract]`; LEAD_DEV `[walk-output-contract, code-review-checklist, unity-csharp-conventions, git-hygiene]`; SENIOR_DEV `[walk-output-contract, unity-csharp-conventions, git-hygiene]`; QC `[walk-output-contract, qc-exploratory-testing, git-hygiene]`.
 8. `Skill.version` of every builtin is `1.0`; `BehaviorVersionCatalog` (E02-S04) picks them up without changes.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given the five builtin folders When `load()` Then five `Skill`s with matching names and sha | `tests/skills/test_service.py::test_load_returns_builtin_skills` |
@@ -510,7 +510,7 @@ class DefaultSkillRegistry:
 | 7 | Given required `[missing-skill]` When `for_role` Then `ConfigError` listing it | `tests/skills/test_service.py::test_for_role_missing_required_raises` |
 | 8 | Given each builtin SKILL.md When measured Then body ≤ 4096 bytes and `walk-output-contract` mentions every `AgentOutput` field name | `tests/skills/test_builtin_skills.py::test_builtin_skills_size_and_contract_coverage` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `uv run python -c "from walk.skills import DefaultSkillRegistry; ..."` is not a CLI; `walk skills list` arrives in E02-S06 — record the test transcript of `test_builtin_skills.py` instead.
 
@@ -533,14 +533,14 @@ _pending_
 **Effort:** HIGH   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Each adapter projects canonical skills into the run worktree in its native format; `project_all` records projections in `skill_projections` and `.ai/agents/projections.lock.yaml`, excludes them from git, and `SandboxManager.create` performs it for every run.
 
 #### Scope
 - In: `ClaudeSkillProjector`, `CodexSkillProjector`, `project_all`, lock file, `.git/info/exclude`, sandbox hook-in, `walk skills list`, `walk skills sync`, roundtrip test.
 - Out: drift detection (E02-S07); MCP-served skills (deferred, ADR-0007).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/model_router/adapters/claude/projector.py` | create | `ClaudeSkillProjector` |
@@ -560,7 +560,7 @@ Each adapter projects canonical skills into the run worktree in its native forma
 | `tests/skills/test_lockfile.py` | create | — |
 | `tests/cli/test_cmd_skills.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.11 `SkillProjector.project`, `SkillRegistry.project_all`; DOMAIN-MODEL §4.6 `SkillProjection`.
 ```python
 # codex/projector.py
@@ -604,7 +604,7 @@ CLI: `walk skills list [--json]` (name, version, scope, source, roles); `walk sk
 7. `walk skills sync` without a daemon runs in-process; with `--json` prints the lock content.
 8. The `FakeSkillProjector` writes one file per skill so E01/E02 e2e tests can assert projection without real adapters.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given a 1 KB skill When Claude `project` Then target under `.claude/skills/<name>/SKILL.md` and content starts with reduced front matter | `tests/model_router/adapters/claude/test_projector.py::test_claude_projection_target_and_content` |
@@ -618,7 +618,7 @@ CLI: `walk skills list [--json]` (name, version, scope, source, roles); `walk sk
 | 9 | Given bootstrapped repo When `walk skills list` Then five rows | `tests/cli/test_cmd_skills.py::test_skills_list_shows_builtins` |
 | 10 | Given bootstrapped repo When `walk skills sync` Then lock file has entries for `claude` and `codex` | `tests/cli/test_cmd_skills.py::test_skills_sync_writes_lock_for_all_providers` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk skills list`; `walk skills sync` → `projected 5 skills for 2 providers`; `cat .ai/agents/projections.lock.yaml | head`.
 
@@ -642,14 +642,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 `check_drift` reports missing, modified and orphaned projections against the lock; the CLI, startup step 3 and `walk doctor` use it; non-strict mode regenerates and logs a `CONTEXT_UPDATED` ledger event.
 
 #### Scope
 - In: `check_drift`, `walk skills check-drift [--strict]`, startup integration, doctor section.
 - Out: `--fix` semantics in doctor (E02-S15 delegates to `skills sync`).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/skills/service.py` | modify | `DefaultSkillRegistry.check_drift`, `DefaultSkillRegistry.regenerate` |
@@ -661,7 +661,7 @@ _pending_
 | `tests/skills/test_drift.py` | create | — |
 | `tests/cli/test_cmd_skills_drift.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.11 `SkillRegistry.check_drift`; DOMAIN-MODEL §4.6 `DriftReport`.
 ```python
 # src/walk/skills/drift.py
@@ -687,7 +687,7 @@ CLI: `walk skills check-drift [--strict] [--worktree PATH]` → exit 0 when `ok`
 5. `walk doctor` prints a `skills` section: `ok` or counts per category; drift does not change doctor's exit code (that is `--strict`, E02-S15).
 6. `check_drift` never writes; `regenerate` is the only mutating path.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given lock and intact files When `compute_drift` Then `ok` | `tests/skills/test_drift.py::test_drift_ok_when_lock_matches_disk` |
@@ -701,7 +701,7 @@ CLI: `walk skills check-drift [--strict] [--worktree PATH]` → exit 0 when `ok`
 | 9 | Given drift When `walk skills check-drift` Then exit 0 and `regenerated` message | `tests/cli/test_cmd_skills_drift.py::test_check_drift_regenerates_by_default` |
 | 10 | Given drift and `strict=True` When `DefaultOrchestrator.start()` Then `ConfigError` before `ON_PROJECT_START` | `tests/skills/test_drift.py::test_startup_strict_fails_on_drift` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk skills sync && walk skills check-drift` → `ok`; edit `.walk/projections/claude/.claude/skills/git-hygiene/SKILL.md`; `walk skills check-drift --strict` → `modified: git-hygiene`, exit 1.
 
@@ -724,14 +724,14 @@ _pending_
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is registered as a `required=True` builtin hook with priority < 50, fires in its trigger path, and cannot be disabled by project configuration.
 
 #### Scope
 - In: `builtins.py`, `register_builtins()` body, wiring of hook callables to E01 services, exclusion table for later stories.
 - Out: ledger writes (done at §4.3 write points, WBS.md §3.5); project hooks (E02-S09); attachments listed in the exclusion table.
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/hooks/builtins.py` | create | `BuiltinHookDeps`, `builtin_hooks`, `register_builtins` |
@@ -741,7 +741,7 @@ Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is r
 | `tests/hooks/test_builtins.py` | create | — |
 | `tests/hooks/test_builtins_required.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 ```python
 # src/walk/hooks/builtins.py
 class BuiltinHookDeps(WalkModel):
@@ -788,7 +788,7 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 6. Hooks never write ledger events directly (WBS.md §3.5); `HookManager.fire` records `HOOK_EXECUTED`/`HOOK_FAILED`.
 7. `HookManager.register(hook)` with `kind="project"` and `id` equal to a required builtin id, or `enabled=False` targeting a required id, raises `ConfigError` (enforced in E01-S07; re-tested here with the real builtin set).
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given a kernel with fakes When `register_builtins` Then `hooks_for(name)` contains each id in the table with `required=True` and priority < 50 | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
@@ -802,7 +802,7 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 | 9 | Given project hook with id `builtin.final_checkpoint` and `enabled=False` When `register` Then `ConfigError` | `tests/hooks/test_builtins_required.py::test_project_cannot_disable_required_builtin` |
 | 10 | Given `fire(ON_AGENT_END)` Then exactly one `END` checkpoint and no direct ledger write by the hook (ledger count unchanged except `HOOK_EXECUTED`, `CHECKPOINT_CREATED`) | `tests/hooks/test_builtins_required.py::test_hooks_do_not_duplicate_ledger_events` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk run --once` on a bootstrapped repo then `walk ledger query --kind HOOK_EXECUTED --limit 5` → shows `builtin.memory_index` under `ON_PROJECT_START`.
 
@@ -826,14 +826,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Projects declare additional hooks in `.ai/agents/hooks.yaml` as shell commands or allowlisted kernel actions; they run with timeouts and fail policies, receive the `HookContext` through `WALK_HOOK_*` environment variables, and can never replace or disable required builtins.
 
 #### Scope
 - In: YAML schema, `load_project_hooks`, shell execution, kernel-action dispatch, timeout handling, startup loading (ARCHITECTURE §3.4 step 3).
 - Out: builtin hooks (E02-S08); improvement-related kernel actions (E10).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/hooks/project.py` | create | `ProjectHooksFile`, `ProjectHookSpec`, `KERNEL_ACTIONS`, `HOOK_ENV_PREFIX`, `hook_env` |
@@ -843,7 +843,7 @@ Projects declare additional hooks in `.ai/agents/hooks.yaml` as shell commands o
 | `tests/hooks/test_project_hooks.py` | create | — |
 | `tests/hooks/test_project_hooks_exec.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.11 `HookManager.load_project_hooks`, `HookManager.fire`; DOMAIN-MODEL §4.6 `Hook`.
 ```python
 # src/walk/hooks/project.py
@@ -885,7 +885,7 @@ class DefaultHookManager:
 7. `telemetry.counter` action increments counter `hook.<id>`; `memory.rebuild_index` and `skills.sync` call the respective services.
 8. Composition loads `.ai/agents/hooks.yaml` after `register_builtins`; registration order does not affect execution order (priority sort).
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given valid `hooks.yaml` with one command hook When `load_project_hooks` Then one `Hook(kind="project")` | `tests/hooks/test_project_hooks.py::test_load_valid_file` |
@@ -898,7 +898,7 @@ class DefaultHookManager:
 | 8 | Given `fail_policy: fail_closed` and exit 1 When `fire` Then `HookFailed` | `tests/hooks/test_project_hooks_exec.py::test_fail_closed_project_hook_raises` |
 | 9 | Given `kernel_action: telemetry.counter` When `fire` Then counter `hook.project.x` incremented | `tests/hooks/test_project_hooks_exec.py::test_kernel_action_counter` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: add `hooks: [{name: on_project_start, id: project.echo, command: "echo hello"}]`; `walk run --once`; `walk ledger query --kind HOOK_EXECUTED` shows `project.echo`.
 
@@ -921,14 +921,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 The kernel ships the ADR-0006 D-6 rule set in `defaults.yaml`; projects may only narrow it through `.ai/agents/permissions.yaml`; protected actions always evaluate to `REQUIRE_APPROVAL(approver=USER)` and cannot be downgraded.
 
 #### Scope
 - In: defaults file, loader + narrowing merge, `ProtectedAction` defaults, `decide()` protected-action branch, default command patterns.
 - Out: approval lifecycle (E02-S11); worktree path checks and guard hooks (E02-S14).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/permissions/defaults.yaml` | create | — |
@@ -940,7 +940,7 @@ The kernel ships the ADR-0006 D-6 rule set in `defaults.yaml`; projects may only
 | `tests/permissions/test_defaults_rules.py` | create | — |
 | `tests/permissions/test_protected_actions.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.10 `PermissionManager`; DOMAIN-MODEL §4.5 `PermissionRule`, `ProtectedAction`.
 ```python
 # src/walk/permissions/loader.py
@@ -989,7 +989,7 @@ def merge_narrowing(defaults: PermissionsFile, project: PermissionsFile) -> Perm
 6. Role-specific ALLOW for `bash` without a matching ALLOW pattern → DENY with reason `command not allowlisted`.
 7. `rules_for(role, extra)` (E01-S15) now receives the merged file; `extra` (constitution `tool_permissions`) is merged with the same narrowing function.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given shipped defaults When `load_defaults` Then validates and contains a rule for every (role, tool) row above | `tests/permissions/test_loader.py::test_defaults_file_loads_and_covers_table` |
@@ -1004,7 +1004,7 @@ def merge_narrowing(defaults: PermissionsFile, project: PermissionsFile) -> Perm
 | 10 | Given LEAD_DEV `git.merge_protected` When `decide` Then `REQUIRE_APPROVAL` with approver USER even with a project ALLOW attempt rejected at load | `tests/permissions/test_protected_actions.py::test_protected_action_requires_user_approval` |
 | 11 | Given project adds protected action `analytics.purge` When ORCHESTRATOR requests it Then `REQUIRE_APPROVAL` | `tests/permissions/test_protected_actions.py::test_project_added_protected_action` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `cat .ai/agents/permissions.yaml | head -20` after bootstrap shows the copied defaults header.
 
@@ -1027,14 +1027,14 @@ _pending_
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 A `REQUIRE_APPROVAL` decision creates a persisted `ApprovalRequest`, pauses the run with a `PAUSE` checkpoint, and `walk approve|deny` resolves it and wakes the waiting tool invocation; unanswered requests expire to DENY.
 
 #### Scope
 - In: full `request_approval/decide_approval/pending`, `ApprovalWaiter` registry in runtime, expiry, CLI (in-process and via `CommandClient`), `ON_PROTECTED_ACTION_REQUESTED` payload.
 - Out: escalation-kind approvals routing (E05-S02); artifact-change approvals content (E02-S12 uses this API).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/permissions/service.py` | modify | `DefaultPermissionManager.request_approval/decide_approval/pending/expire_due` |
@@ -1050,7 +1050,7 @@ A `REQUIRE_APPROVAL` decision creates a persisted `ApprovalRequest`, pauses the 
 | `tests/runtime/test_approval_waiter.py` | create | — |
 | `tests/cli/test_cmd_approvals.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.10 `PermissionManager.request_approval/decide_approval/pending`; DOMAIN-MODEL §4.5 `ApprovalRequest`.
 ```python
 # src/walk/permissions/service.py (deltas)
@@ -1077,7 +1077,7 @@ CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `wal
 6. CLI: when a daemon lock is held, `approve/deny` go through `CommandClient` (`commands.name = "approve"`), else in-process (DB write + waiter not needed). `approvals --pending` reads the DB directly.
 7. Exit codes: unknown id → 1; already decided → 2.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given a fake run requesting `git.merge_protected` When tool call authorised Then `ApprovalRequest` PENDING persisted, run `PAUSED_FOR_APPROVAL`, `PAUSE` checkpoint, `APPROVAL_REQUESTED` ledger | `tests/permissions/test_approvals.py::test_require_approval_pauses_run_and_persists_request` |
@@ -1091,7 +1091,7 @@ CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `wal
 | 9 | Given unknown id When `walk deny APV-9999` Then exit 1 | `tests/cli/test_cmd_approvals.py::test_deny_unknown_exits_one` |
 | 10 | Given two pending, one decided When `walk approvals --pending --json` Then two entries | `tests/cli/test_cmd_approvals.py::test_approvals_pending_lists_only_pending` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: in e2e transcript — `walk approvals --pending` showing `APV-0001 PROTECTED_ACTION git.merge_protected`, then `walk approve APV-0001 --note "ok"` → `APV-0001 APPROVED`.
 
@@ -1115,14 +1115,14 @@ _pending_
 **Effort:** HIGH   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Approved artifacts are first-class: `MemoryManager.approve_artifact` writes `.ai/approved/APR-NNNN.md` plus a hashed payload folder, writes under `approved/` without a change decision are refused, startup/doctor verify hashes and flag drift as `INVALID`, and `walk artifacts` lists/approves/verifies.
 
 #### Scope
 - In: `approve_artifact`, `verify_approved_artifacts`, `ApprovedArtifactRepository`, `write()` guard for `approved/`, CLI group, startup step integration.
 - Out: `ApprovedArtifact` as context items (E04-S08); `PHASE_BASELINE` creation (E02-S08 hook calls this API; E07-S02 fills content); change-request workflow via decisions (E05).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/memory/approved.py` | create | `hash_payload`, `approved_doc`, `APPROVED_DIR` |
@@ -1137,7 +1137,7 @@ Approved artifacts are first-class: `MemoryManager.approve_artifact` writes `.ai
 | `tests/memory/test_approved_write_guard.py` | create | — |
 | `tests/cli/test_cmd_artifacts.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.8 `MemoryManager.approve_artifact`, `verify_approved_artifacts`, `write`; DOMAIN-MODEL §4.7 `ApprovedArtifact`.
 ```python
 # src/walk/memory/approved.py
@@ -1164,7 +1164,7 @@ CLI: `walk artifacts list [--json]`; `walk artifacts approve PATH... --kind KIND
 6. Startup step 3 calls `verify_approved_artifacts`; drift never aborts startup but is printed by `walk doctor` under `approved`.
 7. `BoundaryAuditor` forbidden path `.ai/approved/**` is confirmed in E02-S14.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given USER actor and two payload files When `approve_artifact` Then `APR-0001.md` + `APR-0001/` exist, row APPROVED, sha equals `hash_payload`, `ARTIFACT_APPROVED` ledger | `tests/memory/test_approved.py::test_approve_writes_doc_payload_row_and_ledger` |
@@ -1178,7 +1178,7 @@ CLI: `walk artifacts list [--json]`; `walk artifacts approve PATH... --kind KIND
 | 9 | Given files When `walk artifacts approve a.png --kind UI_CONCEPT --title X --scope FEAT-0001` Then exit 0 and `walk artifacts list` shows APR-0001 | `tests/cli/test_cmd_artifacts.py::test_artifacts_approve_and_list` |
 | 10 | Given drift When `walk artifacts verify` Then exit 2 listing the id | `tests/cli/test_cmd_artifacts.py::test_artifacts_verify_exit_two_on_drift` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk artifacts approve GDD/concept.png --kind GAMEPLAY_CONCEPT --title "Core loop" --scope project` → `APR-0001 approved (sha …)`; `walk artifacts verify` → `ok`.
 
@@ -1201,14 +1201,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 The user can pause/resume the project or one agent, cancel a work item, change priority, change a role's model policy and the project autonomy level from the CLI; every action is recorded as `USER_OVERRIDE` and routed through the daemon when it is running.
 
 #### Scope
 - In: `walk pause/resume [--agent]`, `walk work cancel`, `walk work priority`, `walk policy set-model`, `walk policy set-autonomy`, `CommandConsumer` handlers, hooks `ON_PROJECT_PAUSE/RESUME`, `ON_TASK_CANCELLED`.
 - Out: `walk work force-review` (E03-S16); `walk phase stop` (E07-S05); `walk decisions override` (E05-S09).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.pause/resume/cancel_work_item/set_priority/set_autonomy` |
@@ -1223,7 +1223,7 @@ The user can pause/resume the project or one agent, cancel a work item, change p
 | `tests/agents/test_policy_file.py` | create | — |
 | `tests/cli/test_cmd_overrides.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.1 `Orchestrator.pause/resume/cancel_work_item`. Deltas:
 ```python
 class DefaultOrchestrator:
@@ -1249,7 +1249,7 @@ CLI (INTERFACES §6): `walk pause [--agent RUN_ID]`, `walk resume [--agent RUN_I
 6. Every command writes `USER_OVERRIDE` with payload `{"command": "<name>", "args": {...}}`, `actor_role = USER` (write point `orchestrator`, ARCHITECTURE §4.3).
 7. With a daemon running, commands go through `CommandClient` and the consumer executes rules 1–6; without a daemon, `pause/resume --agent` exit 3 (daemon required), all others run in-process.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given two running fake runs When `pause()` Then project paused, both `PAUSED_BY_USER`, two `PAUSE` checkpoints, one `USER_OVERRIDE` | `tests/orchestrator/test_overrides.py::test_pause_project_checkpoints_and_pauses_runs` |
@@ -1263,7 +1263,7 @@ CLI (INTERFACES §6): `walk pause [--agent RUN_ID]`, `walk resume [--agent RUN_I
 | 9 | Given `walk policy set-autonomy 1` Then `Project.autonomy_level_max == 1` and `USER_OVERRIDE` | `tests/cli/test_cmd_overrides.py::test_set_autonomy` |
 | 10 | Given no daemon When `walk pause --agent RUN-…` Then exit 3 | `tests/cli/test_cmd_overrides.py::test_pause_agent_requires_daemon` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk pause` → `project paused`; `walk ledger query --kind USER_OVERRIDE --limit 1` → payload `{"command": "pause"}`; `walk resume`.
 
@@ -1286,14 +1286,14 @@ _pending_
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 Repository boundary, protected branches, secret isolation and command restrictions are enforced mechanically: `BoundaryAuditor` ships the default forbidden-path set, every worktree gets git guard hooks, `push` refuses protected branches, and one shared secret scanner protects `.ai/` writes and agent diffs.
 
 #### Scope
 - In: `DEFAULT_FORBIDDEN_PATHS`, `allowed_paths` from policy, `install_guard_hooks` (sh scripts), `push` protected check, `contains_secret`, `BoundaryAuditor` secret scan of added files, `SandboxManager.create` guard-hook installation.
 - Out: remote push mechanics/PR (E03-S01); Codex sandbox flags (E01-S26, verified by ADR-0014).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/runtime/boundary.py` | modify | `DEFAULT_FORBIDDEN_PATHS`, `EVIDENCE_EXCEPTIONS`, `DefaultBoundaryAuditor.audit` (secret scan added) |
@@ -1309,7 +1309,7 @@ Repository boundary, protected branches, secret isolation and command restrictio
 | `tests/memory/test_secrets.py` | create | — |
 | `tests/integrations/git/test_guard_hooks.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 See INTERFACES.md §1.13 `BoundaryAuditor.audit`, §2.3 `GitProvider.install_guard_hooks`, `GitProvider.push`.
 ```python
 # src/walk/runtime/boundary.py
@@ -1342,7 +1342,7 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 7. `push(path, branch, protected_branches)` raises `PermissionDenied` when `branch` matches any protected pattern before invoking git (remote mechanics E03-S01).
 8. `SandboxManager.create` installs guard hooks after projection; failure → `ConfigError` and worktree removed.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given changed `../outside.txt` When `audit` Then violation | `tests/runtime/test_boundary.py::test_audit_rejects_path_outside_worktree` |
@@ -1356,7 +1356,7 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 | 9 | Given hooks installed and checkout `main` When `git commit` via runner Then exit 1 with `protected branch` | `tests/integrations/git/test_guard_hooks.py::test_pre_commit_blocks_protected_branch` |
 | 10 | Given `push(path, "main", ["main"])` Then `PermissionDenied` and git not invoked | `tests/integrations/git/test_guard_hooks.py::test_push_refuses_protected_branch` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: after `walk run --once` with a scheduled fake run, `ls .walk/worktrees/<run>/.git` hooks dir (via `git rev-parse --git-path hooks`) shows `pre-commit`, `pre-push`.
 
@@ -1380,14 +1380,14 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 `walk doctor --fix` repairs guard hooks, skill projections, the memory index and the manifest; `--strict` adds lints (import-linter contracts, constitution provider-name check, `models.yaml` validation, version pins, skill drift) and fails on any finding.
 
 #### Scope
 - In: `--fix`, `--strict`, lint implementations, exit codes, `doctor` sections for `skills`, `approved`, `versions`, `lints`.
 - Out: Jira status-map gap report (E03-S05).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/cli/cmd_doctor.py` | modify | `doctor` (`--fix`, `--strict`), `DoctorReport` |
@@ -1396,7 +1396,7 @@ _pending_
 | `tests/cli/test_cmd_doctor_fix.py` | create | — |
 | `tests/cli/test_lints.py` | create | — |
 
-#### Interface contract (required)
+#### Interface contract
 ```python
 # src/walk/cli/cmd_doctor.py
 class DoctorReport(WalkModel):
@@ -1425,7 +1425,7 @@ CLI: `walk doctor [--fix] [--strict] [--json]`. Exit: 0 clean; 4 required compon
 4. `run_import_linter` is executed only when `import-linter` is installed (dev environment); absence under `--strict` → finding `import-linter not installed` (ConfigError mapped to a finding, exit 1).
 5. `--json` prints `DoctorReport`.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given missing guard hooks in a worktree When `walk doctor --fix` Then hooks installed and listed in `fixes_applied` | `tests/cli/test_cmd_doctor_fix.py::test_fix_installs_guard_hooks` |
@@ -1438,7 +1438,7 @@ CLI: `walk doctor [--fix] [--strict] [--json]`. Exit: 0 clean; 4 required compon
 | 8 | Given mismatched pins When `walk doctor --strict` Then exit 1 and `version_pins_ok == False` | `tests/cli/test_cmd_doctor_fix.py::test_strict_fails_on_pin_mismatch` |
 | 9 | Given `--json` When doctor Then output parses as `DoctorReport` | `tests/cli/test_cmd_doctor_fix.py::test_doctor_json_report` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output.
 - Demo: `walk doctor --fix --strict` on the bootstrapped demo repo → sections `tools`, `providers`, `skills: ok`, `approved: ok`, `versions: ok`, `lints: none`, exit 0.
 
@@ -1461,21 +1461,21 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** QC   **Reviewer role:** LeadDev
 
-#### Goal (required)
+#### Goal
 One end-to-end test module proves the Production Kit: a fresh repository is bootstrapped, validated, projected, protected and overridable exactly as the epic gate describes.
 
 #### Scope
 - In: `tests/e2e/test_e02_gate.py`, shared e2e fixtures, CLI invocation helper, documentation of the gate transcript.
 - Out: any new kernel behaviour (defects found here become `E02-B*` stories via E02-R01).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `tests/e2e/conftest.py` | modify | `bootstrapped_repo`, `cli` (typer `CliRunner` wrapper returning exit code + stdout), `kernel_with_fakes` |
 | `tests/e2e/test_e02_gate.py` | create | — |
 | `docs/02-work-breakdown/EPIC-02-production-kit.md` | modify | — (Evidence section of this story) |
 
-#### Interface contract (required)
+#### Interface contract
 ```python
 # tests/e2e/conftest.py
 @pytest.fixture
@@ -1497,7 +1497,7 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 7. A fake SENIOR_DEV run whose scripted tool writes `.ai/agents/roles/senior_dev.md` ends `FAILED_BOUNDARY`, the file change is reverted, `TOOL_DENIED` ledger event present.
 8. A project hook `project.echo` on `on_project_start` appears in `HOOK_EXECUTED` after `walk run --once`.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given fresh repo When bootstrap Then full tree per Behavior 1 | `tests/e2e/test_e02_gate.py::test_bootstrap_creates_production_kit` |
@@ -1509,7 +1509,7 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 | 7 | Given fake run writing under `.ai/agents/roles/` Then `FAILED_BOUNDARY` and change reverted | `tests/e2e/test_e02_gate.py::test_boundary_auditor_rejects_agents_dir_write` |
 | 8 | Given project hook on `on_project_start` When `walk run --once` Then `HOOK_EXECUTED` for `project.echo` | `tests/e2e/test_e02_gate.py::test_project_hook_executes_on_start` |
 
-#### Evidence required (required)
+#### Evidence required
 - Quality gate output including `tests/e2e/test_e02_gate.py` 8 passed.
 - Demo transcript (pasted into Evidence): `walk bootstrap … --yes`, `walk doctor`, `walk skills check-drift --strict`, `walk approvals --pending`, `walk approve APV-0001 --note ok`, `walk ledger query --kind USER_OVERRIDE`.
 
@@ -1531,20 +1531,20 @@ _pending_
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC
 
-#### Goal (required)
+#### Goal
 An independent agent instance (different model than the implementer of the majority of E02 stories) verifies every E02 story against the Definition of Done and the epic's invariants, and records defects as `E02-B*` bugfix stories.
 
 #### Scope
 - In: review of E02-S01…S16 commits; invariant checks 7, 10, 11; MUST-hook completeness; secret hygiene; bugfix story creation.
 - Out: fixing defects (bugfix stories), re-planning (planner).
 
-#### Files (required)
+#### Files
 | Path | Action | Public symbols |
 |---|---|---|
 | `docs/02-work-breakdown/EPIC-02-production-kit.md` | modify | — (this task's Evidence; appended `E02-B*` stories) |
 | `docs/02-work-breakdown/WBS.md` | modify | — (status rows for E02-R01 and any `E02-B*`) |
 
-#### Interface contract (required)
+#### Interface contract
 Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer protocol" steps 1–5. Checklist per story: DoD "Code", "Tests", "Documentation", "Evidence", "Delivery" boxes; per acceptance-criteria row the named test exists and passes (`uv run pytest <nodeid>`).
 
 #### Behavior
@@ -1557,7 +1557,7 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 7. Each defect → one `E02-Bnn` story using the template, `Depends on: E02-R01`, linked here; `BLOCKER` severity noted when it breaks the gate.
 8. Commit `docs: review epic 02 stories s01-s16 (E02-R01)` and push.
 
-#### Acceptance criteria (required)
+#### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given each story commit When diffed against its Files table Then no unlisted file without justification | `tests/e2e/test_e02_gate.py::test_bootstrap_creates_production_kit` (re-run as part of review; manual check recorded in Evidence) |
@@ -1566,7 +1566,7 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 | 4 | Given §4.1 table When compared with `builtins.py` + deferral table Then every row accounted for | `tests/hooks/test_builtins.py::test_all_must_hooks_registered_required_low_priority` |
 | 5 | Given fixtures When scanned for secrets Then only deliberate samples | `tests/memory/test_secrets.py::test_contains_secret_patterns_and_negative` |
 
-#### Evidence required (required)
+#### Evidence required
 - Gate output of the full suite on `main` after the last E02 story.
 - Table in Evidence: story → sha → DoD result → defects (ids).
 - `walk doctor --strict` transcript on the demo repo.
