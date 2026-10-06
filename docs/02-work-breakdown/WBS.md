@@ -511,7 +511,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E08-X01 | Refine E08 against codebase | docs | E07-R01 | LOW | TODO |
 | E08-S01 | ART_DIRECTOR constitution and design/art routing | feat | E08-X01, E05-S06 | MEDIUM | TODO |
 | E08-S02 | `AssetProvider` implementation: Meshy | feat | E08-X01, E02-S01 | HIGH | TODO |
-| E08-S03 | `AssetProvider` implementation: OpenArt | feat | E08-S02 | MEDIUM | TODO |
+| E08-S03 | `AssetProvider` implementation: OpenArt | feat | E08-S02 | MEDIUM | BLOCKED |
 | E08-S04 | `asset.generate` kernel tool, idempotency, `EXTERNAL_CREDITS` cost | feat | E08-S02, E01-S26 | MEDIUM | TODO |
 | E08-S05 | `AssetProvenance` files and evidence | feat | E08-S04 | MEDIUM | TODO |
 | E08-S06 | Asset validation via `UnityProvider.validate_assets` and `com.walk.ci` | feat | E08-S04, E03-S10 | MEDIUM | TODO |
@@ -556,6 +556,10 @@ Totals: E01 31 stories + 1 review · E02 16 + 1 · E03 20 + 1 · E04 15 + 1 · E
 ---
 
 ## 6. `NEW NAME:` / `RELOCATE:` register (for the architect)
+
+The complete, generated per-story register is `docs/03-traceability/NAME-REGISTER.md`
+(`py -3 scripts/build_name_register.py`). The table below keeps only the planning-wide
+decisions that affect several epics.
 
 | Item | Where introduced | Why |
 |---|---|---|

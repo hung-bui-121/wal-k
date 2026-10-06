@@ -54,6 +54,12 @@ Paste gate summary + demo transcript here when marking DONE.
 
 ## Rules for writing stories
 
+- Interface-contract code blocks in stories may be abbreviated sketches (`...` for
+  parameters an earlier story already defined, one-line `def ...: ...` stubs). The exact,
+  parseable signatures live in `docs/01-architecture/INTERFACES.md` and `DOMAIN-MODEL.md`;
+  when a sketch and those documents disagree, the story wins and the implementer updates
+  the architecture document in the same commit.
+
 0. Required sections (non-empty): Goal, Files, Interface contract, Acceptance criteria,
    Evidence required, plus the header fields Requirements and Depends on. `scripts/validate_wbs.py`
    checks heading presence and order.

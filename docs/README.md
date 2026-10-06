@@ -9,7 +9,7 @@ implements it.
 | `00-governance/` | How work is done: per-story procedure, code conventions, Definition of Ready/Done, commit policy, templates | `IMPLEMENTATION-PROTOCOL.md` |
 | `01-architecture/` | What is built: packages, domain model, service protocols, state machines, algorithms, ADRs | `README.md` → `ARCHITECTURE.md` |
 | `02-work-breakdown/` | In what order: 11 epics (one per roadmap stage), every story as an executable contract, status table | `WBS.md` |
-| `03-traceability/` | Proof of coverage: requirement section → stories matrix (generated) | `REQ-TRACEABILITY.md` |
+| `03-traceability/` | Generated: requirement → stories matrix, story-level name register | `REQ-TRACEABILITY.md`, `NAME-REGISTER.md` |
 
 ## Reading order for a new implementer
 
@@ -27,6 +27,7 @@ implements it.
 |---|---|
 | Validate every story against the template, dependency rules and WBS table | `py -3 scripts/validate_wbs.py` |
 | Regenerate the requirement → story matrix | `py -3 scripts/build_traceability.py` |
+| Regenerate the story-level name register | `py -3 scripts/build_name_register.py` |
 
 Both run from the repo root. `validate_wbs.py` must pass before any `docs:` commit that
 touches `02-work-breakdown/`.

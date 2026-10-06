@@ -315,7 +315,7 @@ Staleness is detected before every agent run, flagged on the bundle, recorded in
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/hooks/builtins.py` | modify | `agent_start_freshness_check`, `context_stale_flag`, `context_updated_counter`, `code_changed_invalidate` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `agent_start_freshness_check`, `context_stale_flag`, `context_updated_counter`, `code_changed_invalidate` |
 | `src/walk/memory/service.py` | modify | `DefaultMemoryManager.invalidate_for_paths`, `DefaultMemoryManager.record_stale` |
 | `src/walk/memory/protocols.py` | modify | `MemoryManager.invalidate_for_paths` |
 | `src/walk/memory/repository.py` | modify | `MemoryIndexRepository.docs_referencing` |
@@ -395,7 +395,7 @@ Accepted decisions are first-class, persisted in SQLite and `.ai/decisions/DEC-N
 | `src/walk/decisions/errors.py` | create | `AuthorityViolation` |
 | `src/walk/decisions/__init__.py` | modify | re-exports |
 | `src/walk/memory/sections.py` | modify | `DECISION_SECTIONS` |
-| `src/walk/hooks/builtins.py` | modify | `decision_recorded_write_and_link` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `decision_recorded_write_and_link` |
 | `src/walk/cli/cmd_decisions.py` | create | `list`, `show` |
 | `src/walk/cli/app.py` | modify | — (register `decisions` group) |
 | `src/walk/cli/composition.py` | modify | — (wire `DefaultDecisionManager`, `KernelHandle.decisions`) |
@@ -559,7 +559,7 @@ Mandatory context checkpoints are enforced by hooks, not by prompts: PARTIAL, us
 |---|---|---|
 | `src/walk/runtime/executor.py` | modify | — (`DefaultAgentExecutor._on_final_output`: PARTIAL path; budget-exhausted path; `ON_AGENT_END` repair turn) |
 | `src/walk/runtime/output_applier.py` | modify | — (`partial` event with `payload["handover_present"]`) |
-| `src/walk/hooks/builtins.py` | modify | `agent_end_requires_context_update`, `budget_exhausted_checkpoint_handover`, `project_pause_checkpoint_all` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `agent_end_requires_context_update`, `budget_exhausted_checkpoint_handover`, `project_pause_checkpoint_all` |
 | `src/walk/orchestrator/service.py` | modify | — (`pause(run_id)` → `checkpoint(PAUSE, handover=build_handover(reason="PAUSE"))`) |
 | `tests/runtime/test_executor_partial.py` | create | — |
 | `tests/runtime/test_executor_agent_end_context.py` | create | — |
@@ -968,7 +968,7 @@ Code-graph neighbourhoods are ranked context candidates, graph-derived files see
 | `src/walk/context/producers.py` | modify | `CodeGraphProducer` |
 | `src/walk/context/service.py` | modify | — (graph file nodes feed `SourceFileProducer` seeds via `request`-scoped shared state `BuildScratch`) |
 | `src/walk/context/models.py` | modify | `BuildScratch` |
-| `src/walk/hooks/builtins.py` | modify | `code_changed_mark_dirty`, `merged_refresh_graph_and_files` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `code_changed_mark_dirty`, `merged_refresh_graph_and_files` |
 | `src/walk/cli/composition.py` | modify | — |
 | `tests/context/test_producers_graph.py` | create | — |
 | `tests/hooks/test_builtins_graph.py` | create | — |
@@ -1041,7 +1041,7 @@ Agents and the kernel can record improvement observations as project-scoped `.ai
 | `src/walk/improvement/service.py` | create | `DefaultImprovementManager` |
 | `src/walk/improvement/__init__.py` | modify | re-exports |
 | `src/walk/memory/sections.py` | modify | `OBSERVATION_SECTIONS` |
-| `src/walk/hooks/builtins.py` | modify | `improvement_observation_write`, `model_fallback_observe_repeated`, `context_stale_observe_repeated` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `improvement_observation_write`, `model_fallback_observe_repeated`, `context_stale_observe_repeated` |
 | `src/walk/runtime/output_applier.py` | modify | — (applies `output.observations`) |
 | `src/walk/cli/cmd_improvement.py` | create | `observations` |
 | `src/walk/cli/app.py` | modify | — |

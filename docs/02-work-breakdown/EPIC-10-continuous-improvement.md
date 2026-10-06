@@ -94,7 +94,7 @@ Assumptions made at planning time (E01-S18…S31, E03-S06…S20, E05–E09 stori
 3. `src/walk/persistence/migrations/kernel/0001_init.sql` (E01-S03) creates every kernel-DB table listed in DOMAIN-MODEL §6.2 "Table → DB"; `Database` can open a second (kernel) database file with `MigrationRunner.apply_pending(db, "kernel")`.
 4. `walk.persistence.atomic_write` exists (E01-S04) for non-`.ai/` writes used by `KernelImprovementStore` (E10-S03).
 5. The E07-S08 phase retrospective lives in `DefaultImprovementManager.phase_retrospective`, writes `.ai/improvements/RETRO-PHASE-NN.md` and a `retrospectives` row, and the `RETRO.md.j2` template exists (E01-S18, §3.9) — E10-S07 depends on all three `(verify)`.
-6. `src/walk/hooks/builtins.py` holds the E04-S13 improvement callables and `BuiltinHookDeps.improvement` (E07-S05); E10-S02/S07/S08 add callables there.
+6. `src/walk/orchestrator/builtin_hooks.py` holds the E04-S13 improvement callables and `BuiltinHookDeps.improvement` (E07-S05); E10-S02/S07/S08 add callables there.
 7. `DefaultTaskRouter` is in `src/walk/orchestrator/router.py`, `DefaultOutputApplier` in `src/walk/runtime/output_applier.py`, `DefaultAgentExecutor` in `src/walk/runtime/executor.py` (E01-S27, E03-S07/S08) — E10-S07 and E10-S08 modify them.
 8. `ImprovementReportQuery` is in `src/walk/telemetry/reports.py` (E09-S02) and `METRIC_QUERIES`/`compute_metrics` in `src/walk/telemetry/metrics.py` (E01-S06, E09-S06) — E10-S09 extends both.
 9. `DefaultLedgerManager(behavior_versions=…)` stamping (E09-S05) is wired from `KernelVersionPins` in `src/walk/cli/composition.py`; E10-S08 replaces the callable with an experiment-aware one.
@@ -154,7 +154,7 @@ Project-scoped observations are complete §96 records: they link evidence and le
 | `src/walk/improvement/documents.py` | create | `observation_document`, `observation_from_document` |
 | `src/walk/improvement/service.py` | modify | `DefaultImprovementManager.observe`, `DefaultImprovementManager.list_observations`, `OBSERVATION_DEDUPE_WINDOW_S` |
 | `src/walk/improvement/__init__.py` | modify | re-exports `ObservationQuery`, `observation_document`, `observation_from_document` |
-| `src/walk/hooks/builtins.py` | modify | `improvement_observation_write` (delegates to `observation_document`) `(verify)` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `improvement_observation_write` (delegates to `observation_document`) `(verify)` |
 | `src/walk/cli/cmd_improvement.py` | modify | `observations` (filters), `show` |
 | `docs/01-architecture/INTERFACES.md` | modify | — (§1.15 `list_observations`; §6 `walk improvement observations` options, `walk improvement show`) |
 | `tests/agents/test_models_observation_draft.py` | create | — |
@@ -268,7 +268,7 @@ The §99 improvement sources that are visible in the ledger are declared as data
 | `src/walk/improvement/defaults/signals.yaml` | create | — (rule table below; `version: "1.0"`) |
 | `src/walk/improvement/service.py` | modify | `DefaultImprovementManager.detect_signals`, `DefaultImprovementManager.__init__` (`signals: SignalDetector` parameter) |
 | `src/walk/improvement/__init__.py` | modify | re-exports `SignalRule`, `SignalMatch`, `SignalDetector`, `load_signal_rules` |
-| `src/walk/hooks/builtins.py` | modify | `phase_review_detect_signals` (default, priority 130) `(verify)` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `phase_review_detect_signals` (default, priority 130) `(verify)` |
 | `src/walk/orchestrator/commands.py` | modify | — (command `improvement.detect`) `(verify)` |
 | `src/walk/cli/cmd_improvement.py` | modify | `detect` |
 | `docs/01-architecture/INTERFACES.md` | modify | — (§1.15 `detect_signals` docstring names `signals.yaml`; §6 `walk improvement detect`) |
@@ -974,7 +974,7 @@ _pending_
 The §101 Process Architect exists as a kernel-default role (constitution, policy, permission rows) that can be run on a retrospective through a carrier task, all four §114 retrospective levels can be generated (metrics-only for tasks and features), and a phase retrospective can carry an LLM-written narrative attached from the Process Architect's output — without the role ever being able to edit behaviour artefacts.
 
 #### Scope
-- In: `process_architect.md`; `policies.yaml` / `permissions/defaults.yaml` rows; `RETRO.md.j2` block `process_architect_duties`; module `walk.workflow.analysis` (carrier-task labels); `story_workflow` row `analysis_done` + guard `is_analysis_task`; `ANALYSIS_ROUTES`; `OutputApplier` mapping and `on_analysis_output` callback; module `walk.improvement.retrospectives`; `ImprovementManager.retrospective(level, subject_id)`, `phase_retrospective(with_narrative=True)`, `attach_narrative`; `ON_PHASE_REVIEW_START` attachment passes `with_narrative`; `walk improvement retro SUBJECT_ID [--narrative]`.
+- In: `process_architect.md`; `policies.yaml` / `permissions/defaults.yaml` rows; `RETRO.md.j2` block `process_architect_duties`; module `walk.workflow.analysis` (carrier-task labels); carrier tasks reuse the E06-S02 `analysis-only` label and its `IMPLEMENTING --analysis_done--> COMPLETE` row (no new row or guard); `ANALYSIS_ROUTES`; `OutputApplier` mapping and `on_analysis_output` callback; module `walk.improvement.retrospectives`; `ImprovementManager.retrospective(level, subject_id)`, `phase_retrospective(with_narrative=True)`, `attach_narrative`; `ON_PHASE_REVIEW_START` attachment passes `with_narrative`; `walk improvement retro SUBJECT_ID [--narrative]`.
 - Out: §116 metrics beyond `RetrospectiveMetrics` (E10-S09); kernel copies under `$WALK_HOME/.improvement/retrospectives/` (nothing is written to `$WALK_HOME` by this story — Scope/store rule; copying belongs to a future promotion of retrospectives, not planned); Process Architect use of the `improvement.candidate` tool (available once E10-S04 is merged; its permission row already allows the role); narrative for TASK/FEATURE levels (§114: not required for small tasks).
 
 #### Files
@@ -985,8 +985,6 @@ The §101 Process Architect exists as a kernel-default role (constitution, polic
 | `src/walk/permissions/defaults.yaml` | modify | — (`PROCESS_ARCHITECT` rows, table below) |
 | `src/walk/agents/templates/RETRO.md.j2` | modify | — (block `process_architect_duties`; version bump `1.1`) `(verify E07-S08 content)` |
 | `src/walk/workflow/analysis.py` | create | `AnalysisStep`, `ANALYSIS_LABEL_PREFIX`, `ANALYSIS_STEP_LABEL_PREFIX`, `analysis_labels`, `analysis_subject_of`, `analysis_step_of` |
-| `src/walk/workflow/guards.py` | modify | `is_analysis_task` |
-| `src/walk/workflow/tables/story_workflow.yaml` | modify | — (row `analysis_done`; version bump, see Notes) |
 | `src/walk/workflow/__init__.py` | modify | re-export `AnalysisStep`, `analysis_labels`, `analysis_step_of`, `analysis_subject_of` |
 | `src/walk/orchestrator/router.py` | modify | `ANALYSIS_ROUTES`, `DefaultTaskRouter.route` (analysis rows) |
 | `src/walk/runtime/output_applier.py` | modify | `DefaultOutputApplier.__init__` (`on_analysis_output` parameter); `analysis_done` implied event |
@@ -994,7 +992,7 @@ The §101 Process Architect exists as a kernel-default role (constitution, polic
 | `src/walk/improvement/protocols.py` | modify | `ImprovementManager.retrospective`, `ImprovementManager.attach_narrative` |
 | `src/walk/improvement/service.py` | modify | `DefaultImprovementManager.retrospective`, `.phase_retrospective` (narrative carrier), `.attach_narrative` |
 | `src/walk/improvement/__init__.py` | modify | re-exports |
-| `src/walk/hooks/builtins.py` | modify | — (the E07-S08 `ON_PHASE_REVIEW_START` retrospective attachment passes `with_narrative = PROCESS_ARCHITECT enabled`) `(verify)` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | — (the E07-S08 `ON_PHASE_REVIEW_START` retrospective attachment passes `with_narrative = PROCESS_ARCHITECT enabled`) `(verify)` |
 | `src/walk/cli/cmd_improvement.py` | modify | `retro` (`SUBJECT_ID`, `--narrative`) |
 | `src/walk/cli/composition.py` | modify | — (`on_analysis_output = improvement.attach_narrative`) |
 | `docs/01-architecture/INTERFACES.md` | modify | — (§1.15 two methods; §3.2 row; §4 routing row for analysis tasks; §6 `walk improvement retro`) |
@@ -1037,7 +1035,7 @@ def narrative_from_output(output: AgentOutput) -> str: ...              # summar
 async def retrospective(self, level: Literal["TASK", "FEATURE", "PHASE", "PROJECT"], subject_id: str, *, with_narrative: bool = False) -> Retrospective: ...
 async def attach_narrative(self, item: WorkItem, output: AgentOutput) -> Retrospective: ...
 ```
-`story_workflow.yaml` new row (INTERFACES §3.2 addition): `READY | analysis_done | is_analysis_task, output_status_is_completed | COMPLETE | ON_TASK_COMPLETE | KERNEL`.
+No story-workflow change: carrier tasks are created with labels `analysis_labels(...)` **plus** `analysis-only` (E06-S02) and complete through the existing INTERFACES §3.2 row `IMPLEMENTING --analysis_done--> COMPLETE` (guards `output_status_is_completed`, `analysis_only_task`).
 
 Constitution front matter (ADR-0013 D-2): `id: PROCESS_ARCHITECT`, `role: PROCESS_ARCHITECT`, `version: "1.0"`, `identity: Process Architect (Kernel Improvement Agent)`, `mission: Improve AI Studio effectiveness using production evidence.` (§101), `responsibilities: [analyze ledger, inspect retrospective, find recurring patterns, create improvement candidates, evaluate impact, track post-change performance]`, `authority: {decision_scope: [PROCESS], max_autonomy_level: 1, may_approve: [], may_reject: [], may_create_work: []}`, `risk_tolerance: LOW`, `preferred_evidence: [PROJECT_DATA, QC_REPORT, AUTOMATED_TEST, PERFORMANCE_METRICS]`, `escalation_rules: [{condition: "change to agent authority, autonomy, phase gate or permissions", to_level: 3, category: PROCESS}]`, `tool_permissions: [{tool: Edit, effect: DENY}, {tool: Write, effect: DENY}, {tool: bash, effect: DENY}]`, `forbidden_actions: ["edit constitutions, workflow tables, skills, templates or policies", "approve or pin its own proposals", "promote project learning to kernel scope"]`. Body sections per ADR-0013 D-3, one paragraph each derived from §101–§103.
 
@@ -1071,8 +1069,8 @@ CLI: `walk improvement retro SUBJECT_ID [--narrative] [--json]` — level inferr
 | 2 | Given `policies.yaml` When loaded for `PROCESS_ARCHITECT` Then `allowed_paths == []` and `allowed_tools == ["Read", "Glob", "Grep"]` | `tests/agents/test_defaults_process_architect.py::test_process_architect_policy_defaults` |
 | 3 | Given `PROCESS_ARCHITECT` When `decide(Edit)`, `decide(bash)`, `decide(Read)` Then DENY, DENY, ALLOW; a project rule `PROCESS_ARCHITECT Write ALLOW` Then `ConfigError` | `tests/permissions/test_defaults_process_architect.py::test_process_architect_cannot_write` |
 | 4 | Given `analysis_labels("RETRO-PHASE-01", RETRO)` on a TASK When parsed Then subject and step round-trip; one label only Then `ConfigError` | `tests/workflow/test_analysis_labels.py::test_analysis_labels_roundtrip_and_partial_rejected` |
-| 5 | Given `story_workflow.yaml` When loaded Then it contains `READY --analysis_done--> COMPLETE` with `is_analysis_task` and `output_status_is_completed`, and all previous rows unchanged | `tests/workflow/test_tables.py::test_story_workflow_analysis_row` |
-| 6 | Given a plain TASK When `raise_event(analysis_done)` Then `GuardRejected` from `is_analysis_task` | `tests/workflow/test_analysis_labels.py::test_analysis_done_rejected_for_plain_task` |
+| 5 | Given `analysis_labels("RETRO-PHASE-01", RETRO)` When a carrier task is created Then its labels also contain `analysis-only` | `tests/workflow/test_analysis_labels.py::test_carrier_task_has_analysis_only_label` |
+| 6 | Given a plain TASK without `analysis-only` When `raise_event(analysis_done)` Then `GuardRejected` from `analysis_only_task` | `tests/workflow/test_analysis_labels.py::test_analysis_done_rejected_for_plain_task` |
 | 7 | Given an analysis TASK in READY When `route` Then `(PROCESS_ARCHITECT, "RETRO")` with `cross_model_review False`; a plain TASK Then the E03-S07 result | `tests/orchestrator/test_router_analysis.py::test_analysis_task_routes_to_process_architect` |
 | 8 | Given a fake PROCESS_ARCHITECT run on a carrier returning `COMPLETED` with a summary When applied Then the task is `COMPLETE` via `analysis_done` and `on_analysis_output` was awaited once | `tests/runtime/test_applier_analysis.py::test_carrier_completes_and_callback_called` |
 | 9 | Given an `AgentOutput` with summary and 2 findings When `narrative_from_output` Then Markdown containing the summary and both findings; with a key pattern Then `SecretDetected` | `tests/improvement/test_retrospectives.py::test_narrative_from_output` |
@@ -1092,9 +1090,9 @@ CLI: `walk improvement retro SUBJECT_ID [--narrative] [--json]` — level inferr
 #### Notes
 - §101 "SHOULD support a specialized role"; ADR-0013 D-1–D-5, D-7; ADR-0008 D-7 (agents cannot write behaviour); Invariant 5 (`decision_scope: [PROCESS]` with `max_autonomy_level: 1` — PA proposes, never records accepted decisions alone).
 - Placement (recorded in the header `NEW NAME:` table): the label helpers live in `walk.workflow.analysis` (not `walk.improvement.retrospectives`) because `workflow.guards` and `runtime.applier` may not import `walk.improvement` (ARCHITECTURE §2.2); this mirrors E11-S01's `walk.workflow.release`.
-- Shared files with E11-S01 (parallel epic): `story_workflow.yaml`, `workflow/guards.py`, `workflow/__init__.py`, `orchestrator/router.py`, `runtime/output_applier.py`, `tests/workflow/test_tables.py`. Merge-order rule: whichever of E10-S07 / E11-S01 merges first sets `story_workflow` `version: "1.1"`; the second rebases, keeps both rows and sets `"1.2"` (one MINOR bump per added row, §105). Baseline: `1.0` already contains the row additions and changes made before E10 without a bump (E03-S16, E05-S11, E06-S02, E08-S04); the X01 refine task of whichever epic starts first confirms the version on `main` and, if it is not `1.0`, the same rule applies from that value (first merge +0.1, second +0.2).
+- E10-S07 no longer changes `story_workflow.yaml` or `workflow/guards.py` (reuses the E06-S02 row, ADR-0016 sync). The merge-order rule below therefore only matters if a later change re-adds a row. Shared files with E11-S01 (parallel epic): `story_workflow.yaml`, `workflow/guards.py`, `workflow/__init__.py`, `orchestrator/router.py`, `runtime/output_applier.py`, `tests/workflow/test_tables.py`. Merge-order rule: whichever of E10-S07 / E11-S01 merges first sets `story_workflow` `version: "1.1"`; the second rebases, keeps both rows and sets `"1.2"` (one MINOR bump per added row, §105). Baseline: `1.0` already contains the row additions and changes made before E10 without a bump (E03-S16, E05-S11, E06-S02, E08-S04); the X01 refine task of whichever epic starts first confirms the version on `main` and, if it is not `1.0`, the same rule applies from that value (first merge +0.1, second +0.2).
 - Carrier-task pattern is the same as E11's (header "Carrier-task mechanism"): agent runs need a work item (`AgentExecutor.start(agent, item, purpose)`).
-- `NEW NAME:` kernel default constitution `process_architect.md`; module `walk.workflow.analysis` (`AnalysisStep`, `ANALYSIS_LABEL_PREFIX`, `ANALYSIS_STEP_LABEL_PREFIX`, `analysis_labels`, `analysis_subject_of`, `analysis_step_of`); guard `is_analysis_task`; `story_workflow` event `analysis_done`; `ANALYSIS_ROUTES`; `DefaultOutputApplier(on_analysis_output=…)`; module `walk.improvement.retrospectives` (`narrative_from_output`, `metrics_from_report`, `retrospective_id_for`, `NARRATIVE_LEVELS`); `ImprovementManager.retrospective(level, subject_id)`, `.attach_narrative`; `RETRO.md.j2` block `process_architect_duties`; `walk improvement retro SUBJECT_ID --narrative`.
+- `NEW NAME:` kernel default constitution `process_architect.md`; module `walk.workflow.analysis` (`AnalysisStep`, `ANALYSIS_LABEL_PREFIX`, `ANALYSIS_STEP_LABEL_PREFIX`, `analysis_labels`, `analysis_subject_of`, `analysis_step_of`); `ANALYSIS_ROUTES`; `DefaultOutputApplier(on_analysis_output=…)`; module `walk.improvement.retrospectives` (`narrative_from_output`, `metrics_from_report`, `retrospective_id_for`, `NARRATIVE_LEVELS`); `ImprovementManager.retrospective(level, subject_id)`, `.attach_narrative`; `RETRO.md.j2` block `process_architect_duties`; `walk improvement retro SUBJECT_ID --narrative`.
 - Commit subject: `feat: add process architect and multi-level retrospectives (E10-S07)`.
 
 #### Evidence (filled by implementer)
@@ -1130,7 +1128,7 @@ A candidate's versioned change can be measured before rollout by the two ADR-000
 | `src/walk/improvement/__init__.py` | modify | re-exports |
 | `src/walk/workflow/service.py` | modify | `DefaultWorkflowManager.__init__` (`table_source: Callable[[str, WorkItemId \| None], Path]`), explicit `WORKFLOW/<table>` version on transition events `(verify stamping point, E01-S09)` |
 | `src/walk/runtime/executor.py` | modify | `DefaultAgentExecutor.__init__` (`versions_for_item` parameter) `(verify, E01-S27)` |
-| `src/walk/hooks/builtins.py` | modify | `agent_start_shadow_evaluate` (default, `ON_AGENT_START`, priority 140) `(verify)` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `agent_start_shadow_evaluate` (default, `ON_AGENT_START`, priority 140) `(verify)` |
 | `src/walk/cli/cmd_improvement.py` | modify | `experiments_app` (`list`, `show`, `start`, `end`); `show` accepts `EXP-` |
 | `src/walk/cli/composition.py` | modify | — (`ExperimentAssigner` from pins; experiment-aware `table_source`; `versions_for_item`; shadow evaluators) |
 | `docs/01-architecture/adr/ADR-0008-learning-separation-and-behavior-versioning.md` | modify | — (Addendum A: D-9 decision rule) |

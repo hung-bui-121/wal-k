@@ -228,7 +228,7 @@ All six §83 report kinds exist as `ReportQuery` objects, `walk report --write` 
 | `src/walk/telemetry/reports.py` | modify | `PhaseReportQuery`, `ProjectReportQuery`, `CostReportQuery`, `ImprovementReportQuery` |
 | `src/walk/memory/service.py` | modify | `DefaultMemoryManager.write_report` |
 | `src/walk/memory/paths.py` | modify | `report_path_for` |
-| `src/walk/hooks/builtins.py` | modify | — (`ON_PHASE_COMPLETE` MUST attachment from E07-S09 now calls `LedgerManager.report("phase", id)` then `MemoryManager.write_report`) `(verify)` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | — (`ON_PHASE_COMPLETE` MUST attachment from E07-S09 now calls `LedgerManager.report("phase", id)` then `MemoryManager.write_report`) `(verify)` |
 | `src/walk/cli/cmd_report.py` | modify | `report_app` (`phase`, `project`, `cost`, `improvement`, `--write`) |
 | `tests/telemetry/test_reports_phase.py` | create | — |
 | `tests/telemetry/test_reports_project_cost.py` | create | — |
@@ -317,7 +317,7 @@ Every §84 cost dimension produces `CostRecord`s — LLM (existing), Assets (E08
 | `src/walk/budgets/protocols.py` | modify | `CostManager.breakdown` |
 | `src/walk/budgets/service.py` | modify | `DefaultCostManager.breakdown` |
 | `src/walk/budgets/repository.py` | modify | `CostRepository.aggregate` |
-| `src/walk/hooks/builtins.py` | modify | `build_result_record_compute_cost`, `agent_end_record_time_cost`; `BuiltinHookDeps.costs` |
+| `src/walk/orchestrator/builtin_hooks.py` | modify | `build_result_record_compute_cost`, `agent_end_record_time_cost`; `BuiltinHookDeps.costs` |
 | `src/walk/cli/composition.py` | modify | `KernelSettings.compute_usd_per_hour`, `KernelSettings.time_usd_per_hour` |
 | `src/walk/cli/cmd_cost.py` | modify | `cost_app` (`--by`) |
 | `tests/budgets/test_cost_breakdown.py` | create | — |
