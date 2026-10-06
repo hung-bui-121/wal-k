@@ -143,6 +143,13 @@ class GitProvider(Protocol):
         """Files changed against ``base`` (default HEAD), untracked files included."""
         ...
 
+    async def discard_changes(self, path: str) -> None:
+        """Reset tracked and remove untracked changes of the worktree at ``path`` only.
+
+        `git checkout -- .` + `git clean -fd`; the boundary-violation path (E01-S27).
+        """
+        ...
+
     async def commit_all(
         self, path: str, message: str, *, trailer_work_item: WorkItemId, idempotency_key: str
     ) -> CommitInfo | None:

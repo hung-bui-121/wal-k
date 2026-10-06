@@ -694,8 +694,12 @@ class AgentExecutor(Protocol):
         handover: Handover | None = None,
         parent_run_id: RunId | None = None,
         debate: Debate | None = None,
+        routing: RoutingDecision | None = None,
+        effort_resolution: EffortResolution | None = None,
     ) -> AgentRun:
-        """ARCHITECTURE.md §3.2 steps 3–7. Returns immediately with RUNNING run; completion wakes the orchestrator."""
+        """ARCHITECTURE.md §3.2 steps 3–7. Returns immediately with RUNNING run; completion wakes the orchestrator.
+        E01-S27: `routing`/`effort_resolution` are the scheduler's decisions; the executor is their ledger write point
+        (MODEL_SELECTED, EFFORT_SET). A preparation failure returns the run FAILED instead of raising."""
 
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
         """Same model, provider-side session resume (ModelAdapter.resume). Falls back to `start(handover=…)` on failure."""
@@ -710,7 +714,11 @@ class ToolInvoker(Protocol):
 
     async def authorize(self, request: ToolCallRequest) -> PermissionDecision:
         """PermissionManager.decide; ALLOW → ON_TOOL_BEFORE; DENY → ON_TOOL_DENIED + ledger TOOL_DENIED;
-        REQUIRE_APPROVAL → request_approval, pause run, await decision (timeout → DENY)."""
+        REQUIRE_APPROVAL → request_approval, pause run, await decision (timeout → DENY).
+        E01-S27: an adapter that reports tool calls after they ran (Codex, `configure_sandbox`) gets the post-hoc
+        authorizer `DefaultToolInvoker.authorizer_for(run, wait_for_approval=False)`: DENY/REQUIRE_APPROVAL are
+        recorded (TOOL_DENIED) and returned unchanged, the run is never paused, and the executor fails the run
+        FAILED_BOUNDARY instead of applying its effects (ADR-0006 D-5)."""
 
     async def invoke(self, request: ToolCallRequest) -> JsonDict:
         """authorize() then dispatch KERNEL tool to IntegrationManager; meter TOOL_CALLS; ON_TOOL_AFTER; ledger TOOL_INVOKED."""
@@ -719,7 +727,8 @@ class ToolInvoker(Protocol):
 class OutputApplier(Protocol):
     """Applies AgentOutput effects in a fixed order (ARCHITECTURE.md §3.2 step 6)."""
 
-    async def apply(self, run: AgentRun, output: AgentOutput) -> "AppliedEffects": ...
+    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> "AppliedEffects":
+        """E01-S27: `start_head` = worktree HEAD at run start; `commit_sha` is HEAD when it moved since."""
 
 
 class AppliedEffects(FrozenModel):
@@ -1044,6 +1053,9 @@ class GitProvider(Protocol):
         """Dirty files (porcelain)."""
 
     async def diff_names(self, path: str, base: Sha | None = None) -> list[str]: ...
+    async def discard_changes(self, path: str) -> None:
+        """`git checkout -- .` + `git clean -fd` in the worktree at `path` only (boundary violation path, E01-S27)."""
+
     async def commit_all(
         self, path: str, message: str, *, trailer_work_item: WorkItemId, idempotency_key: str
     ) -> CommitInfo | None:

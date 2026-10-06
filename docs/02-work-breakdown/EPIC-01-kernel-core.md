@@ -4025,7 +4025,7 @@ Level-0 decisions:
 
 ### E01-S26 — `ToolInvoker`: permission enforcement point, Claude `can_use_tool` bridge, Codex sandbox config
 
-**Status:** DONE (pending)
+**Status:** DONE (edbb0ed)
 **Type:** feat
 **Requirements:** §30, §31, §32 (`on_tool_*`), §81 (tool invocation), §91, §92, §137 (Inv. 7, 9)
 **Depends on:** E01-S15, E01-S25, E01-S07, E01-S12
@@ -4232,7 +4232,7 @@ Level-0 decisions:
 
 ### E01-S27 — `AgentExecutor` event loop, output validation/repair, `OutputApplier` core
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §9, §22, §40, §41, §54, §81, §84, §86, §89, §91 (repository boundary), §126, §137 (Inv. 1, 2, 9, 12), §138 (Hallucinated Project State)
 **Depends on:** E01-S26, E01-S20, E01-S24, E01-S06
@@ -4477,7 +4477,89 @@ async def set_assigned_run(
 - Commit subject: `feat: add agent executor event loop, output repair and applier core (E01-S27)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+292 files already formatted
+All checks passed!
+Success: no issues found in 290 source files
+Required test coverage of 85% reached. Total coverage: 99.97%
+908 passed, 2 deselected in 164.01s
+```
+Touched modules: `runtime/executor.py`, `inputs.py`, `metering.py`, `output_applier.py`, `tool_invoker.py` 100%; `workflow/repository.py` 100%; `integrations/git/provider.py` 100%.
+
+Demo: `test_periodic_checkpoints_every_n_tool_calls` run with `--basetemp` kept, then the real CLI on its database and `git` on its repository (`HOOK_EXECUTED` rows come from the test's recorder hooks):
+```
+$ walk --repo <tmp> ledger query --run RUN-00000000000000000000000001
+seq  kind                  actor       item        outcome
+1    AGENT_ASSIGNED        SENIOR_DEV  STORY-0001
+2    AGENT_RUN_STARTED     SENIOR_DEV  STORY-0001  OK
+3    MODEL_SELECTED        SENIOR_DEV  STORY-0001  OK
+4    EFFORT_SET            SENIOR_DEV  STORY-0001  OK
+5    HOOK_EXECUTED         KERNEL      STORY-0001  OK        (ON_AGENT_START)
+6    CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  OK        (START, seq 1)
+8    TOOL_INVOKED          SENIOR_DEV  STORY-0001  OK        (pre)
+9    TOOL_INVOKED          SENIOR_DEV  STORY-0001  OK        (post)
+11   COST_RECORDED         SENIOR_DEV  STORY-0001  OK
+...  (tool calls 2-5)
+28   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  OK        (PERIODIC, seq 2)
+...  (tool calls 6-10)
+51   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  OK        (PERIODIC, seq 3)
+...  (tool calls 11-12)
+63   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  OK        (END, seq 4)
+65   WORK_ITEM_TRANSITION  SENIOR_DEV  STORY-0001  OK        (submit_for_review)
+66   AGENT_RUN_ENDED       SENIOR_DEV  STORY-0001  OK
+67   HOOK_EXECUTED         KERNEL      STORY-0001  OK        (ON_AGENT_END)
+$ git -C <tmp repo> log --oneline feat/story-0001-player-jump-double-jump
+afec1f3 wip(STORY-0001): checkpoint 4
+a005b99 wip(STORY-0001): checkpoint 3
+98384ca wip(STORY-0001): checkpoint 2
+68b7d47 chore: initial commit
+```
+The START checkpoint (seq 1) has no WIP commit because the new worktree is clean; seq 2 and 3 are the periodic commits before the END one. The output above is trimmed (columns `at`/`run` and the repeated tool-call rows); the full query lists 67 events.
+
+The commit subject is shortened to `feat: add agent executor loop, output repair and applier core (E01-S27)` (71 characters), because the prescribed one has 77 and the hook allows 72.
+
+Contract changes (small and additive; INTERFACES.md §1.13 and §2.3 updated; see the commit body):
+- The protocol deltas from the Notes: `AgentExecutor.start(..., routing=None, effort_resolution=None)` and `OutputApplier.apply(run, output, *, start_head)`, also in `walk.runtime.protocols`.
+- **`GitProvider.discard_changes(path)`** in the protocol (INTERFACES §2.3) and `FakeGitProvider`. Behavior 11 calls `git.discard_changes`, but only `GitCliProvider` had it (E01-S23), so the executor, typed against the protocol, could not call it.
+- **For owner attention: Codex authorizer (binding Note).** `DefaultToolInvoker.authorizer_for(run, *, wait_for_approval=True)` (`runtime/tool_invoker.py`, outside the Files table). With `wait_for_approval=False`, REQUIRE_APPROVAL is recorded like a denial (`TOOL_DENIED`, `ON_TOOL_DENIED`) and returned unchanged; the run is never paused. The executor uses it for adapters that expose `configure_sandbox` (the ADR-0006 D-5 / ARCHITECTURE §4.2 Codex mechanism). Tool results with `kernel_decision` DENY or REQUIRE_APPROVAL then end the run `FAILED_BOUNDARY`. `test_codex_run_is_never_paused_for_approval` drives the real `CodexAdapter` through `FakeCodexProcessLauncher`.
+- `DefaultAgentExecutor(..., prompt_version: Callable[[str], str] | None = None)`. Behavior 5 requires `behavior_versions["prompt:<purpose>"]`, but neither `AgentManager` nor the builder exposes template versions. The composition root (E01-S30) passes `TemplateRenderer.version_of`. Without it, `behavior_versions` is empty.
+- `DefaultAgentExecutor.on_run_finished` is a public attribute so that E01-S30 can bind `orchestrator.wake` after construction (its Behavior 4).
+
+Root-cause fix outside the Files table (`integrations/git/provider.py`, regression test `test_ensure_branch_holds_no_transaction_during_git`): `GitCliProvider.ensure_branch` held a `BEGIN IMMEDIATE` unit of work across the git subprocess. The kernel shares one SQLite connection, so any run task that wrote while another run's worktree was being created failed with `nested transaction`. The key is now stored after git ran, in its own unit of work, as `commit_all` already did.
+
+Other files outside the Files table: `tests/runtime/executor_env.py` (the wired executor shared by the six test files) with its fixture in `tests/runtime/conftest.py`.
+
+Level-0 decisions:
+- **Start.**
+  - The purpose is validated through `expected_output_for` (unknown → `ConfigError`).
+  - The item is re-read from the repository for the one-active-run check.
+  - The run id is `RUN-<ids.new_ulid()>`; cost record ids are `ids.new_ulid()`.
+  - `timeout_s` is always `RUN_TIMEOUT_S`, because `ModelRouter` does not expose family levels and runs carry concrete model ids.
+  - A preparation failure returns the FAILED run (it does not raise), so that the scheduler's tick continues. It writes `ERROR(kind=PREPARE)` but no `AGENT_RUN_STARTED`/`AGENT_RUN_ENDED`.
+  - A failing START checkpoint fails the run like an adapter error.
+- **Event loop.**
+  - The stream is consumed until it ends. The final output is validated afterwards, so trailing `USAGE` events are still metered.
+  - The repair turn (`RETRY` payload `{reason, errors, repair_turn}`) starts after the first stream is closed. A `NotResumable` from `adapter.resume` ends the run `output_invalid`.
+  - A `TOOL_CALL_RESULT` uses its own `tool_call`, else the oldest pending `TOOL_CALL_REQUESTED`. A result with neither fails the run (adapter defect). `duration_ms` is measured from the request event.
+  - `TEXT` is logged at DEBUG as a character count only.
+  - A `BudgetExhausted` from `record_result` is raised after the call has been counted and persisted. After metering, any applicable `BLOCK` budget at or over its limit blocks the run.
+- **Boundary.** Remembered advisory denials (the request's paths, else its tool name) count as violations at every audit point (periodic, hint, end), not only at the end. Otherwise a periodic WIP commit would keep effects that `discard_changes` can no longer remove.
+- **End.**
+  - `EXECUTION_TIME_S` is metered at every end of a started run.
+  - `AGENT_RUN_ENDED` is written for every started run: OK, FAILED, or SKIPPED for CANCELLED. A pause writes none.
+  - `ERROR.payload.kind` is one of RUN_ERROR, BOUNDARY, BUDGET, OUTPUT_INVALID, GUARD_REJECTED, PREPARE.
+  - `ON_TASK_FAILED` fires for FAILED and FAILED_BOUNDARY, not for BLOCKED_BUDGET (the budget manager fires `ON_BUDGET_EXHAUSTED`) or FAILED_HOOK.
+  - A failing `ON_AGENT_END`/`ON_TASK_FAILED` hook or `on_run_finished` callback is logged; the end state stands.
+  - The item is unassigned only while it still points at this run.
+- **Cancel and pause.** They set a stop flag, call `adapter.cancel` and await the task; the loop stops at the next event. A request that arrives while the run is finalizing returns the ended run unchanged. A run that is not executing in this process raises `ConfigError`; an unknown id raises `RunNotFound`.
+- **Applier.**
+  - `memory_docs` holds document ids.
+  - Evidence values containing `://` pass through as URIs; local paths are resolved against the worktree and passed as absolute paths.
+  - `evidence_kinds_present` is the sorted set of kinds recorded for the item.
+- **Other.** `ON_AGENT_START.context_doc_ids` are the bundle item ids whose `source_path` is under `.ai/`. Hook contexts carry the item's `phase_id`.
+- **For owner attention: completed runs keep their worktree.** git refuses to check out one branch in two worktrees. Any later run of the same item (review, rework) must therefore reuse the worktree (E01-S28 `adopt` covers fallback) or remove it first. E03-S07/S09 should decide this before they admit review runs.
+- **For owner attention: Windows path length.** The demo's first attempt under the long scratchpad path failed in `git worktree add` (MAX_PATH). Short roots (pytest's default basetemp, real repositories) work.
 
 ---
 

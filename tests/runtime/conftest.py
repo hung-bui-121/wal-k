@@ -3,10 +3,18 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.fakes.fake_clock import FakeClock
+from tests.runtime.executor_env import (
+    BaseFixtures,
+    EnvFactory,
+    ExecutorEnv,
+    build_executor_env,
+    register_recorders,
+)
 from walk.common.enums import Effort
 from walk.common.roles import AgentRole
 from walk.hooks import DefaultHookManager, Hook, HookContext, HookExecutionRepository, HookName
@@ -152,3 +160,28 @@ def git(
         fake_clock,
         project_key="DEMO",
     )
+
+
+@pytest.fixture
+def make_executor_env(  # noqa: PLR0917 - fixture parameters are the shared fixtures
+    db: Database,
+    story: Story,
+    tmp_game_repo: Path,
+    ledger: DefaultLedgerManager,
+    hooks: DefaultHookManager,
+    memory: DefaultMemoryManager,
+    idempotency: IdempotencyStore,
+    git: GitCliProvider,
+    runs: AgentRunRepository,
+    fake_clock: FakeClock,
+) -> EnvFactory:
+    """Build an `ExecutorEnv` (once per test: the hook recorders register on first use)."""
+    base = BaseFixtures(
+        db, story, tmp_game_repo, ledger, hooks, memory, idempotency, git, runs, fake_clock
+    )
+    fired = register_recorders(hooks)
+
+    async def build(*args: Any, **kwargs: Any) -> ExecutorEnv:
+        return await build_executor_env(base, fired, *args, **kwargs)
+
+    return build

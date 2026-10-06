@@ -85,6 +85,12 @@ class FakeGitProvider:
         self._record("diff_names", path, base)
         return list(self.diffs.get(path, []))
 
+    async def discard_changes(self, path: str) -> None:
+        """Forget the worktree's dirty files and scripted diff."""
+        self._record("discard_changes", path)
+        self.dirty.pop(path, None)
+        self.diffs.pop(path, None)
+
     async def commit_all(
         self, path: str, message: str, *, trailer_work_item: WorkItemId, idempotency_key: str
     ) -> CommitInfo | None:

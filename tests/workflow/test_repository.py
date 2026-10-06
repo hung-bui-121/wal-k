@@ -3,11 +3,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.fakes.fake_clock import FakeClock
 from walk.common.errors import ConfigError
 from walk.common.roles import AgentRole
-from walk.persistence import Database, UnitOfWork
+from walk.hooks import DefaultHookManager, HookExecutionRepository
+from walk.persistence import Database, IdSequenceStore, UnitOfWork
+from walk.telemetry import DefaultLedgerManager, LedgerRepository
 from walk.workflow import (
+    TABLES_DIR,
     Bug,
+    DefaultWorkflowManager,
     Feature,
     Project,
     ProjectRepository,
@@ -16,6 +21,7 @@ from walk.workflow import (
     TransitionSource,
     WorkflowRepository,
     WorkItem,
+    WorkItemNotFound,
     WorkItemState,
     WorkItemTransition,
 )
@@ -181,3 +187,48 @@ async def test_transitions_returns_newest_first(
     assert [t.event for t in default] == ["e2", "e1", "e0"]
     assert [t.event for t in everything] == ["e2", "e1", "e0"]
     assert await items.transitions("FEAT-0002") == []
+
+
+async def test_set_assigned_run_round_trip(
+    db: Database, items: WorkflowRepository, project: Project, fake_clock: FakeClock
+) -> None:
+    del project
+    story = _story(1, "FEAT-0001").model_copy(update={"state": WorkItemState.READY})
+    await _insert(db, items, _feature(1), story)
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), IdSequenceStore(db), fake_clock)
+    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, fake_clock)
+    workflow = DefaultWorkflowManager(
+        db,
+        items,
+        ProjectRepository(db),
+        IdSequenceStore(db),
+        ledger,
+        hooks,
+        fake_clock,
+        TABLES_DIR,
+    )
+    run_id = "RUN-01J0000000000000000000000A"
+
+    assigned = await items.set_assigned_run("STORY-0001", run_id)
+    stored = await items.get("STORY-0001")
+    ready_while_assigned = [item.id for item in await workflow.ready_items(None)]
+    async with UnitOfWork(db) as uow:
+        cleared = await items.set_assigned_run("STORY-0001", None, conn=uow.conn)
+    ready_after = [item.id for item in await workflow.ready_items(None)]
+    column = db.connect().execute("SELECT assigned_run_id FROM work_items WHERE id = 'STORY-0001'")
+
+    assert assigned.assigned_run_id == run_id
+    assert stored is not None
+    assert stored.assigned_run_id == run_id
+    assert stored.state is WorkItemState.READY
+    assert "STORY-0001" not in ready_while_assigned
+    assert cleared.assigned_run_id is None
+    assert column.fetchone()[0] is None
+    assert "STORY-0001" in ready_after
+
+
+async def test_set_assigned_run_unknown_item_raises(
+    db: Database, items: WorkflowRepository
+) -> None:
+    with pytest.raises(WorkItemNotFound):
+        await items.set_assigned_run("STORY-0099", None)

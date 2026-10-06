@@ -1,4 +1,7 @@
-"""Agent run execution: runs, worktree sandboxes, checkpoints and the boundary audit (§41, §89)."""
+"""Agent run execution: runs, worktree sandboxes, checkpoints, the boundary audit and the executor.
+
+§41, §54, §81, §89, §126.
+"""
 
 from walk.runtime.boundary import (
     DEFAULT_ALLOWED_PATHS,
@@ -7,6 +10,14 @@ from walk.runtime.boundary import (
 )
 from walk.runtime.checkpoints import DefaultCheckpointManager
 from walk.runtime.errors import CheckpointNotFound, RunNotFound
+from walk.runtime.executor import (
+    MAX_REPAIR_TURNS,
+    REPAIR_INSTRUCTION,
+    RUN_TIMEOUT_S,
+    DefaultAgentExecutor,
+)
+from walk.runtime.inputs import AgentInputBuilder, build_run_session, expected_output_for
+from walk.runtime.metering import UsageMeter
 from walk.runtime.models import (
     AgentOutputStatus,
     AgentRun,
@@ -15,6 +26,7 @@ from walk.runtime.models import (
     Checkpoint,
     CheckpointKind,
 )
+from walk.runtime.output_applier import IMPLEMENT_OUTPUT_EVENTS, DefaultOutputApplier
 from walk.runtime.protocols import (
     AgentExecutor,
     BoundaryAuditor,
@@ -37,8 +49,13 @@ __all__ = [
     "APPROVAL_TIMEOUT_S",
     "DEFAULT_ALLOWED_PATHS",
     "DEFAULT_FORBIDDEN_PATHS",
+    "IMPLEMENT_OUTPUT_EVENTS",
+    "MAX_REPAIR_TURNS",
+    "REPAIR_INSTRUCTION",
+    "RUN_TIMEOUT_S",
     "WORKTREES_DIR",
     "AgentExecutor",
+    "AgentInputBuilder",
     "AgentOutputStatus",
     "AgentRun",
     "AgentRunRepository",
@@ -51,8 +68,10 @@ __all__ = [
     "CheckpointManager",
     "CheckpointNotFound",
     "CheckpointRepository",
+    "DefaultAgentExecutor",
     "DefaultBoundaryAuditor",
     "DefaultCheckpointManager",
+    "DefaultOutputApplier",
     "DefaultSandboxManager",
     "DefaultToolInvoker",
     "HandoverRepository",
@@ -62,5 +81,8 @@ __all__ = [
     "RunNotFound",
     "SandboxManager",
     "ToolInvoker",
+    "UsageMeter",
     "branch_name_for",
+    "build_run_session",
+    "expected_output_for",
 ]

@@ -89,20 +89,29 @@ class GitCliProvider:
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str:
         """Create branch ``name`` from ``base`` unless it exists; return ``name``.
 
-        Runs once per ``idempotency_key``; a replay returns the stored branch name.
+        Runs once per ``idempotency_key``; a replay returns the stored branch name. The key is
+        stored after git ran, in a unit of work of its own: no transaction is held across the
+        git subprocess, because concurrent run tasks share the one database connection.
+
+        Raises:
+            ConfigError: The key is recorded without a result to replay.
+            GitError: A git command failed.
         """
+        existing = await self._idempotency.get(idempotency_key)
+        if existing is not None:
+            if existing.result_ref is None:
+                msg = "idempotency key has no result to replay"
+                raise ConfigError(msg, detail={"key": idempotency_key})
+            return existing.result_ref
         root = str(self._repo_root)
-
-        async def create() -> str:
-            probe = await self._git(
-                root, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}", check=False
-            )
-            if probe.exit_code != 0:
-                await self._git(root, "branch", name, base)
-            return name
-
+        probe = await self._git(
+            root, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}", check=False
+        )
+        if probe.exit_code != 0:
+            await self._git(root, "branch", name, base)
         async with UnitOfWork(self._idempotency.db) as uow:
-            return await self._idempotency.run(idempotency_key, "git.branch", create, uow)
+            await self._idempotency.put(idempotency_key, "git.branch", name, uow)
+        return name
 
     async def add_worktree(self, path: str, branch: str) -> str:
         """``git worktree add <path> <branch>``; return the absolute worktree path.

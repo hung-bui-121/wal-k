@@ -3,8 +3,11 @@
 Provider-native calls are authorised through the run session's authorizer (`authorizer_for`,
 e.g. Claude's ``can_use_tool``) and reported back with `record_result`; KERNEL tools are
 authorised, metered and dispatched by `invoke`. ``REQUIRE_APPROVAL`` pauses the run until the
-approval is decided or times out. ``APPROVAL_REQUESTED``/``APPROVAL_DECIDED`` belong to the
-permission manager; this module writes only ``TOOL_INVOKED``/``TOOL_DENIED`` (WBS §3.5).
+approval is decided or times out, except for an advisory authorizer (``wait_for_approval=False``,
+a provider that reports tool calls after they ran, e.g. Codex): it records the decision and
+returns it unchanged, and the executor rejects the run's effects (ADR-0006 D-5).
+``APPROVAL_REQUESTED``/``APPROVAL_DECIDED`` belong to the permission manager; this module writes
+only ``TOOL_INVOKED``/``TOOL_DENIED`` (WBS §3.5).
 """
 
 import asyncio
@@ -183,12 +186,15 @@ class DefaultToolInvoker:
         self._handlers[tool] = handler
 
     def authorizer_for(
-        self, run: AgentRun
+        self, run: AgentRun, *, wait_for_approval: bool = True
     ) -> Callable[[ToolCallRequest], Awaitable[PermissionDecision]]:
         """The `RunSession.permission_authorizer` of ``run``.
 
         The bound run is authoritative: requests are evaluated with ``run.id`` and
         ``run.role``, and with ``run.worktree_path`` when the adapter left the worktree empty.
+        ``wait_for_approval=False`` gives the post-hoc (advisory) authorizer of a provider whose
+        tool calls already ran (E01-S27 Notes): REQUIRE_APPROVAL is recorded like a denial and
+        returned unchanged; the run is never paused.
         """
 
         async def authorize(request: ToolCallRequest) -> PermissionDecision:
@@ -196,7 +202,9 @@ class DefaultToolInvoker:
             bound: JsonDict = {**given, "run_id": run.id, "role": run.role}
             if not given.get("worktree_path"):
                 bound["worktree_path"] = run.worktree_path or ""
-            return await self.authorize(ToolCallRequest.model_validate(bound))
+            return await self._authorize(
+                ToolCallRequest.model_validate(bound), wait_for_approval=wait_for_approval
+            )
 
         return authorize
 
@@ -211,10 +219,15 @@ class DefaultToolInvoker:
         Raises:
             RunNotFound: ``request.run_id`` is not a known run.
         """
+        return await self._authorize(request, wait_for_approval=True)
+
+    async def _authorize(
+        self, request: ToolCallRequest, *, wait_for_approval: bool
+    ) -> PermissionDecision:
         run = await self._run(request)
         evaluated = self._identify(request)
         decision = self._permissions.decide(evaluated)
-        if decision.effect is PermissionEffect.REQUIRE_APPROVAL:
+        if decision.effect is PermissionEffect.REQUIRE_APPROVAL and wait_for_approval:
             decision = await self._await_approval(run, evaluated, decision)
         if decision.effect is PermissionEffect.ALLOW:
             await self._fire(

@@ -7,10 +7,12 @@ from typing import Protocol
 
 from walk.agents.models import AgentInstance, AgentOutput, Handover
 from walk.budgets.models import BudgetDimension
-from walk.common.ids import RunId, WorkItemId
+from walk.common.ids import RunId, Sha, WorkItemId
 from walk.common.models import JsonDict
 from walk.context.models import ContextBundleRef
 from walk.debate.models import Debate
+from walk.effort.models import EffortResolution
+from walk.model_router.models import RoutingDecision
 from walk.permissions.models import PermissionDecision, ToolCallRequest
 from walk.runtime.models import AgentRun, AppliedEffects, Checkpoint, CheckpointKind
 from walk.workflow.models import WorkItem, WorkItemState
@@ -73,10 +75,14 @@ class AgentExecutor(Protocol):
         handover: Handover | None = None,
         parent_run_id: RunId | None = None,
         debate: Debate | None = None,
+        routing: RoutingDecision | None = None,
+        effort_resolution: EffortResolution | None = None,
     ) -> AgentRun:
         """ARCHITECTURE.md §3.2 steps 3-7.
 
-        Returns immediately with RUNNING run; completion wakes the orchestrator.
+        Returns immediately with RUNNING run; completion wakes the orchestrator. ``routing``
+        and ``effort_resolution`` are the scheduler's decisions, written by the executor as
+        ``MODEL_SELECTED``/``EFFORT_SET`` (E01-S27).
         """
         ...
 
@@ -121,8 +127,8 @@ class ToolInvoker(Protocol):
 class OutputApplier(Protocol):
     """Applies AgentOutput effects in a fixed order (ARCHITECTURE.md §3.2 step 6)."""
 
-    async def apply(self, run: AgentRun, output: AgentOutput) -> AppliedEffects:
-        """Apply ``output`` for ``run``."""
+    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> AppliedEffects:
+        """Apply ``output`` for ``run``; ``start_head`` is the worktree HEAD at run start."""
         ...
 
 

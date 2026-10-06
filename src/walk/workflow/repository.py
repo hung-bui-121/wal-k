@@ -8,9 +8,10 @@ from typing import ClassVar
 from pydantic import TypeAdapter
 
 from walk.common.errors import ConfigError
-from walk.common.ids import PhaseId, ProjectKey, WorkItemId
+from walk.common.ids import PhaseId, ProjectKey, RunId, WorkItemId
 from walk.common.models import utcnow
 from walk.persistence import Repository, UnitOfWork
+from walk.workflow.errors import WorkItemNotFound
 from walk.workflow.models import (
     Phase,
     Project,
@@ -65,6 +66,33 @@ class WorkflowRepository(Repository[WorkItem]):
             "created_at": _utc_text(obj.created_at),
             "updated_at": _utc_text(obj.updated_at),
         }
+
+    async def set_assigned_run(
+        self,
+        work_item_id: WorkItemId,
+        run_id: RunId | None,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> WorkItem:
+        """Set (or clear, with ``None``) the item's ``assigned_run_id``; nothing else changes.
+
+        The item is read on the same connection, so the caller's open transaction sees its own
+        writes; the row is written on ``conn`` or in a unit of work of its own.
+
+        Raises:
+            WorkItemNotFound: No item has ``work_item_id``.
+        """
+        item = await self.get(work_item_id)
+        if item is None:
+            msg = f"work item not found: {work_item_id}"
+            raise WorkItemNotFound(msg, detail={"work_item_id": work_item_id})
+        updated = item.model_copy(update={"assigned_run_id": run_id})
+        if conn is not None:
+            _update_assigned_run(conn, updated)
+        else:
+            async with UnitOfWork(self._db) as uow:
+                _update_assigned_run(uow.conn, updated)
+        return updated
 
     async def by_external_ref(self, external_ref: str) -> WorkItem | None:
         """Return the item linked to the work-provider reference, or ``None``."""
@@ -144,6 +172,13 @@ class WorkflowRepository(Repository[WorkItem]):
 
     def _load(self, raw: str) -> WorkItem:
         return _WORK_ITEM.validate_json(raw)
+
+
+def _update_assigned_run(conn: sqlite3.Connection, item: WorkItem) -> None:
+    conn.execute(
+        "UPDATE work_items SET assigned_run_id = ?, json = ? WHERE id = ?",
+        (item.assigned_run_id, item.model_dump_json(), item.id),
+    )
 
 
 class ProjectRepository(Repository[Project]):

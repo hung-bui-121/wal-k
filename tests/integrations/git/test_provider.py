@@ -16,6 +16,7 @@ from walk.integrations import (
     GitError,
     GitProvider,
     PullRequestRef,
+    SubprocessResult,
 )
 from walk.persistence import Database, IdempotencyStore, IdSequenceStore, UnitOfWork
 from walk.telemetry import DefaultLedgerManager, LedgerEventKind, LedgerRepository
@@ -100,6 +101,56 @@ async def test_ensure_branch_existing_branch_is_noop(
 
     assert name == "feat/old"
     assert _git(tmp_game_repo, "rev-parse", "feat/old") == old_sha
+
+
+class _TransactionProbeRunner(AsyncioSubprocessRunner):
+    """Records whether the shared connection was inside a transaction at each git call."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+        self.in_transaction: list[bool] = []
+
+    async def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_s: int = 120,
+        input_text: str | None = None,
+    ) -> SubprocessResult:
+        self.in_transaction.append(self._db.connect().in_transaction)
+        return await super().run(argv, cwd=cwd, env=env, timeout_s=timeout_s, input_text=input_text)
+
+
+async def test_ensure_branch_holds_no_transaction_during_git(
+    db: Database,
+    tmp_game_repo: Path,
+    ledger: DefaultLedgerManager,
+    idempotency: IdempotencyStore,
+    fake_clock: FakeClock,
+) -> None:
+    runner = _TransactionProbeRunner(db)
+    git = GitCliProvider(tmp_game_repo, runner, ledger, idempotency, fake_clock, project_key="DEMO")
+
+    name = await git.ensure_branch("feat/x", "main", idempotency_key="git.branch:STORY-0003")
+
+    assert name == "feat/x"
+    assert runner.in_transaction
+    assert not any(runner.in_transaction)
+    record = await idempotency.get("git.branch:STORY-0003")
+    assert record is not None
+    assert record.result_ref == "feat/x"
+
+
+async def test_ensure_branch_key_without_result_raises(
+    db: Database, git: GitCliProvider, idempotency: IdempotencyStore
+) -> None:
+    async with UnitOfWork(db) as uow:
+        await idempotency.put("git.branch:STORY-0004", "git.branch", None, uow)
+
+    with pytest.raises(ConfigError, match="no result to replay"):
+        await git.ensure_branch("feat/y", "main", idempotency_key="git.branch:STORY-0004")
 
 
 async def test_worktree_add_and_remove(git: GitCliProvider, tmp_game_repo: Path) -> None:
