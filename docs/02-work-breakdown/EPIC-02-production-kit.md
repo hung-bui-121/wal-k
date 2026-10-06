@@ -2251,7 +2251,7 @@ File outside the Files table (named in the commit body): `tests/model_router/ada
 
 ### E02-B02 — Agent environment allowlist keeps the Windows variables provider CLIs need
 
-**Status:** DONE (pending)
+**Status:** DONE (e5e5a7d)
 **Type:** bugfix
 **Requirements:** §91, §139
 **Depends on:** E02-S01
@@ -2335,7 +2335,7 @@ For the owner / architect: the existing glob `UNITY_*` (E02-S01, kept unchanged 
 
 ### E02-B03 — ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §91, §139
 **Depends on:** E02-S01, E02-B02
@@ -2386,4 +2386,26 @@ No code interface. Target wording of the §6 "Secret isolation" mechanism cell:
 - Commit subject: `bugfix: describe claude cli subprocess in security model (E02-B03)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12.11):
+```
+364 files already formatted
+All checks passed!
+Success: no issues found in 363 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1149 passed, 5 deselected in 418.67s (0:06:58)
+```
+`tests/docs/test_architecture_security.py`: 3 passed (AC 1–3). No source module changed.
+
+The diff of the §6 "Secret isolation" row is in the commit body. Before the change, the row said that the Claude SDK "runs inside the kernel process" and listed `PATH`, `HOME`, `TMP` and "Unity vars". After the change, it describes:
+- the subprocess model for both providers (`CodexProcessLauncher`; the Claude Code CLI via `scrubbed_transport`);
+- `scrubbed_env(os.environ)` with every entry of `AGENT_ENV_ALLOWLIST` and `WINDOWS_AGENT_ENV_ALLOWLIST`, inherited by the CLI's shell tools;
+- authentication through `codex login` / `claude login`, with `ANTHROPIC_API_KEY` used for presence reporting only;
+- the residual risk: login state is readable by a same-user shell tool, accepted for the single-user daemon.
+
+ADR-0009 D-8 now says `ANTHROPIC_API_KEY` is used for "presence reporting only" instead of "optional; Claude SDK may also use its own login". It also has a dated consequence: *(2026-10-07, E02-B03)* `ANTHROPIC_API_KEY` is never passed to an agent subprocess. ADR-0004 D-7 gains one sentence naming `scrubbed_transport` as the launcher of the Claude Code CLI subprocess. The rest of D-7 is unchanged.
+
+Level-0 decisions:
+- **Row lookup.** The docs tests find a table row by its first cell (`| Secret isolation |`, `| D-8 |`) and require exactly one such row, so a duplicated or renamed row fails loudly.
+- **Allowlist check.** It reads `AGENT_ENV_ALLOWLIST` and `WINDOWS_AGENT_ENV_ALLOWLIST` from `walk.runtime.sandbox` and requires each entry as inline code (`` `UNITY_*` ``), so a future allowlist change fails the test until §6 is updated.
+- **ADR-0009 sentence.** AC 3 matches the exact sentence `` `ANTHROPIC_API_KEY` is never passed to an agent subprocess `` plus `claude login` in the D-8 row.
