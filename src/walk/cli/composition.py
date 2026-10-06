@@ -120,6 +120,7 @@ _CLAUDE_SDK: Final = "claude_agent_sdk"
 _GIT: Final = "git"
 _JITTER: Final = 0.1  # ARCHITECTURE §5.1 retry backoff jitter: up to +10 %
 _NO_PROJECT: Final = "no project in .ai/kernel.db; run 'walk bootstrap'"
+_PROBE_TIMEOUT_S: Final = 30  # `claude --version` health probe
 
 
 class KernelSettings(WalkModel):
@@ -319,7 +320,7 @@ def build_kernel(
         head_resolver=head,
         handovers=checkpoints.latest_open_handover_doc,
     )
-    router = _model_router(ai_root, o, clock, sleep)
+    router = _model_router(ai_root, o, clock, sleep, runner)
     inputs = AgentInputBuilder(
         agents, context, tools, budgets, PhaseRepository(db), clock, project_key=key
     )
@@ -547,6 +548,7 @@ def _model_router(
     overrides: KernelOverrides,
     clock: Clock,
     sleep: Callable[[float], Awaitable[None]],
+    runner: SubprocessRunner,
 ) -> DefaultModelRouter:
     config = load_models_config(_DEFAULT_MODELS, ai_root / "agents" / "models.yaml")
     if overrides.adapters is not None:
@@ -559,7 +561,7 @@ def _model_router(
         }
         config = config.model_copy(update={"models": {**config.models, **extra}})
     else:
-        adapters = _real_adapters(config, ai_root, clock, sleep)
+        adapters = _real_adapters(config, ai_root, clock, sleep, runner)
     return DefaultModelRouter(_disable_unserved(config, adapters), adapters, clock)
 
 
@@ -568,8 +570,13 @@ def _real_adapters(
     ai_root: Path,
     clock: Clock,
     sleep: Callable[[float], Awaitable[None]],
+    runner: SubprocessRunner,
 ) -> dict[str, ModelAdapter]:
     project_constitution = _project_constitution(ai_root)
+
+    async def probe(argv: list[str]) -> tuple[int, str, str]:
+        result = await runner.run(argv, timeout_s=_PROBE_TIMEOUT_S)
+        return result.exit_code, result.stdout, result.stderr
 
     def system_prompt(agent_input: AgentInput) -> str:
         return render_constitution(agent_input.constitution, project_constitution)
@@ -592,7 +599,7 @@ def _real_adapters(
     }
     if importlib.util.find_spec(_CLAUDE_SDK) is not None:
         adapters["claude"] = ClaudeAdapter(
-            SdkClaudeClient(),
+            SdkClaudeClient(probe=probe),
             served("claude"),
             clock,
             system_prompt_builder=system_prompt,

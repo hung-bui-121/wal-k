@@ -2,6 +2,7 @@ import ast
 import asyncio
 import importlib.util
 import shutil
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -169,6 +170,10 @@ async def test_build_kernel_wires_claude_when_sdk_present(
         assert "## Project Constitution" in system
         assert "No crunch." in system
         assert user.startswith("Do the work\n\n## Agent Role")
+        probe = claude._client._probe  # type: ignore[attr-defined]  # noqa: SLF001 - the wired version probe
+        exit_code, stdout, _ = await probe([sys.executable, "--version"])
+        assert exit_code == 0
+        assert "Python" in stdout
     finally:
         await handle.aclose()
 

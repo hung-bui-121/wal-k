@@ -27,9 +27,9 @@ from walk.memory.models import (
 )
 from walk.memory.protocols import MemoryManager
 from walk.telemetry.protocols import LedgerManager
-from walk.workflow import WorkflowRepository
 from walk.workflow.models import Bug, WorkItem, WorkItemKind, WorkItemTransition
 from walk.workflow.protocols import WorkflowManager
+from walk.workflow.repository import WorkflowRepository
 
 _LOG = logging.getLogger(__name__)
 

@@ -9,8 +9,6 @@ and fires ``ON_AGENT_CHECKPOINT`` after the commit. Every external step is idemp
 import re
 from typing import Final, get_args
 
-from pydantic import TypeAdapter
-
 from walk.agents.handover import to_document
 from walk.agents.models import AgentOutput, Handover
 from walk.budgets.models import BudgetDimension
@@ -33,6 +31,7 @@ from walk.runtime.repository import AgentRunRepository, CheckpointRepository, Ha
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
 from walk.workflow.models import WorkItem, WorkItemState
+from walk.workflow.repository import WorkflowRepository
 
 _DEFAULT_NEXT_ACTION: Final = "Continue the task from the current worktree state"
 _HANDOVER_REASONS: Final = frozenset(get_args(Handover.model_fields["reason"].annotation))
@@ -40,7 +39,6 @@ _HANDOVER_REASONS: Final = frozenset(get_args(Handover.model_fields["reason"].an
 # work item's state; the executor passes it explicitly for every other kind.
 _STATE_FROM_ITEM: Final = frozenset({CheckpointKind.START, CheckpointKind.PAUSE})
 _BULLET: Final = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
-_WORK_ITEM: Final[TypeAdapter[WorkItem]] = TypeAdapter(WorkItem)
 _EMPTY_MANIFEST: Final = ContextBundleRef(item_ids=[], total_tokens_estimate=0)
 
 
@@ -94,6 +92,7 @@ class DefaultCheckpointManager:
         self._clock = clock
         self._project_key = project_key
         self._default_branch = default_branch
+        self._items = WorkflowRepository(db)
 
     async def checkpoint(
         self,
@@ -268,16 +267,11 @@ class DefaultCheckpointManager:
         return (await self._work_item(run.work_item_id)).state
 
     async def _work_item(self, work_item_id: WorkItemId) -> WorkItem:
-        # Read-only lookup of the run's item; runtime may not import workflow's repository.
-        row = (
-            self._db.connect()
-            .execute("SELECT json FROM work_items WHERE id = ?", (work_item_id,))
-            .fetchone()
-        )
-        if row is None:
+        item = await self._items.get(work_item_id)
+        if item is None:
             msg = f"unknown work item {work_item_id}"
             raise ConfigError(msg, detail={"work_item_id": work_item_id})
-        return _WORK_ITEM.validate_json(row[0])
+        return item
 
     def _created_event(self, run: AgentRun, checkpoint: Checkpoint) -> LedgerEvent:
         return LedgerEvent(

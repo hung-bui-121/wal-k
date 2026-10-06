@@ -5039,7 +5039,7 @@ Level-0 decisions:
 
 ### E01-S30 — Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status`
 
-**Status:** DONE (pending)
+**Status:** DONE (5ea17d3)
 **Type:** feat
 **Requirements:** §6.2, §56, §87, §89, §93 (transport only), §122, §125, §128, §137 (Inv. 1, 9, 12), §139 (local daemon)
 **Depends on:** E01-S29
@@ -5280,7 +5280,7 @@ Level-0 decisions:
 
 ### E01-S31 — Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §21, §22, §41, §54, §81, §86, §87, §89, §122, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12), §138 (Model Lock-In)
 **Depends on:** E01-S30, E01-S21, E01-S22
@@ -5382,7 +5382,208 @@ Each gate assertion is one test; every test builds its own scenario (no shared s
 - Commit subject: `feat: add epic 01 kernel gate test and import contracts (E01-S31)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`). The gate now runs five commands: format check, ruff, mypy, `lint-imports`, pytest.
+```
+333 files already formatted
+All checks passed!
+Success: no issues found in 331 source files
+Analyzed 164 files, 914 dependencies.
+common: ARCHITECTURE 2.2 row KEPT
+... (one row contract per package present under src/walk/: 18 in total)
+runtime: ARCHITECTURE 2.2 row KEPT
+nothing imports cli (ARCHITECTURE 2.1) KEPT
+only the composition root wires service.py (ARCHITECTURE 1.3) KEPT (12 ignored imports)
+Contracts: 20 kept, 0 broken.
+tests\e2e\test_e01_gate.py ........
+Required test coverage of 85% reached. Total coverage: 99.97%
+1003 passed, 2 deselected in 339.12s
+```
+The 3 uncovered lines are in `persistence/migrations.py` and were already uncovered before this story. Every module touched here has 100% coverage.
+
+**E01 gate (WBS §4 E01): PASSED.** The 8 tests in `tests/e2e/test_e01_gate.py` are green. Each test builds its own scenario.
+
+Demo: the repository left by `pytest --basetemp=C:/Users/CPU12432-local/AppData/Local/Temp/wd31 tests/e2e/test_e01_gate.py::test_provider_outage_falls_back_with_handover`, inspected with the real CLI (`<repo>` = `…/wd31/test_provider_outage_falls_bac0/game`). The basetemp is short because Windows MAX_PATH breaks `git worktree add` under pytest's default temp path.
+```
+$ walk status --json --repo <repo>
+{
+  "project_key": "DEMO",
+  "paused": false,
+  "current_phase": null,
+  "phase_progress": {
+    "IMPLEMENTING": 1,
+    "READY_FOR_REVIEW": 2
+  },
+  "gdd_coverage": {},
+  "active_runs": [],
+  "blocked_items": [],
+  "pending_approvals": [],
+  "open_debates": [],
+  "model_usage": {
+    "fake-codex/sim": {"input_tokens": 15000, "output_tokens": 3000, "cache_read_tokens": 0, "cost_usd": 0.03, "turns": 0, "tool_calls": 0, "duration_s": 0.0},
+    "fake-claude/sim": {"input_tokens": 6000, "output_tokens": 1200, "cache_read_tokens": 0, "cost_usd": 0.012, "turns": 0, "tool_calls": 0, "duration_s": 0.0}
+  },
+  "qc_status": {},
+  "build_status": null,
+  "budgets": [],
+  "open_improvement_candidates": 0
+}
+[exit 0]   (model_usage objects joined onto one line here; the CLI prints them indented)
+
+$ walk ledger query --item STORY-0002 --repo <repo>
+seq  at                         kind                  actor         item        run                             outcome
+---  -------------------------  --------------------  ------------  ----------  ------------------------------  -------
+3    2026-01-01T00:00:00+00:00  WORK_ITEM_CREATED     ORCHESTRATOR  STORY-0002                                  OK
+4    2026-01-01T00:00:00+00:00  WORK_ITEM_TRANSITION  ORCHESTRATOR  STORY-0002                                  OK
+12   2026-01-01T00:00:00+00:00  WORK_ITEM_TRANSITION  KERNEL        STORY-0002                                  OK
+13   2026-01-01T00:00:00+00:00  AGENT_ASSIGNED        SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E
+37   2026-01-01T00:00:00+00:00  AGENT_RUN_STARTED     SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+38   2026-01-01T00:00:00+00:00  MODEL_SELECTED        SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+39   2026-01-01T00:00:00+00:00  EFFORT_SET            SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+40   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+41   2026-01-01T00:00:00+00:00  TOOL_INVOKED          SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+... (TOOL_INVOKED pre/post, BUDGET_EVENT, COST_RECORDED for tool calls 1-3)
+83   2026-01-01T00:00:00+00:00  COMMIT                KERNEL        STORY-0002                                  OK
+85   2026-01-01T00:00:00+00:00  HANDOVER_CREATED      SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+86   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+87   2026-01-01T00:00:00+00:00  MODEL_FALLBACK        SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+88   2026-01-01T00:00:00+00:00  BUDGET_EVENT          KERNEL        STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  OK
+89   2026-01-01T00:00:00+00:00  AGENT_RUN_ENDED       SENIOR_DEV    STORY-0002  RUN-01M49430DZ7CWG8G5C0RZK8G4E  FAILED
+90   2026-01-01T00:00:00+00:00  AGENT_ASSIGNED        SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9
+91   2026-01-01T00:00:00+00:00  AGENT_RUN_STARTED     SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+92   2026-01-01T00:00:00+00:00  MODEL_SELECTED        SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+93   2026-01-01T00:00:00+00:00  EFFORT_SET            SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+108  2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+... (tool calls 1-6 of the continuation, PERIODIC checkpoint after 5)
+147  2026-01-01T00:00:00+00:00  COMMIT                KERNEL        STORY-0002                                  OK
+148  2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED    SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+149  2026-01-01T00:00:00+00:00  EVIDENCE_RECORDED     SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9
+150  2026-01-01T00:00:00+00:00  WORK_ITEM_TRANSITION  SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+151  2026-01-01T00:00:00+00:00  BUDGET_EVENT          KERNEL        STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+152  2026-01-01T00:00:00+00:00  AGENT_RUN_ENDED       SENIOR_DEV    STORY-0002  RUN-01M494327EV58YBY0X2RNJHQK9  OK
+[exit 0]
+
+$ walk ledger query --kind MODEL_FALLBACK --json --repo <repo>
+[
+  {
+    "seq": 87,
+    "id": "LED-01M494327D98ZE7Z9NCY1KK3Y8",
+    "kind": "MODEL_FALLBACK",
+    "at": "2026-01-01T00:00:00Z",
+    "project_key": "DEMO",
+    "actor_role": "SENIOR_DEV",
+    "work_item_id": "STORY-0002",
+    "run_id": "RUN-01M49430DZ7CWG8G5C0RZK8G4E",
+    "phase_id": null,
+    "model_id": "fake-codex/sim",
+    "effort": "MEDIUM",
+    "tool": null,
+    "duration_ms": null,
+    "cost_usd": null,
+    "outcome": "OK",
+    "payload": {
+      "trigger": "PROVIDER_OUTAGE",
+      "from": "fake-codex/sim",
+      "to": "fake-claude/sim",
+      "handover_id": "HO-0001",
+      "checkpoint_id": "CKP-01M494327BFHV7MM453CKMFNP0",
+      "rejected": [["fake-codex/sim", "excluded"]]
+    },
+    "behavior_versions": {"prompt:IMPLEMENT": "1.0"}
+  }
+]
+[exit 0]   (short arrays and objects joined onto one line here)
+
+$ walk work show STORY-0001 --repo <repo>
+STORY-0001  STORY  READY_FOR_REVIEW
+title: Double jump
+parent: FEAT-0001
+phase: -
+owner: SENIOR_DEV
+priority: P2  risk: MEDIUM
+contract:
+  goal: The player can double jump
+  acceptance criteria:
+  - Double jump works in the movement test scene
+transitions:
+  1  2026-01-01T00:00:00+00:00  IDEA -> READY  ready  ORCHESTRATOR
+  3  2026-01-01T00:00:00+00:00  READY -> IMPLEMENTING  start_implementation  KERNEL
+  5  2026-01-01T00:00:00+00:00  IMPLEMENTING -> READY_FOR_REVIEW  submit_for_review  SENIOR_DEV
+runs:
+  RUN-01M4942ZVSCAZ4G4QEPSBVNEWR  COMPLETED  SENIOR_DEV  IMPLEMENT  fake-codex/sim  tool_calls=12
+cost: none
+[exit 0]
+
+$ git -C <repo> log --oneline --all | grep wip
+9f60640 wip(STORY-0002): checkpoint 3
+a84e935 wip(STORY-0001): checkpoint 4
+feaca80 wip(STORY-0002): checkpoint 2
+3ddc97b wip(STORY-0001): checkpoint 3
+bfec683 wip(STORY-0002): checkpoint 2
+c82d23b wip(STORY-0001): checkpoint 2
+
+$ head -20 .ai/handovers/HO-0001.md
+---
+created_at: '2026-01-01T00:00:00Z'
+extra:
+  branch: feat/story-0002-wall-slide
+  created_at: '2026-01-01T00:00:00Z'
+  from_model_id: fake-codex/sim
+  from_run_id: RUN-01M49430DZ7CWG8G5C0RZK8G4E
+  reason: FALLBACK
+  role: SENIOR_DEV
+  to_run_id: null
+  work_item_id: STORY-0002
+  worktree_head: 3b1c93740ac2ac248d49cc357a939ce3d0c65c42
+freshness:
+  branch: feat/story-0002-wall-slide
+  build: null
+  commit: bfec6836b1f20f67607d017ba2703fd90e6e1457
+  pr: null
+  timestamp: '2026-01-01T00:00:00Z'
+id: HO-0001
+related:
+```
+
+Files changed outside the Files table, so that the code satisfies the contracts (the Notes ask for violating imports to be fixed in code, not whitelisted):
+- **`docs/01-architecture/ARCHITECTURE.md` §2.2.** The legend now states what the contracts enforce:
+  - the infrastructure rule for `common` and `persistence`;
+  - `orchestrator` and `cli` may import any module of the packages they may import;
+  - only `cli/composition.py` wires `service.py`;
+  - import-linter enforces the table and nothing imports `cli`.
+
+  Cells that name the real non-`models`/`protocols`/`errors` modules: `runtime → agents (+ handover)`, `runtime → permissions (+ repository)`, `runtime → workflow (+ repository: work items are read through it, never by raw SQL)`, `runtime → model_router (+ costing, output)`, `budgets → workflow (+ repository)`, `context → workflow (+ repository)`, `context → memory (+ frontmatter)` and `agents → memory (+ frontmatter, paths)`. The topological order was already the ADR-0018/0019 order.
+- **`runtime/checkpoints.py`.** Work items are now read through `WorkflowRepository.get` instead of raw SQL on `work_items`. A missing item still raises `ConfigError`.
+- **`context/service.py`.** `WorkflowRepository` is imported from `walk.workflow.repository`, not through the package `__init__`, which also re-exports `DefaultWorkflowManager`.
+- **`model_router/adapters/claude/client.py` and `cli/composition.py`.** `SdkClaudeClient` no longer calls `asyncio.create_subprocess_exec` (ARCHITECTURE §2.3 confines subprocesses to `integrations/subprocess.py` and the codex launcher).
+  - It takes an optional `probe: CommandProbe` (`async (argv) -> (exit_code, stdout, stderr)`). The composition root passes one built on the kernel's `SubprocessRunner` with a 30 s timeout.
+  - Without a probe, `available()` only locates the CLI (`"<cli> (version not probed)"`).
+  - This is an additive keyword-only constructor parameter. `ClaudeClient` (INTERFACES §2.2) is unchanged.
+  - Tests changed: `tests/model_router/adapters/claude/test_adapter.py::test_sdk_client_available_checks_cli` and `tests/cli/test_composition.py::test_build_kernel_wires_claude_when_sdk_present` (which runs the wired probe).
+- **`cli/cmd_work.py`.** `walk work show` now prints the item's runs (`runs:` lines `RUN-…  state  role  purpose  model  tool_calls=N`) and adds `runs` to its JSON. Until now it printed `runs: none` although runs exist since E01-S25. INTERFACES §6 already promises "item + contract + transitions + runs + cost", and Behavior 4 needs the run. The change is additive: an item without runs still prints `runs: none`, and cost stays `none`.
+
+Level-0 decisions:
+- **Contracts encode package cells only.** import-linter forbids packages. A `✔ (models/protocols/errors only)` cell is therefore documentation, not a check. The `service.py` contract catches direct `walk.X.service` imports from other packages, but not a `Default*` class reached through a package `__init__` re-export. The composition root itself wires services that way. Reaching that would need a custom contract or dropping the `__init__` re-exports, which is an architect decision for E01-R01.
+- **The `service.py` contract** lists every package, including `cli`, as a source and ignores each package's own `walk.X -> walk.X.service` re-export. `walk.cli.composition` is not exempted: it reaches services through package re-exports, and import-linter rejects an ignore rule that matches nothing. The contract is stricter than the Interface contract wording, never looser.
+- **Ruff allowances are per rule, not per banned module.** `TID251` per-file ignores cannot allow only one banned entry per file. So `src/walk/cli/**` (allowed `typer`) and `src/walk/model_router/adapters/claude/**` (allowed `claude_agent_sdk`) could also import `subprocess` without a lint error. Neither does today, and the contract test pins the exact allowance set. `src/walk/integrations/credentials.py` is listed although it only arrives in E02-S01.
+- **Gate fixture.**
+  - The stories need a FEATURE parent (`_ALLOWED_PARENTS`). `FEAT-0001` is inserted through `WorkflowRepository` in `IMPLEMENTING`, which is not in `scheduled_states.yaml`; a FEATURE in `IDEA` would be scheduled as an ORCHESTRATOR PLAN run. This feature is why `status` shows `IMPLEMENTING: 1`.
+  - The stories themselves go through `WorkflowManager.create` and `raise_event("ready")` as ORCHESTRATOR, through the CLI's `open_workflow`.
+  - The `.ai/agents/policies.yaml` override is the only behavioural change. The production defaults are untouched.
+- **`run_cli` runs the CliRunner on a worker thread,** because the commands call `asyncio.run` and the async gate tests already own the thread's loop. `test_cli_views_reflect_kernel_state` closes the kernel first (`aclose`, idempotent) so the views read a stopped kernel.
+- **Assertion choices.**
+  - "Both transitions" is asserted as all three moves of STORY-0001 (`IDEA -> READY`, `READY -> IMPLEMENTING`, `IMPLEMENTING -> READY_FOR_REVIEW`).
+  - The ledger order of Behavior 4 is checked as a subsequence. `HANDOVER_CREATED` precedes the HANDOFF `CHECKPOINT_CREATED`; the subsequence matches because the START checkpoint comes first.
+  - "Run A's files exist at B's first tool call" is proven three ways: the HANDOFF checkpoint commit's tree holds `src/Fake1-3.cs`; run B's START checkpoint, taken before any tool call, has the same `head_sha`; and the fake's first recorded `TOOL_CALL_REQUESTED` of run B targets run A's worktree.
+  - The fake emits no `TEXT` events, so the no-TEXT check on `HO-0001.md` holds trivially here. It becomes meaningful once an adapter emits text.
+- `sqlite3` confinement is not encoded, as the Notes require. This is reported for E01-R01: `AgentRunRepository.set_state(conn: sqlite3.Connection)` and `CheckpointRepository.insert(…, conn: sqlite3.Connection)` annotate `sqlite3` outside `walk.persistence`.
+
+Observations for E01-R01 (behaviour seen in the gate, not changed here):
+- A run ending `HANDED_OVER` after a fallback writes `AGENT_RUN_ENDED` with `outcome=FAILED`.
+- `HO-0001.md` keeps `to_run_id: null` after the handover row is closed with run B. The document is not rewritten on close.
+- Its `extra.worktree_head` (the head before the HANDOFF WIP commit) differs from `freshness.commit` (the WIP commit).
+- WIP subjects are numbered by per-run checkpoint seq. STORY-0002's branch therefore carries `wip(STORY-0002): checkpoint 2` twice (run A HANDOFF, run B PERIODIC). The END checkpoint also commits (`checkpoint 4` of STORY-0001).
+- `status.model_usage` reports `turns`/`tool_calls` as 0, although the fakes report them per call: the aggregation sums tokens and cost only.
+- `EVIDENCE_RECORDED` has an empty outcome.
 
 ---
 

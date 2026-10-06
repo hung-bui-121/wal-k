@@ -5,7 +5,6 @@ lazily so the kernel runs without the optional ``claude`` extra. Everything else
 talks to the `ClaudeClient` protocol and treats SDK messages as opaque `SdkMessage` objects.
 """
 
-import asyncio
 import importlib
 import shutil
 import sys
@@ -21,10 +20,11 @@ from walk.common.ids import ModelId
 from walk.common.models import FrozenModel, JsonDict
 
 SdkMessage = object  # opaque SDK message; translate_message inspects type name + attributes
+CommandProbe = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
+"""Runs a short command; returns (exit code, stdout, stderr). Wired by the composition root."""
 
 _SDK_MODULE: Final = "claude_agent_sdk"
 _CLI_NAME: Final = "claude.exe" if sys.platform == "win32" else "claude"
-_VERSION_TIMEOUT_S: Final = 30.0
 _INIT_SUBTYPE: Final = "init"
 
 
@@ -81,9 +81,15 @@ class ClaudeClient(Protocol):
 class SdkClaudeClient:
     """`ClaudeClient` backed by `claude_agent_sdk.ClaudeSDKClient`."""
 
-    def __init__(self) -> None:
-        """Start with no active sessions."""
+    def __init__(self, *, probe: CommandProbe | None = None) -> None:
+        """Start with no active sessions.
+
+        Args:
+            probe: Runs ``claude --version`` for `available`; without it the CLI is only
+                located.
+        """
         self._active: dict[str, Any] = {}
+        self._probe = probe
 
     async def query(
         self,
@@ -124,8 +130,10 @@ class SdkClaudeClient:
     async def available(self) -> tuple[bool, str]:
         """SDK importable, Claude Code CLI found and ``--version`` succeeds.
 
-        Authentication cannot be proven without a billable call (ADR-0014); a logged-out CLI
-        surfaces as a provider error on the first run.
+        The version probe runs through the injected `CommandProbe` (ARCHITECTURE §2.3: only
+        `walk.integrations.subprocess` and the codex launcher spawn processes); without one the
+        CLI is only located. Authentication cannot be proven without a billable call
+        (ADR-0014); a logged-out CLI surfaces as a provider error on the first run.
         """
         try:
             sdk = _load_sdk()
@@ -134,19 +142,12 @@ class SdkClaudeClient:
         cli = _find_cli(sdk)
         if cli is None:
             return False, "Claude Code CLI not found (bundled with the SDK or on PATH)"
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *_version_argv(cli),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as exc:
-            return False, f"{cli} cannot be started: {exc}"
-        stdout, stderr = await asyncio.wait_for(process.communicate(), _VERSION_TIMEOUT_S)
-        if process.returncode != 0:
-            tail = stderr.decode("utf-8", errors="replace").strip()
-            return False, f"{cli} --version failed with exit code {process.returncode}: {tail}"
-        return True, stdout.decode("utf-8", errors="replace").strip()
+        if self._probe is None:
+            return True, f"{cli} (version not probed)"
+        exit_code, stdout, stderr = await self._probe(_version_argv(cli))
+        if exit_code != 0:
+            return False, f"{cli} --version failed with exit code {exit_code}: {stderr.strip()}"
+        return True, stdout.strip()
 
     async def interrupt(self, session_id: str) -> None:
         """Interrupt the active query of ``session_id``."""

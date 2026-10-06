@@ -34,6 +34,7 @@ from walk.common.errors import (
 )
 from walk.common.roles import AgentRole
 from walk.context import ContextBundle, ContextRequest
+from walk.integrations import AsyncioSubprocessRunner
 from walk.model_router import (
     OUTPUT_RELATIVE_PATH,
     AgentEvent,
@@ -662,6 +663,11 @@ async def test_sdk_client_interrupts_active_session(
     await stream.aclose()  # type: ignore[attr-defined]  # SdkClaudeClient.query is an async generator
 
 
+async def _probe(argv: list[str]) -> tuple[int, str, str]:
+    result = await AsyncioSubprocessRunner().run(argv, timeout_s=30)
+    return result.exit_code, result.stdout, result.stderr
+
+
 async def test_sdk_client_available_checks_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -671,19 +677,22 @@ async def test_sdk_client_available_checks_cli(
     client_module = importlib.import_module("walk.model_router.adapters.claude.client")
 
     monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
-    ok, detail = await SdkClaudeClient().available()
+    ok, detail = await SdkClaudeClient(probe=_probe).available()
     assert ok is False
     assert "not found" in detail
 
     monkeypatch.setattr(client_module.shutil, "which", lambda _: sys.executable)
-    ok, detail = await SdkClaudeClient().available()
+    ok, detail = await SdkClaudeClient(probe=_probe).available()
     assert ok is True
     assert "Python" in detail
+    ok, detail = await SdkClaudeClient().available()
+    assert ok is True
+    assert detail == f"{sys.executable} (version not probed)"
 
     failing = tmp_path / "failing.py"
     failing.write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
     monkeypatch.setattr(client_module, "_version_argv", lambda _cli: [sys.executable, str(failing)])
-    ok, detail = await SdkClaudeClient().available()
+    ok, detail = await SdkClaudeClient(probe=_probe).available()
     assert ok is False
     assert "exit code 3" in detail
 
@@ -697,15 +706,15 @@ async def test_sdk_client_available_checks_cli(
         return [sys.executable, "--version"]
 
     monkeypatch.setattr(client_module, "_version_argv", version_argv)
-    ok, _ = await SdkClaudeClient().available()
+    ok, _ = await SdkClaudeClient(probe=_probe).available()
     assert ok is True
     assert seen == [str(bundled)]
 
     missing = str(tmp_path / "no-such-cli.exe")
     monkeypatch.setattr(client_module, "_version_argv", lambda _cli: [missing, "--version"])
-    ok, detail = await SdkClaudeClient().available()
+    ok, detail = await SdkClaudeClient(probe=_probe).available()
     assert ok is False
-    assert "cannot be started" in detail
+    assert "exit code 127" in detail
 
 
 @pytest.mark.integration

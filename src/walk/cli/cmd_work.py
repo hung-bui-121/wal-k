@@ -14,6 +14,7 @@ from walk.cli.output import exit_with, render_json, render_table
 from walk.common.errors import ConfigError, Timeout, WalkError
 from walk.common.models import JsonDict
 from walk.persistence import Database
+from walk.runtime import AgentRun, AgentRunRepository
 from walk.workflow import (
     StoryContract,
     WorkflowRepository,
@@ -102,12 +103,13 @@ def show(
     json_output: JsonOption = False,
     repo: RepoOption = None,
 ) -> None:
-    """Print one item with its contract and transitions; runs and cost arrive in later stories."""
+    """Print one item with its contract, transitions and runs; cost arrives in a later story."""
     db = _open(ctx, repo)
     try:
         item = asyncio.run(open_workflow(db).get(item_id))
         newest_first = asyncio.run(WorkflowRepository(db).transitions(item.id, limit=None))
         transitions = list(reversed(newest_first))
+        runs = asyncio.run(AgentRunRepository(db).for_item(item.id))
     except WalkError as exc:
         exit_with(exc)
     finally:
@@ -116,9 +118,10 @@ def show(
         data = item.model_dump(mode="json")
         data.setdefault("contract", None)
         data["transitions"] = [t.model_dump(mode="json") for t in transitions]
+        data["runs"] = [run.model_dump(mode="json") for run in runs]
         typer.echo(render_json(data))
         return
-    typer.echo("\n".join(_describe(item, transitions)))
+    typer.echo("\n".join(_describe(item, transitions, runs)))
 
 
 @work_app.command("transition")
@@ -182,7 +185,9 @@ def _parse_payload(text: str | None) -> JsonDict:
     return value
 
 
-def _describe(item: WorkItem, transitions: list[WorkItemTransition]) -> list[str]:
+def _describe(
+    item: WorkItem, transitions: list[WorkItemTransition], runs: list[AgentRun]
+) -> list[str]:
     lines = [
         f"{item.id}  {item.kind.value}  {item.state.value}",
         f"title: {item.title}",
@@ -208,5 +213,14 @@ def _describe(item: WorkItem, transitions: list[WorkItemTransition]) -> list[str
         )
     else:
         lines.append(f"transitions: {_NOT_AVAILABLE}")
-    lines.extend(f"{section}: {_NOT_AVAILABLE}" for section in ("runs", "cost"))
+    if runs:
+        lines.append("runs:")
+        lines.extend(
+            f"  {run.id}  {run.state.value}  {run.role.value}  {run.purpose}  "
+            f"{run.model_id}  tool_calls={run.tool_calls}"
+            for run in runs
+        )
+    else:
+        lines.append(f"runs: {_NOT_AVAILABLE}")
+    lines.append(f"cost: {_NOT_AVAILABLE}")
     return lines

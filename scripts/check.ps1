@@ -6,5 +6,7 @@ uv run ruff check .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 uv run mypy src tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+uv run lint-imports
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 uv run pytest
 exit $LASTEXITCODE

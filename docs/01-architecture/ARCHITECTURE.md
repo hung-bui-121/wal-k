@@ -131,7 +131,7 @@ A package may import only from packages in a **lower** layer, plus the same-laye
 
 ### 2.2 Import-dependency table
 
-Legend: `✔` = may import (`models`, `protocols`, `errors` only, unless noted) · `·` = forbidden. Rows import columns.
+Legend: `✔` = may import (`models`, `protocols`, `errors` only, unless the cell names more modules) · `·` = forbidden. Rows import columns. `common` and `persistence` are infrastructure: every module of theirs may be imported. `orchestrator` (the engine host) and `cli` (the composition root) may import any module of the packages they may import; only `cli/composition.py` wires `service.py` implementations of several packages (§1.3). The package-level cells are enforced on direct imports by import-linter contracts in `pyproject.toml` (`uv run lint-imports`, part of the quality gate; E01-S31); nothing imports `cli` (§2.1).
 
 Rows and columns are listed in **topological order**; a package may import only packages that appear *before* it. Within L2 the order is: `hooks, workflow, budgets, effort, permissions, tools, skills, integrations, memory, decisions, debate, context, agents, model_router` (`hooks` first: ADR-0018; `budgets` before `effort`: ADR-0019).
 
@@ -142,7 +142,7 @@ Rows and columns are listed in **topological order**; a package may import only 
 | **telemetry** | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **hooks** | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **workflow** | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
-| **budgets** | ✔ | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| **budgets** | ✔ | ✔ | ✔ | ✔ | ✔ (+ `repository`) | – | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **effort** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · | · | · | · | · | · | · | · | · | · |
 | **permissions** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | – | ✔ | · | · | · | · | · | · | · | · | · | · | · |
 | **tools** | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | · | – | · | · | · | · | · | · | · | · | · | · | · |
@@ -151,10 +151,10 @@ Rows and columns are listed in **topological order**; a package may import only 
 | **memory** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | ✔ (GitProvider protocol only) | – | · | · | · | · | · | · | · | · |
 | **decisions** | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | · | ✔ | – | · | · | · | · | · | · | · |
 | **debate** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | · | · | ✔ | – | · | · | · | · | · | · |
-| **context** | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ | · | · | · | ✔ (CodeGraphProvider protocol only) | ✔ | ✔ | · | – | · | · | · | · | · |
-| **agents** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ | ✔ | ✔ | ✔ | – | · | · | · | · |
+| **context** | ✔ | ✔ | ✔ | ✔ | ✔ (+ `repository`) | · | ✔ | · | · | · | ✔ (CodeGraphProvider protocol only) | ✔ (+ `frontmatter`) | ✔ | · | – | · | · | · | · | · |
+| **agents** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | ✔ (+ `frontmatter`, `paths`) | ✔ | ✔ | ✔ | – | · | · | · | · |
 | **model_router** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | · | · | ✔ | ✔ | – | · | · | · |
-| **runtime** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | – | · | · |
+| **runtime** | ✔ | ✔ | ✔ | ✔ | ✔ (+ `repository`: work items are read through it, never by raw SQL) | ✔ | ✔ | ✔ (+ `repository`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ (+ `handover`) | ✔ (+ `costing`, `output`) | – | · | · |
 | **improvement** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | · | · | ✔ | · | ✔ | ✔ | ✔ | · | ✔ | ✔ | · | – | · |
 | **orchestrator** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | – |
 | **cli** | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |

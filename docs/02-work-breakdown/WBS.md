@@ -416,8 +416,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S27 | `AgentExecutor` event loop, output validation/repair, `OutputApplier` core | feat | E01-S26, E01-S20, E01-S24, E01-S06 | HIGH | DONE (406b6d9) |
 | E01-S28 | Fallback, handover and recovery | feat | E01-S27 | HIGH | DONE (15a4cc9) |
 | E01-S29 | `TaskRouter`, `Scheduler`, `Orchestrator` service | feat | E01-S28, E01-S13, E01-S10, E01-S11 | HIGH | DONE (7120b93) |
-| E01-S30 | Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status` | feat | E01-S29 | HIGH | DONE (pending) |
-| E01-S31 | Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts | feat | E01-S30, E01-S21, E01-S22 | MEDIUM | TODO |
+| E01-S30 | Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status` | feat | E01-S29 | HIGH | DONE (5ea17d3) |
+| E01-S31 | Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts | feat | E01-S30, E01-S21, E01-S22 | MEDIUM | DONE (pending) |
 | E01-R01 | Review E01 | docs | E01-S31 | MEDIUM | TODO |
 | E02-S01 | `CredentialStore` and agent environment allowlist | feat | E01-S23, E01-S25 | MEDIUM | TODO |
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | feat | E02-S01, E01-S14 | HIGH | TODO |
