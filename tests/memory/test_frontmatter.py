@@ -98,7 +98,8 @@ def test_parse_rejects_id_mismatch() -> None:
     [
         ("# no front matter\n", "front matter"),
         ("---\nid: FEAT-0012\n", "front matter"),
-        ("---\n- a list\n---\n", "front matter"),
+        ("---\n- a list\n---\n", "not a mapping"),
+        ("---\nid: [unclosed\n---\n", "invalid front matter"),
         (SAMPLE.replace("type: feature", "type: novel"), "FEAT-0012"),
         (SAMPLE.replace("# Save System\n", "stray text\n"), "before the first section"),
         (SAMPLE.replace("## Intent", "## Architecture"), "duplicate section"),

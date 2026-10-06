@@ -2127,7 +2127,7 @@ Level-0 decisions:
 
 ### E01-S16 — Memory core: front matter, `MemoryDocument`, atomic `write`, `apply_updates`, handovers, index
 
-**Status:** DONE (pending)
+**Status:** DONE (f19104b)
 **Type:** feat
 **Requirements:** §6.2, §22, §34, §35, §41, §42 (stamping), §91 (secret isolation), §130, §137 (Inv. 2)
 **Depends on:** E01-S05, E01-S07
@@ -2297,7 +2297,7 @@ Level-0 decisions:
 
 ### E01-S17 — Constitutions and runtime policies: loaders, merge rules, MVP role defaults
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §8, §9, §12, §13, §14, §15, §105, §127, §137 (Inv. 1)
 **Depends on:** E01-S13, E01-S15
@@ -2394,7 +2394,53 @@ class DefaultAgentManager:
 - Commit: `feat: add constitution and runtime policy loading with role defaults (E01-S17)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+172 files already formatted
+All checks passed!
+Success: no issues found in 170 source files
+Required test coverage of 85% reached. Total coverage: 99.94%
+586 passed in 26.37s
+```
+Touched modules: `agents/*` 100%, `decisions/*` 100%, `memory/frontmatter.py` 100%.
+
+Demo (no CLI in this story; kernel defaults only):
+```
+roles: ['ORCHESTRATOR', 'LEAD_DEV', 'SENIOR_DEV', 'QC']
+ORCHESTRATOR v1.0 scope=[] level=1 rules=14 preferred=['claude/opus'] fallback=['codex/default']
+LEAD_DEV     v1.0 scope=['TECH'] level=1 rules=17 preferred=['claude/opus'] fallback=['codex/default']
+SENIOR_DEV   v1.0 scope=[] level=0 rules=16 preferred=['codex/default'] fallback=['claude/opus']
+QC           v1.0 scope=['QUALITY'] level=0 rules=15 preferred=['claude/sonnet'] fallback=['codex/default']
+```
+
+The commit subject is shortened to `feat: add constitution and policy loading with role defaults (E01-S17)`, because the prescribed subject has 79 characters and the hook allows 72.
+
+Contract change (small, additive; see commit body):
+- `walk.memory.frontmatter.split_document(path, text) -> (front matter mapping, sections)`, re-exported from `walk.memory`. Behaviour 1 says to parse constitutions "via `parse_document`", but `parse_document` cannot read an ADR-0013 D-2 file. `FrontMatter` forbids the constitution keys and requires `created_at/updated_at/updated_by`, `version: "1.0"` is not an int, and `id: LEAD_DEV` is not the stem `lead_dev` (ARCHITECTURE §8.1). `parse_document` is now `split_document` plus the `FrontMatter` schema, with unchanged behaviour. A header that is not a mapping now reports `not a mapping`, and `tests/memory/test_frontmatter.py` gains an invalid-YAML case.
+
+Level-0 decisions:
+- Files are `<role.lower()>.md` (ARCHITECTURE §8.1). Loading checks: `type: constitution`; `id` (when present) and `role` equal the requested role; every `tool_permissions` entry gets `role` from the file (D-2 "role implied") and must not name another role. `id/type/title` are header-only, and any other unknown key is a schema error. Every failure is a `ConstitutionError(ConfigError)` that names the file.
+- `body_markdown` = sections in D-3 order (Identity … Forbidden Actions, Working Guidance), then unknown sections in file order (defaults, then override), rendered as `## Name\n\nbody` joined by blank lines. The H1 title is dropped.
+- Override merge: a key in the override replaces the default; `authority` merges per key; sections with the same name replace, and new ones append.
+  - Narrowing (D-4): `authority.decision_scope/may_approve/may_reject/may_create_work` must be subsets, and `max_autonomy_level` may not rise.
+  - `tool_permissions`: every override rule must equal a default rule (`reason` ignored), be a DENY, or be a REQUIRE_APPROVAL on a tool the default ALLOWs.
+  - **For owner attention:** `forbidden_actions` must be a *superset* of the default. Adding forbidden actions narrows a role and removing them widens it. The story's "subset" wording reads the other way, but taken literally it would let a project lift a ban, which contradicts D-4.
+  - The first widened field is named in the error (`authority.decision_scope`, …, `tool_permissions`).
+- Provider/model names: `\b(claude|codex|gpt|anthropic|openai)` (case-insensitive, word start) is checked in every front-matter string except `id/type/title`, and in every section name and body. The check runs on the default and on the merged result.
+- `PolicyLoader`: the file is `{roles: {<ROLE>: {...}}}` (unknown top-level keys and roles are errors). The project entry deep-merges over the *validated* default policy, so partial mappings such as `budget_policy.per_task: {COST_USD: 4}` keep the other model-default dimensions. Mappings merge, and scalars and lists replace. A missing project file means no overrides. Both loaders cache per instance.
+- Default data:
+  - Families follow ADR-0011 D-3. GAME_DIRECTOR and PROCESS_ARCHITECT, which D-3 does not name, use `claude/opus` → `codex/default`.
+  - Every role uses the `EffortPolicy`/`BudgetPolicy` model defaults, `single_run`, 1 parallel run, and a checkpoint every 10 tool calls.
+  - `default_skills` stay empty until the builtin skills exist (E02-S05), so that E01-S18 `instantiate` does not require unregistered skills.
+  - `allowed_tools` follow ADR-0006 D-6, plus `unity.*`/`graph.*` for the developer roles and `unity.run_tests` for QC.
+- Default constitutions:
+  - LEAD_DEV is the ADR-0013 D-2 sample, with the D-6 rules made explicit.
+  - SENIOR_DEV: level 0, no decision scope.
+  - QC: `[QUALITY]`, level 0, approves/rejects `qc.*`, creates `[BUG]`.
+  - ORCHESTRATOR: level 1, creates `[FEATURE, STORY, TASK, BUG]`, `jira.create_*`/`phase.*` patterns.
+  - All four carry REQUIRE_APPROVAL(USER) for the D-6 "all roles" actions (`credentials.change`, `repo.delete_data`, `store.publish`, `jira.delete`) and bash DENY patterns for `rm -rf`, `git push --force`, `curl` and `wget`.
+- `DefaultAgentManager.instantiate/render_instructions` raise `ConfigError("implemented in E01-S18")`. `list_roles` lists the roles that have a default constitution, in `AgentRole` order.
+- Process note: `walk.decisions.models` was written before `tests/decisions/test_models.py`, so that test was never seen failing. The agents tests were confirmed failing before their implementation.
 
 ### E01-S18 — Agent execution contract: `AgentInput/AgentOutput/Handover`, templates, `instantiate`
 

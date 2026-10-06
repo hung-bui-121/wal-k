@@ -1,7 +1,7 @@
 """Project memory: `.ai/` documents, their single write path and index (§34-§42; ADR-0003)."""
 
 from walk.memory.errors import ApprovedWriteRefused, DocumentNotFound, SecretDetected
-from walk.memory.frontmatter import parse_document, render_document
+from walk.memory.frontmatter import parse_document, render_document, split_document
 from walk.memory.models import (
     ApprovalStatus,
     ApprovedArtifact,
@@ -56,4 +56,5 @@ __all__ = [
     "render_document",
     "sections_for",
     "skeleton_for",
+    "split_document",
 ]

@@ -1,0 +1,115 @@
+# Kernel default RuntimePolicy per role (§13-§20; E01-S17). Projects override keys in
+# .ai/agents/policies.yaml: mappings merge recursively, scalars and lists replace.
+# Model families per ADR-0011 D-3; concrete model ids are resolved by models.yaml (E01-S20).
+# default_skills stay empty until the builtin skills exist (E02-S05).
+roles:
+  ORCHESTRATOR:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep, jira.create_task, jira.create_bug, jira.transition, work.plan]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  PRODUCT_OWNER:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  SCRUM_MASTER:
+    version: "1.0"
+    model_policy: {preferred: [claude/sonnet], fallback: [claude/opus]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  DESIGN_LEADER:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  ART_DIRECTOR:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  LEAD_DEV:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep, write, edit, bash, git.commit, review.approve, review.reject, jira.create_task, unity.compile, unity.run_tests, graph.query, graph.neighbors]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  SENIOR_DEV:
+    version: "1.0"
+    model_policy: {preferred: [codex/default], fallback: [claude/opus]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep, write, edit, bash, git.commit, unity.compile, unity.run_tests, graph.query, graph.neighbors]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  QC:
+    version: "1.0"
+    model_policy: {preferred: [claude/sonnet], fallback: [codex/default], cross_model_review: true}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep, bash, jira.create_bug, jira.reopen, qc.approve, qc.reject, unity.run_tests]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  UA_RELEASE:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  GAME_DIRECTOR:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
+  PROCESS_ARCHITECT:
+    version: "1.0"
+    model_policy: {preferred: [claude/opus], fallback: [codex/default]}
+    effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
+    budget_policy: {}
+    default_skills: []
+    allowed_tools: [read, glob, grep]
+    execution_strategy: single_run
+    max_parallel_runs: 1
+    checkpoint_every_tool_calls: 10
