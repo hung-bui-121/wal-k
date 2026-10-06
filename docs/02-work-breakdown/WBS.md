@@ -429,7 +429,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | feat | E02-S01, E01-S14 | HIGH | DONE (bc1fcfe) |
 | E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | BLOCKED |
 | E02-S04 | `kernel-versions.yaml` and behavior-version pins | feat | E02-S03 | MEDIUM | TODO |
-| E02-S05 | `SkillRegistry` loading and builtin skills | feat | E01-S14 | MEDIUM | TODO |
+| E02-S05 | `SkillRegistry` loading and builtin skills | feat | E01-S14 | MEDIUM | DONE (pending) |
 | E02-S06 | Skill projections for Claude and Codex, lock file, `walk skills list/sync` | feat | E02-S05, E01-S21, E01-S22, E01-S25 | HIGH | TODO |
 | E02-S07 | Skill drift detection, `walk skills check-drift`, startup check | feat | E02-S06, E02-S02 | MEDIUM | TODO |
 | E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | TODO |

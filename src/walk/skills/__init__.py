@@ -1,6 +1,16 @@
-"""Skill contracts and protocols (§28-§29; ADR-0007)."""
+"""Skill contracts, protocols, loader and registry (§28-§29; ADR-0007)."""
 
+from walk.skills.loader import parse_skill_file
 from walk.skills.models import DriftReport, Skill, SkillProjection
 from walk.skills.protocols import SkillProjector, SkillRegistry
+from walk.skills.service import DefaultSkillRegistry
 
-__all__ = ["DriftReport", "Skill", "SkillProjection", "SkillProjector", "SkillRegistry"]
+__all__ = [
+    "DefaultSkillRegistry",
+    "DriftReport",
+    "Skill",
+    "SkillProjection",
+    "SkillProjector",
+    "SkillRegistry",
+    "parse_skill_file",
+]

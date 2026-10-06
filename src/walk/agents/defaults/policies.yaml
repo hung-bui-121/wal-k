@@ -1,14 +1,14 @@
 # Kernel default RuntimePolicy per role (§13-§20; E01-S17). Projects override keys in
 # .ai/agents/policies.yaml: mappings merge recursively, scalars and lists replace.
 # Model families per ADR-0011 D-3; concrete model ids are resolved by models.yaml (E01-S20).
-# default_skills stay empty until the builtin skills exist (E02-S05).
+# default_skills name builtin skills under walk/skills/builtin (E02-S05, WBS §3.10).
 roles:
   ORCHESTRATOR:
     version: "1.0"
     model_policy: {preferred: [claude/opus], fallback: [codex/default]}
     effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
     budget_policy: {}
-    default_skills: []
+    default_skills: [walk-output-contract]
     allowed_tools: [read, glob, grep, jira.create_task, jira.create_bug, jira.transition, work.plan]
     execution_strategy: single_run
     max_parallel_runs: 1
@@ -58,7 +58,7 @@ roles:
     model_policy: {preferred: [claude/opus], fallback: [codex/default]}
     effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
     budget_policy: {}
-    default_skills: []
+    default_skills: [walk-output-contract, code-review-checklist, unity-csharp-conventions, git-hygiene]
     allowed_tools: [read, glob, grep, write, edit, bash, git.commit, review.approve, review.reject, jira.create_task, unity.compile, unity.run_tests, graph.query, graph.neighbors]
     execution_strategy: single_run
     max_parallel_runs: 1
@@ -68,7 +68,7 @@ roles:
     model_policy: {preferred: [codex/default], fallback: [claude/opus]}
     effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
     budget_policy: {}
-    default_skills: []
+    default_skills: [walk-output-contract, unity-csharp-conventions, git-hygiene]
     allowed_tools: [read, glob, grep, write, edit, bash, git.commit, unity.compile, unity.run_tests, graph.query, graph.neighbors]
     execution_strategy: single_run
     max_parallel_runs: 1
@@ -78,7 +78,7 @@ roles:
     model_policy: {preferred: [claude/sonnet], fallback: [codex/default], cross_model_review: true}
     effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
     budget_policy: {}
-    default_skills: []
+    default_skills: [walk-output-contract, qc-exploratory-testing, git-hygiene]
     allowed_tools: [read, glob, grep, bash, jira.create_bug, jira.reopen, qc.approve, qc.reject, unity.run_tests]
     execution_strategy: single_run
     max_parallel_runs: 1

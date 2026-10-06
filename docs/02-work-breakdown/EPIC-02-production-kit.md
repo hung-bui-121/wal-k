@@ -619,7 +619,7 @@ _pending_
 
 ### E02-S05 — `SkillRegistry` loading and builtin skills
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §28, §29, §30, §137
 **Depends on:** E01-S14
@@ -718,7 +718,42 @@ class DefaultSkillRegistry:
 - Commit subject: `feat: add skill registry loader and builtin skills (E02-S05)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`):
+```
+353 files already formatted
+All checks passed!
+Success: no issues found in 351 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.90%
+1100 passed, 3 deselected in 395.07s
+```
+Touched modules: `skills/loader.py`, `skills/service.py`, `skills/errors.py`, `skills/__init__.py` 100 %; `cli/composition.py` 100 %.
+
+Demo (no CLI until E02-S06): transcript of `uv run pytest tests/skills/test_builtin_skills.py -v`, plus the parsed builtin skills:
+```
+tests/skills/test_builtin_skills.py::test_builtin_skills_size_and_contract_coverage PASSED
+tests/skills/test_builtin_skills.py::test_policies_name_the_builtin_default_skills[LEAD_DEV] PASSED
+tests/skills/test_builtin_skills.py::test_policies_name_the_builtin_default_skills[ORCHESTRATOR] PASSED
+tests/skills/test_builtin_skills.py::test_policies_name_the_builtin_default_skills[QC] PASSED
+tests/skills/test_builtin_skills.py::test_policies_name_the_builtin_default_skills[SENIOR_DEV] PASSED
+tests/skills/test_builtin_skills.py::test_qc_skill_lists_the_section_65_questions PASSED
+6 passed
+
+code-review-checklist     1.0  2135 bytes  sha e165f612ee02...
+git-hygiene               1.0  1637 bytes  sha d987e561f05c...
+qc-exploratory-testing    1.0  1936 bytes  sha cffd68d9341e...
+unity-csharp-conventions  1.0  2364 bytes  sha f5df41c95c0b...
+walk-output-contract      1.0  2856 bytes  sha c880fd620a62...
+```
+
+Level-0 decisions:
+- **`content_sha256` is the SHA-256 of the body, not of the file bytes.** The interface comment says "content_sha256 over file bytes". The E01-S14 `Skill` model derives the hash from `body_markdown` and rejects any other value, and the model is the published contract (DOMAIN-MODEL §4.6). A front-matter-only edit therefore keeps the hash; the version field covers that case. CRLF is normalised to LF before parsing.
+- `walk.skills` may not import `walk.memory` (§2.2), so the front matter is split locally: a `---` block at the top, parsed with `yaml.safe_load` (`skills` is an allowed `yaml` user, §2.3). Every failure is a `SkillLoadError(ConfigError)` that names the path. The 64 KB limit is on the UTF-8 body.
+- `for_role` raises `ConfigError` with `detail["missing"]` listing every unresolved name, for defaults and required alike. A role without defaults gets `[]` plus `required`. `get`/`for_role` load lazily on first use; `load()` rebuilds the cache.
+- `project_all` / `check_drift` raise `ConfigError("implemented in E02-S06/E02-S07")` (deferred-method pattern).
+- **`walk-output-contract` also documents `debate_position`.** AC 8 requires every `AgentOutput` field, and Behavior 6's list omits that field.
+- `requires_tools: []` for all five built-ins (Behavior 6). Scope is `KERNEL`, version `1.0`.
+- Composition: `_agent_services` builds `DefaultSkillRegistry(walk/skills/builtin, .ai/agents/skills, role defaults)`. Role defaults are `PolicyLoader.load(role).default_skills` for every role except the actors `USER`/`KERNEL`. The registry is passed to `DefaultAgentManager(skills=...)`, so `instantiate` now validates skill names (§29). The E01 gate still passes with the new `default_skills`.
 
 ---
 

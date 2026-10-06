@@ -22,6 +22,7 @@ from pydantic import ConfigDict, Field, SkipValidation
 
 import walk.agents
 import walk.model_router
+import walk.skills
 from walk.agents import (
     AgentInput,
     ConstitutionLoader,
@@ -41,6 +42,7 @@ from walk.common.clock import Clock, SystemClock
 from walk.common.errors import ConfigError
 from walk.common.ids import IdFactory, ProjectKey, RunId
 from walk.common.models import WalkModel
+from walk.common.roles import AgentRole
 from walk.context import DefaultContextManager
 from walk.effort import DefaultEffortManager, EffortRequest, StaticCostEstimator
 from walk.hooks import DefaultHookManager, HookExecutionRepository
@@ -91,6 +93,7 @@ from walk.runtime import (
     PollingApprovalWaiter,
     RecoveryManager,
 )
+from walk.skills import DefaultSkillRegistry
 from walk.telemetry import (
     DefaultEvidenceManager,
     DefaultLedgerManager,
@@ -122,6 +125,8 @@ _DEFAULT_MODELS: Final = (
     Path(walk.model_router.__file__).resolve().parent / "defaults" / "models.yaml"
 )
 _SCHEDULED_STATES: Final = TABLES_DIR / "scheduled_states.yaml"
+_BUILTIN_SKILLS: Final = Path(walk.skills.__file__).resolve().parent / "builtin"
+_ACTORS: Final = frozenset({AgentRole.USER, AgentRole.KERNEL})  # never instantiated as agents
 _CLAUDE_SDK: Final = "claude_agent_sdk"
 _GIT: Final = "git"
 _JITTER: Final = 0.1  # ARCHITECTURE §5.1 retry backoff jitter: up to +10 %
@@ -549,8 +554,18 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
         project_key=key,
     )
     renderer = TemplateRenderer(_AGENT_TEMPLATES, ai_root / "agents" / "templates")
-    agents = DefaultAgentManager(constitutions, policies, permissions, tools, renderer)
+    agents = DefaultAgentManager(
+        constitutions, policies, permissions, tools, renderer, skills=_skills(ai_root, policies)
+    )
     return tools, permissions, agents, renderer
+
+
+def _skills(ai_root: Path, policies: PolicyLoader) -> DefaultSkillRegistry:
+    """Kernel built-ins plus `.ai/agents/skills`; role defaults from the runtime policies."""
+    defaults = {
+        role: policies.load(role).default_skills for role in AgentRole if role not in _ACTORS
+    }
+    return DefaultSkillRegistry(_BUILTIN_SKILLS, ai_root / "agents" / "skills", defaults)
 
 
 def build_status_reader(repo: Path) -> StatusBuilder:
