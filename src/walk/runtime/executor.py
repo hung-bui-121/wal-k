@@ -374,6 +374,21 @@ class DefaultAgentExecutor:
             live.run = await self._set_state(live, AgentRunState.PAUSED_BY_USER, uow)
         return live.run
 
+    async def shutdown(self) -> None:
+        """Abandon every executing run without a checkpoint (kernel stop without drain).
+
+        The adapters are cancelled and the run tasks cancelled; the rows stay RUNNING, so the
+        next kernel instance's `RecoveryManager` resumes them from their latest checkpoint.
+        """
+        tasks = []
+        for live in list(self._live.values()):
+            await live.adapter.cancel(live.run.id)
+            if live.task is not None and not live.task.done():
+                live.task.cancel()
+                tasks.append(live.task)
+        if tasks:
+            await asyncio.wait(tasks)
+
     def running(self) -> list[AgentRun]:
         """Runs whose task is still executing in this process."""
         return [

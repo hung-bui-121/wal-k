@@ -160,14 +160,18 @@ class DyingAdapter(FakeModelAdapter):
                     raise asyncio.CancelledError
 
 
-def _fake_model_policies(ai_root: Path) -> Path:
+def _fake_model_policies(ai_root: Path, max_parallel_runs: int) -> Path:
     """A project `policies.yaml` routing every role to the fake models."""
     path = ai_root / "agents" / "policies.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     policy = f"model_policy: {{preferred: [{CODEX_MODEL}], fallback: [{CLAUDE_MODEL}]}}"
     lines = ["roles:"]
     for role in (SENIOR, LEAD):
-        lines += [f"  {role.value}:", f"    {policy}"]
+        lines += [
+            f"  {role.value}:",
+            f"    {policy}",
+            f"    max_parallel_runs: {max_parallel_runs}",
+        ]
     path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
     return path
 
@@ -286,6 +290,7 @@ async def build_executor_env(
     rules: list[PermissionRule] | None = None,
     kernel_instance: str = "instance-a",
     sleep: Callable[[float], Awaitable[None]] = no_sleep,
+    max_parallel_runs: int = 1,
 ) -> ExecutorEnv:
     """Wire the executor over ``base``; ``plan`` drives both fake adapters."""
     db, clock = base.db, base.clock
@@ -318,7 +323,10 @@ async def build_executor_env(
     tools = DefaultToolRegistry(load_tool_specs([]))
     agents = DefaultAgentManager(
         ConstitutionLoader(AGENT_DEFAULTS, None),
-        PolicyLoader(AGENT_DEFAULTS / "policies.yaml", _fake_model_policies(db.path.parent)),
+        PolicyLoader(
+            AGENT_DEFAULTS / "policies.yaml",
+            _fake_model_policies(db.path.parent, max_parallel_runs),
+        ),
         permissions,
         tools,
         TemplateRenderer(AGENT_TEMPLATES),

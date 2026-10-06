@@ -4565,7 +4565,7 @@ Level-0 decisions:
 
 ### E01-S28 — Fallback, handover and recovery
 
-**Status:** DONE (pending)
+**Status:** DONE (15a4cc9)
 **Type:** feat
 **Requirements:** §21, §22, §41, §89, §90, §128, §132 (path exercised with fakes), §137 (Inv. 1, 12), §138 (Model Lock-In, Tool Failure)
 **Depends on:** E01-S27
@@ -4787,7 +4787,7 @@ Level-0 decisions:
 
 ### E01-S29 — `TaskRouter`, `Scheduler`, `Orchestrator` service
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.2, §10.1 (assign role), §56, §60, §87 (status snapshot), §89, §90, §125, §137 (Inv. 4 — role check only, 12)
 **Depends on:** E01-S28, E01-S13, E01-S10, E01-S11
@@ -4964,7 +4964,76 @@ class DefaultOrchestrator:
 - Commit subject: `feat: add task router, scheduler tick and orchestrator service (E01-S29)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+313 files already formatted
+All checks passed!
+Success: no issues found in 311 source files
+Required test coverage of 85% reached. Total coverage: 99.97%
+961 passed, 2 deselected in 272.09s
+```
+Touched modules: `orchestrator/*` 100%, `runtime/executor.py` 100%.
+
+Demo: the `test_run_once_starts_and_waits` scenario (one READY story, two fake adapters), printing `orchestrator.status().model_dump_json(indent=2)` after `run_once()`:
+```
+started 1
+{
+  "project_key": "DEMO",
+  "paused": false,
+  "current_phase": null,
+  "phase_progress": {
+    "READY_FOR_REVIEW": 1
+  },
+  "gdd_coverage": {},
+  "active_runs": [],
+  "blocked_items": [],
+  "pending_approvals": [],
+  "open_debates": [],
+  "model_usage": {
+    "fake-codex/sim": {
+      "input_tokens": 3000,
+      "output_tokens": 600,
+      "cache_read_tokens": 0,
+      "cost_usd": 0.006,
+      "turns": 0,
+      "tool_calls": 0,
+      "duration_s": 0.0
+    }
+  },
+  "qc_status": {},
+  "build_status": null,
+  "budgets": [],
+  "open_improvement_candidates": 0
+}
+```
+`budgets` is empty because only GLOBAL/PROJECT budgets apply to the project subject; the run's TASK and ROLE rows do not.
+
+The commit subject is the prescribed one (72 characters).
+
+Contract additions outside the Files table (see the commit body):
+- **`DefaultAgentExecutor.shutdown()`** (`runtime/executor.py`). Behavior 10's `stop(drain=False)` and E01-S30's `KernelHandle.aclose()` both need "adapters cancelled without checkpoint, runs left RUNNING", which no executor method offered. `shutdown` cancels each adapter and run task. The rows stay RUNNING; the drive loop only catches `Exception`, never `CancelledError`.
+- **ARCHITECTURE §2.3 `yaml` row** now lists `walk/orchestrator/router.py`. The story has the router load `scheduled_states.yaml` itself, and §2.3 did not list `orchestrator` among the packages allowed to use PyYAML.
+
+Level-0 decisions:
+- **Router.**
+  - Rows are validated like the workflow's loader: a role is an `AgentRole` name or `contract.owner_role`/`contract.reviewer_role`. A missing or invalid file raises `ConfigError("invalid <file>: …")`.
+  - `fallback_role` applies only when the resolved role is not in `list_roles()`.
+  - Contract roles of an item without a contract default to SENIOR_DEV/LEAD_DEV.
+- **Scheduler.**
+  - Checks run in this order: room (role parallelism, then `can_run_parallel` against the item of every executing run), idempotency key, `ensure` of the TASK and ROLE budgets, headroom (TASK/ROLE/PROJECT/GLOBAL subject, no run), effort, model, instance (budget ids = applicable budgets), admission transition, start, key.
+  - `branch_available` = no executing run of another item is on `branch_name_for(item)`.
+  - Skips are counted as `scheduler.not_admitted|role_busy|not_parallel|blocked_provider|instantiate_failed|admission_rejected|start_failed`. Any exception for one item is logged and counted as `start_failed`, and the tick continues.
+  - The key value is the run id.
+- **Status.** `phase_progress` counts the current phase's items (all items without a phase). `model_usage` sums `COST_RECORDED` events up to a 1,000,000-event query bound, and skips events without a `model_id`. `status()` before any start raises `ConfigError`.
+- **Orchestrator.**
+  - The loop is `tick` → status → wait for a wake-up or `poll_interval_s`.
+  - `stop()` first waits for a running loop to finish its current tick, so a run that tick started is drained too. A test caught this race: a run started during the stop escaped the drain.
+  - An orchestrator runs once: `start` does not reset a stop that was already requested.
+  - `PROJECT_STARTED` has `actor_role=KERNEL` and payload `{kernel_instance, interrupted, resumed_native, restarted_with_handover, requeued, failed}` (counts). `ON_PROJECT_START` carries the same payload.
+- **Tests.** `tests/orchestrator/conftest.py` shares the runtime fixtures and wires scheduler, recovery, status and orchestrator over `tests/runtime/executor_env.py`, whose project policy now also sets `max_parallel_runs` (outside the Files table).
+- **For owner attention.**
+  - A run that fails after admission leaves its item IMPLEMENTING, which is not schedulable (the known E01 limitation in the Notes). The same holds when `start` raises after the transition.
+  - `test_tick_is_idempotent_per_state_version` replays a stale READY view of the same `state_version`. While the first run is RUNNING, the one-run-per-item parallel check blocks it; after the run ended, the `schedule:` key blocks it.
 
 ---
 
