@@ -51,8 +51,8 @@ Planning decisions fixed for this epic (Autonomy Level 0 unless marked `NEW NAME
 | `walk.workflow.traceability` (`GddRequirement`, `RequirementStatus`, `RequirementLinks`, `TraceabilityMatrix`, `REQUIREMENT_ID_PATTERN`, `format_requirement_id`, `normalise_requirements`), id format `REQ-<AREA>-<NNN>`, `walk.orchestrator.traceability_store.TraceabilityStore`, `walk doctor --fix` traceability refresh | S03 | §73 file schema undefined |
 | `GddCompiler` methods, `PLAN_BLOCK_LABEL`, `PhasePlanDraft` family, `PlanStatus`, `PhasePlanResult`, `parse_plan_block`, `validate_plan`, `WorkItemDraft.gdd_refs`, labels `gdd-compile`/`gdd:readiness`/`gdd:plan`/`gdd-planned`/`phase:<id>`, command `phase.plan`, idempotency keys `gdd.readiness:*`/`gdd.plan:*`/`gdd.materialise:*` | S02, S04 | INTERFACES names `GddCompiler` without methods |
 | `TraceLevel`, `TraceChain`, `TraceQuery`, CLI `walk work trace` | S05 | §73 queries have no interface |
-| `render_gdd_coverage`, hook `builtin.gdd_coverage_refresh` | S06 | §74 file format undefined |
-| `WorkflowManager.assign_phase_scope`, `ready_items` phase-state filter | S07 | Inv. 7 scope assignment has no method |
+| `walk.workflow.coverage` (`area_of_requirement`, `RequirementCoverage`, `AreaCoverage`, `GddCoverage`, `compute_coverage`, `render_gdd_coverage`), `GddCoverageWriter`, `TraceabilityStore.subscribe`, hook `builtin.gdd_coverage_refresh` | S06 | §74 file format undefined |
+| `WorkflowManager.assign_phase_scope`, payload key `scope_epic_id`, `ready_items` phase-state and `gdd-planned` filters, `walk.orchestrator.scope_hooks` (`GDD_PLANNED_LABEL`, `activate_planned_features`, `register_scope_hooks`), hook `builtin.gdd_phase_activate` | S07 | Inv. 7 scope assignment has no method |
 
 ---
 
@@ -139,7 +139,8 @@ The GDD files listed in `Project.gdd_paths` are parsed deterministically into a 
 | `src/walk/memory/protocols.py` | modify | `MemoryManager.write_project_data`, `MemoryManager.read_project_data` |
 | `src/walk/memory/service.py` | modify | `DefaultMemoryManager.write_project_data`, `DefaultMemoryManager.read_project_data` |
 | `src/walk/cli/cmd_doctor.py` | modify | — (`gdd:` summary line) |
-| `tests/fixtures/gdd/small_game.md` | create | — (3 areas × 2 sections + glossary; Economy contains the deliberate contradiction used by E06-S08) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.8 `write_project_data`, `read_project_data`) |
+| `tests/fixtures/gdd/small_game.md` | create | — (3 areas × 2 sections + glossary; every section has a `Success:` line and no `UNBOUNDED_TERMS` word so E06-S02 pre-checks find nothing; Economy sections `Shop Prices` / `Price Scaling` contain the deliberate contradiction used by E06-S08) |
 | `tests/workflow/test_gdd.py` | create | — |
 | `tests/memory/test_project_data.py` | create | — |
 | `tests/cli/test_cmd_doctor.py` | modify | — |
@@ -262,7 +263,8 @@ Whenever the GDD index changes, the kernel runs a readiness analysis — determi
 | `src/walk/workflow/guards.py` | modify | guard `analysis_only_task` |
 | `src/walk/workflow/models.py` | modify | `WorkItemDraft.labels` (skip if E03-S09 already added draft labels — E06-X01 verifies) |
 | `src/walk/workflow/service.py` | modify | — (`create` copies `draft.labels` to the item) |
-| `src/walk/runtime/applier.py` | modify | — (label `analysis-only` + status `COMPLETED` → event `analysis_done` instead of the table-mapped event) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§3.2 `analysis_done` row; §4.1 `WorkItemDraft.labels`) |
+| `src/walk/runtime/output_applier.py` | modify | — (label `analysis-only` + status `COMPLETED` → event `analysis_done` instead of the table-mapped event) |
 | `src/walk/agents/templates/ANALYSIS.md.j2` | modify | — (`gdd_readiness` block) |
 | `src/walk/cli/composition.py` | modify | — (builds `GddReadinessAnalyzer`; calls `register(run_completion_handler)`) |
 | `tests/orchestrator/test_gdd_readiness_models.py` | create | — |
@@ -521,7 +523,7 @@ _pending_
 **Status:** TODO
 **Type:** feat
 **Requirements:** §48 (Product Requirements → Phase Plan → Executable Work), §52, §57, §58, §66, §67, §73, §55, §137 (Inv. 4, 7)
-**Depends on:** E06-S03, E03-S09
+**Depends on:** E06-S02, E06-S03, E03-S09
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
@@ -542,6 +544,7 @@ _pending_
 | `src/walk/workflow/models.py` | modify | `WorkItemDraft.gdd_refs` |
 | `src/walk/workflow/service.py` | modify | — (`create` copies `draft.gdd_refs` to `Epic/Feature.gdd_refs` and, for STORY/TASK, into `contract.source_requirements` when empty) |
 | `src/walk/agents/templates/PLAN.md.j2` | modify | — (`gdd_plan` block when `item.labels` contains `gdd:plan`) |
+| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (§4.1 `WorkItemDraft.gdd_refs`) |
 | `src/walk/cli/cmd_phase.py` | modify | `plan` command |
 | `src/walk/cli/composition.py` | modify | — (builds `GddCompiler`, registers it on `RunCompletionHandler`; `KernelHandle.gdd_compiler`) |
 | `tests/orchestrator/test_gdd_plan_models.py` | create | — |
@@ -958,3 +961,136 @@ _pending_
 
 ---
 
+### E06-S08 — Epic gate: GDD → one planned phase (e2e)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §48, §49, §50, §51, §52, §57, §58, §67, §73, §74, §136 ("GDD analyzed · Phase planned"), §137 (Inv. 7), §138 (Under-Specified GDD)
+**Depends on:** E06-S02, E06-S06, E06-S07
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+A small three-area GDD is compiled end-to-end by fake agents into one planned phase — readiness analysed with one deliberate contradiction escalated at Level 2, requirements normalised, 2 epics / 3 features / 6 stories with Executable Story Contracts created in the workflow and `LocalWorkProvider`, every story traced to a requirement, coverage 0 % per area — and the resulting repository is the starting fixture of the E07 gate.
+
+#### Scope
+- In: `tests/e2e/test_e06_gate.py`, fixture `e06_scenario` (exported for E07-S10) in `tests/e2e/conftest.py`.
+- Out: production code (defects become `E06-Bxx` bugfix stories); executing the phase (E07).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/e2e/test_e06_gate.py` | create | — |
+| `tests/e2e/conftest.py` | modify | `e06_scenario` fixture, `E06Scenario` |
+| `tests/fixtures/gdd/small_game.md` | modify | — (only if a kernel pre-check of E06-S02 fires on it; the gate requires zero kernel findings) |
+
+#### Interface contract
+Fixture `e06_scenario(bootstrapped_repo) -> E06Scenario` (`WalkModel` in conftest): `handle: KernelHandle`, `project_key: ProjectKey`, `repo_path: Path`, `phase_ids: list[PhaseId]` (`PHASE-01` Prototype, `PHASE-02` Vertical Slice, created with `create_phase`), `epic_ids`, `feature_ids`, `story_ids`, `escalation_id: str`. Project: `gdd_paths=["GDD/small_game.md"]` (copied from `tests/fixtures/gdd/small_game.md`), PRODUCT_OWNER and DESIGN_LEADER disabled, `autonomy_level_max=2`. Adapters: `FakeModelAdapter` `fake-claude/sim` for ORCHESTRATOR, `LocalWorkProvider`, real temp git repo, `FakeClock`, `SequentialIdFactory`. Scripts:
+
+| Run (role / purpose / item) | Scripted output |
+|---|---|
+| ORCHESTRATOR / ANALYSIS / TASK `gdd:readiness` | `COMPLETED`; `walk-gdd-findings` block with one finding: `CONTRADICTION`, `MAJOR`, refs `GDD/small_game.md#shop-prices`, `GDD/small_game.md#price-scaling`, options `["Fixed prices", "Level-scaled prices"]`; no `decisions`, no `escalations` |
+| ORCHESTRATOR / PLAN / TASK `gdd:plan` | `COMPLETED`; `walk-phase-plan` block: epic "Core Gameplay" → features "Movement" (`REQ-MOVEMENT-001/002`, 2 stories) and "Combat" (`REQ-COMBAT-001/002`, 2 stories); epic "Economy" → feature "Shop" (`REQ-ECONOMY-001/002`, 2 stories, the second `depends_on` the first); every story with goal, ≥ 2 acceptance criteria, `required_evidence [AUTOMATED_TEST]` |
+
+#### Behavior
+Scenario steps (each a test, executed in order via the fixture's cached state; ticks via `walk run --once`, at most 20):
+1. `walk phase plan PHASE-01` → `PHASE-01 READINESS_PENDING (TASK-0001)`; `.ai/project/traceability.yaml` exists with six ACTIVE requirements.
+2. Ticks run the readiness task to `COMPLETE`; `.ai/project/gdd-readiness.yaml` has `ready: true`, `blocked_areas: []`, exactly one finding (`CONTRADICTION`, `level: 2`, `source: AGENT`) and zero `KERNEL` findings.
+3. Exactly one `escalations` row: `to_level == 2`, `category == PRODUCT`, question starts with `[CONTRADICTION] GDD/small_game.md#shop-prices`; `ESCALATION_RAISED` ledger event with `to_level 2`; PO disabled → one pending `ApprovalRequest(kind="escalation")` with row json `degraded_to_user: true` (E05-S02).
+4. `walk phase plan PHASE-01` → `PLANNING (TASK-0002)`; ticks complete the plan task; `walk phase plan PHASE-01` → `PLANNED: 2 epics, 3 features, 6 stories`.
+5. Workflow: 2 EPIC, 3 FEATURE, 6 STORY items, all `IDEA`, all `phase_id == PHASE-01`; `PHASE-01.scope_epic_ids` = both epics; `PHASE-02` still `PLANNED` with empty scope.
+6. Every story contract has `goal`, `acceptance_criteria`, `required_evidence`, `owner_role SENIOR_DEV`, `reviewer_role LEAD_DEV`, `source_requirements` whose `requirement_id`s exist in the matrix; the second Shop story's `dependencies` hold the first Shop story id.
+7. `LocalWorkProvider` has 11 records labelled `walk:<id>`, 9 PARENT links and 1 BLOCKS link.
+8. `traceability.yaml`: every story id appears in `links.work_items` of at least one requirement; every requirement lists its feature under `specs`; each feature context `Relevant GDD` lists its refs.
+9. `gdd-coverage.md` Summary shows `MOVEMENT 0%`, `COMBAT 0%`, `ECONOMY 0%` with 2 stories each and `## Not Planned` = `- none`; `walk status --json` → `gdd_coverage == {"MOVEMENT": 0.0, "COMBAT": 0.0, "ECONOMY": 0.0}`.
+10. Scope: `walk run --once` after planning starts 0 runs; `walk work transition FEAT-0001 start_discovery` exits 2 with `phase PHASE-01 is PLANNED`.
+11. `walk work trace REQ-COMBAT-001` exits 0 with `gap: IMPLEMENTATION`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the fixture GDD When `walk phase plan PHASE-01` first runs Then `READINESS_PENDING` and six requirements in `traceability.yaml` | `tests/e2e/test_e06_gate.py::test_plan_starts_with_readiness_and_requirements` |
+| 2 | Given the readiness run Then `gdd-readiness.yaml` ready with exactly one agent CONTRADICTION finding at level 2 and no kernel findings | `tests/e2e/test_e06_gate.py::test_readiness_verdict_persisted` |
+| 3 | Given the contradiction Then exactly one Level-2 PRODUCT escalation and one pending user approval (PO disabled) | `tests/e2e/test_e06_gate.py::test_contradiction_yields_level2_escalation` |
+| 4 | Given the plan run Then `walk phase plan` reports `PLANNED: 2 epics, 3 features, 6 stories` | `tests/e2e/test_e06_gate.py::test_phase_planned_counts` |
+| 5 | Given the planned items Then hierarchy, `phase_id`, scope epics and untouched PHASE-02 match step 5 | `tests/e2e/test_e06_gate.py::test_hierarchy_and_scope` |
+| 6 | Given the stories Then every contract satisfies §57 fields and the dependency is recorded | `tests/e2e/test_e06_gate.py::test_story_contracts_complete` |
+| 7 | Given `LocalWorkProvider` Then 11 records, 9 PARENT links, 1 BLOCKS link | `tests/e2e/test_e06_gate.py::test_work_provider_records_and_links` |
+| 8 | Given `traceability.yaml` Then every story linked to a requirement and every requirement to its feature spec | `tests/e2e/test_e06_gate.py::test_every_story_traced_to_requirement` |
+| 9 | Given `gdd-coverage.md` and `walk status --json` Then 0 % per area for all three areas | `tests/e2e/test_e06_gate.py::test_coverage_zero_per_area` |
+| 10 | Given the PLANNED phase Then no run is admitted and `start_discovery` is rejected by `in_phase_scope` | `tests/e2e/test_e06_gate.py::test_scope_blocks_execution_before_start` |
+| 11 | Given `walk work trace REQ-COMBAT-001` Then exit 0 and first gap IMPLEMENTATION | `tests/e2e/test_e06_gate.py::test_trace_chain_until_implementation` |
+
+#### Evidence required
+- Quality gate output including `tests/e2e/test_e06_gate.py` (11 passed).
+- Demo transcript on the fixture repo: `walk phase plan PHASE-01` (three times, interleaved with `walk run --once`), `cat .ai/project/gdd-readiness.yaml`, `walk approvals --pending`, `walk work list --phase PHASE-01`, `head -30 .ai/project/traceability.yaml`, `cat .ai/project/gdd-coverage.md`, `walk work trace REQ-ECONOMY-002`.
+
+#### Notes
+- WBS §9 maps §136 "GDD analyzed · Phase planned" to this story; E07-S10 builds `e07_scenario` on `e06_scenario` (EPIC-07 `(verify)` note), so `E06Scenario` field names are part of this story's contract.
+- Gate uses only fakes and a temp repo; no network. Any production change is a separate `bugfix` story; this commit touches tests (and at most the fixture GDD) only.
+- Commit subject: `feat: add epic 06 gate test for gdd compile to phase plan (E06-S08)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E06-R01 — Review E06
+
+**Status:** TODO
+**Type:** docs
+**Requirements:** §137 (Inv. 7, 9), §48, §49, §57, §58, §73, §74
+**Depends on:** E06-S08
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** LeadDev   **Reviewer role:** QC
+
+#### Goal
+An independent agent instance (different model than the E06 implementer where possible, §23) verifies every E06 story against the Definition of Done, Invariant 7 (phase scope) and the derived-not-entered rule of §74, recording defects as `bugfix` stories.
+
+#### Scope
+- In: stories E06-S01…S08 and their commits; `INTERFACES.md` / `DOMAIN-MODEL.md` deltas (`assign_phase_scope`, `WorkItemDraft.labels/gdd_refs`, `MemoryManager.write_project_data/read_project_data`, `story_workflow` `analysis_done` row); WBS §6 register entries from this epic.
+- Out: fixing defects (each becomes `E06-Bxx`).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/02-work-breakdown/EPIC-06-gdd-compiler.md` | modify | — (review record appended; `E06-Bxx` stories appended if any) |
+| `docs/02-work-breakdown/WBS.md` | modify | — (status rows, §6 register) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/ARCHITECTURE.md` | modify (only if drift found) | — |
+| `tests/architecture/test_project_data_single_writer.py` | create | — |
+| `tests/architecture/test_coverage_derived.py` | create | — |
+
+#### Interface contract
+Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
+
+#### Behavior
+1. For each story: `git show <sha>`; Files table == changed files (extra files need commit-body justification); every acceptance-criterion test exists and passes; coverage ≥ 90 % for touched modules.
+2. Single writer (ADR-0003 D-4): no module other than `walk.memory` opens files under `.ai/project/` for writing; `traceability.yaml`, `gdd-readiness.yaml`, `gdd-coverage.md` are written only through `write_project_data`.
+3. §74: no code path accepts a coverage percentage as input; `gdd_coverage` and `GddCoverage` are computed from item states and requirement refs only.
+4. Invariant 7: `in_phase_scope` is registered on every transition INTERFACES §3.1 lists it for; `ready_items` never returns items of a non-ACTIVE/REWORK phase; the e2e gate DB shows zero runs on PHASE-01 items while it is PLANNED.
+5. §49/§50: `GddFindingKind` equals the §49 list; every `(kind, severity)` has a `FINDING_ESCALATION` entry; Level-0 findings raise no escalation; levels are capped by `Project.autonomy_level_max`.
+6. §57/§58: every story created by `GddCompiler.materialise` in the gate DB has a non-empty goal, acceptance criteria, source requirement and required evidence, so `check_definition_of_ready` content checks pass.
+7. Import table (ARCHITECTURE §2.2): `walk.workflow` modules added by E06 (`gdd`, `traceability`, `trace_query`, `coverage`) import no `memory`, `agents`, `runtime` or `orchestrator` code; `import-linter` green.
+8. `NEW NAME:` items of the epic header table are present in WBS §6 or listed in the review note for the architect.
+9. Defects → `E06-Bxx` stories using the template; commit `docs: review epic 06 stories E06-S01..S08 (E06-R01)`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given each E06 story When the DoD checklist is applied Then every box is checked or an `E06-Bxx` story exists | manual checklist recorded in Evidence |
+| 2 | Given `src/walk` outside `walk/memory` When scanned for writes to paths containing `.ai/project` (`open(`, `write_text`, `write_bytes`, `replace(`) Then no match | `tests/architecture/test_project_data_single_writer.py::test_only_memory_writes_project_data` |
+| 3 | Given `walk.workflow.coverage` and `DefaultWorkflowManager.gdd_coverage` When their inputs are inspected Then no parameter or config key carries a percentage | `tests/architecture/test_coverage_derived.py::test_coverage_has_no_manual_input` |
+| 4 | Given the E06 gate DB When querying `agent_runs` joined to `work_items` with `phase_id = 'PHASE-01'` Then zero rows | manual checklist recorded in Evidence |
+| 5 | Given the quality gate on `main` Then green with overall coverage ≥ 85 % | manual checklist recorded in Evidence |
+
+#### Evidence required
+- Checklist per story (ID → DoD items → OK/defect id).
+- Quality gate output on `main` after the review commit.
+- List of `E06-Bxx` stories created (or "none") and NEW NAME items forwarded to the architect.
+
+#### Notes
+- Tests 2–3 are architecture tests created by the reviewer (review tasks may add tests, never production code).
+- Commit subject: `docs: review epic 06 stories E06-S01..S08 (E06-R01)`.
+
+#### Evidence (filled by implementer)
+_pending_

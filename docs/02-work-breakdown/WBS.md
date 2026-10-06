@@ -486,7 +486,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E06-S01 | GDD ingestion: Markdown parsing to `GddRef` index and areas | feat | E06-X01 | MEDIUM | TODO |
 | E06-S02 | GDD readiness analysis run and findings | feat | E06-S01, E05-S01 | HIGH | TODO |
 | E06-S03 | Requirement normalisation and `traceability.yaml` | feat | E06-S01 | MEDIUM | TODO |
-| E06-S04 | `GddCompiler`, `Orchestrator.plan_phase`, `walk phase plan` | feat | E06-S03, E03-S09 | HIGH | TODO |
+| E06-S04 | `GddCompiler`, `Orchestrator.plan_phase`, `walk phase plan` | feat | E06-S02, E06-S03, E03-S09 | HIGH | TODO |
 | E06-S05 | Traceability chain queries | feat | E06-S03, E03-S12 | MEDIUM | TODO |
 | E06-S06 | GDD coverage computation and `gdd-coverage.md` | feat | E06-S05 | MEDIUM | TODO |
 | E06-S07 | Phase scope guard and scope assignment | feat | E06-S04 | LOW | TODO |

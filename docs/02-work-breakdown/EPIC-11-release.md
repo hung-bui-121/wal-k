@@ -421,3 +421,96 @@ _pending_
 
 ---
 
+### E11-S04 — Final QC on RC and rejection bugs
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §76, §63, §64, §23, §136 (`FINAL QC`), §137 (Inv. 4, 9)
+**Depends on:** E11-S03, E03-S15
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A built RC gets an independent final QC run through a `qc` carrier task; an approving QC report moves it to `PASSED`, a rejection moves it to `REJECTED` with the bugs QC created linked as rejection bugs, those bugs flow through the normal bug loop, and when the last one completes the kernel itself raises `next_rc` so the next RC is built — the §76 RC1 → QC → REJECT → RC2 → QC → PASS cycle.
+
+#### Scope
+- In: `RELEASE_STEP_CONTRACTS`, `release_step_brief`, `ReleaseManager.open_step`; opening the QC carrier after `build_ok`; `ReleaseManager.on_run_completed` for the `qc` step; QC-output path writing `QC_RESULT` with `rc_id` for carriers; rejection-bug linking; hook callable `release_bug_complete_next_rc` (`ON_TASK_COMPLETE`); automatic build of the successor RC; daemon command `rc.qc` and `walk rc qc`.
+- Out: carrier routing and the `release_step_done` transition (E11-S01); the bug loop itself (E03-S15, unchanged); `ua-review` and `publish` steps (E11-S05/S06); QC on physical devices (QC uses the fake/real tools its policy allows; no device farm integration is planned).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/orchestrator/protocols.py` | modify | `ReleaseManager.open_step`, `.on_run_completed`, `.on_bug_completed` |
+| `src/walk/orchestrator/release.py` | modify | `RELEASE_STEP_CONTRACTS`, `release_step_brief`, `release_bug_complete_next_rc`, `DefaultReleaseManager.open_step/on_run_completed/on_bug_completed`; `build` opens the QC step after `build_ok` |
+| `src/walk/orchestrator/service.py` | modify | — (run-completion path calls `release.on_run_completed` for items with `release_step_of(item) == QC`; QC_RESULT payload gains `rc_id` for carriers) `(verify E03-S14 completion path)` |
+| `src/walk/orchestrator/commands.py` | modify | — (command `rc.qc`) |
+| `src/walk/cli/cmd_rc.py` | modify | `rc_app` (`qc`) |
+| `src/walk/cli/composition.py` | modify | — (registers `release_bug_complete_next_rc` on `ON_TASK_COMPLETE`, priority 150, `log_and_continue`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (`ReleaseManager` methods; §6 `walk rc qc`) |
+| `tests/orchestrator/test_release_qc.py` | create | — |
+| `tests/orchestrator/test_release_rejection_loop.py` | create | — |
+| `tests/cli/test_cmd_rc_qc.py` | create | — |
+
+#### Interface contract
+Carrier-task mechanism: this file's header; `ReleaseStep`, `release_labels`, `release_step_of`, `rc_id_of` from E11-S01; `rc_workflow` per INTERFACES §3.6; RC payload per E11-S02; `BugDraft` per DOMAIN-MODEL §4.1.
+```python
+# src/walk/orchestrator/release.py
+RELEASE_STEP_CONTRACTS: dict[ReleaseStep, tuple[AgentRole, list[EvidenceKind]]] = {
+    ReleaseStep.QC: (AgentRole.QC, [EvidenceKind.QC_REPORT]),
+    ReleaseStep.UA_REVIEW: (AgentRole.UA_RELEASE, []),
+    ReleaseStep.PUBLISH: (AgentRole.UA_RELEASE, []),
+}   # (contract.owner_role, contract.required_evidence)
+
+def release_step_brief(rc: ReleaseCandidate, step: ReleaseStep, *, artifacts: list[Evidence], open_bugs: list[Bug]) -> str: ...
+    # carrier description: RC id, commit, targets, artifact paths, open bugs, verdict rules of the step
+
+async def release_bug_complete_next_rc(ctx: HookContext) -> HookResult: ...   # ON_TASK_COMPLETE → ReleaseManager.on_bug_completed
+
+# ReleaseManager additions
+async def open_step(self, rc_id: ReleaseCandidateId, step: ReleaseStep) -> WorkItem: ...
+    """Creates (or returns the existing non-terminal) carrier TASK: labels release_labels(rc_id, step), state READY,
+    contract.owner_role/required_evidence from RELEASE_STEP_CONTRACTS, description release_step_brief(...)."""
+async def on_run_completed(self, item: WorkItem, output: AgentOutput, effects: AppliedEffects) -> ReleaseCandidate | None: ...
+async def on_bug_completed(self, bug_id: BugId) -> ReleaseCandidate | None: ...
+```
+CLI: `walk rc qc RC_ID` — (re)opens the QC step of an RC in `QC`.
+
+#### Behavior
+1. After `build_ok` (E11-S03) the RC is in `QC` and `build` calls `open_step(rc, QC)`; the carrier is routed to `(QC, "QC")` by E11-S01 and scheduled like any `READY` task; `cross_model_review` preference of §23 applies through the QC role policy, and the QC run never shares a run with an implementer of the release commit (Inv. 4 — a carrier is a separate work item with owner QC).
+2. `open_step` is idempotent: an existing carrier with the same labels in a non-terminal state is returned; a second QC carrier for the same RC is created only after the previous one is `COMPLETE`.
+3. `on_run_completed` (called only for `qc` carriers in this story): output `APPROVED` with a `QC_REPORT` evidence → `event(rc, "qc_pass", extra={"rc_fields": {"qc_report_evidence_id": <id>}})` → `PASSED` when guard `no_open_blocker_bugs` holds; output `REJECTED` → the bugs created from `output.new_bugs` by the applier (`effects.bug_ids`, E03-S14) become `rejection_bug_ids` in `event(rc, "qc_reject", extra={"rc_fields": {"qc_report_evidence_id": …, "rejection_bug_ids": […]}})` → `REJECTED`.
+4. `qc_pass` rejected by `no_open_blocker_bugs` (a BLOCKER bug opened elsewhere) or a `REJECTED` output without new bugs (guard `rejection_bugs_created`): the RC stays in `QC`, an `ERROR` ledger event with `rc_id` and the guard name is written, and an escalation to `ORCHESTRATOR` is raised (`DecisionManager.escalate`, level 2); `walk rc qc RC_ID` re-opens the step after the cause is fixed.
+5. Rejection bugs carry `against_commit = rc.commit` (set by `on_run_completed` before linking, through `WorkflowManager` update `(verify field update API)`) and follow the E03-S15 loop unchanged (triage, fix, review, re-test, reopen).
+6. `QC_RESULT` for a carrier run is written once by the orchestrator QC-output path with payload `rc_id`, `verdict`, `bug_ids` (ARCHITECTURE §4.3 write point `orchestrator.Orchestrator`); the RC-level `ON_QC_RESULT`/`ON_BUG_CREATED` hooks fired by `rc_event` do not write a second one (WBS §3.5).
+7. `on_bug_completed(bug_id)`: when the bug is a rejection bug of the current `REJECTED` RC and every rejection bug is `COMPLETE` or `CANCELLED`, raises `next_rc` (Who: KERNEL) → successor RC in `BUILDING` at the current `release_branch` HEAD, then schedules `build(successor)` (E11-S03); otherwise returns `None`. Idempotent: a second call after the successor exists does nothing.
+8. `walk rc qc RC_ID` with an RC not in `QC` → exit 2 (guard semantics).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given RC-01 reaching `QC` via `build` When the carrier is inspected Then one TASK in `READY` with labels `walk-release:RC-01`, `walk-release-step:qc`, `owner_role == QC`, `required_evidence == [QC_REPORT]`, and the description lists every build artifact path | `tests/orchestrator/test_release_qc.py::test_qc_step_opened_after_build_ok` |
+| 2 | Given `open_step(RC-01, QC)` called twice Then the same work item id | `tests/orchestrator/test_release_qc.py::test_open_step_idempotent` |
+| 3 | Given a fake QC run returning `APPROVED` with a QC report When completed Then RC-01 `PASSED`, `qc_report_evidence_id` set, carrier `COMPLETE`, one `QC_RESULT` with `rc_id == "RC-01"` | `tests/orchestrator/test_release_qc.py::test_qc_pass_moves_rc_to_passed` |
+| 4 | Given a fake QC run returning `REJECTED` with one BLOCKER `new_bugs` entry When completed Then a BUG exists with `against_commit == rc.commit`, RC-01 `REJECTED` with `rejection_bug_ids == [that bug]` | `tests/orchestrator/test_release_qc.py::test_qc_reject_links_rejection_bugs` |
+| 5 | Given an open BLOCKER bug elsewhere and an approving QC run When completed Then RC stays `QC`, an `ERROR` event names `no_open_blocker_bugs`, an escalation to ORCHESTRATOR exists | `tests/orchestrator/test_release_qc.py::test_qc_pass_blocked_escalates` |
+| 6 | Given a `REJECTED` QC output without bugs When completed Then RC stays `QC` and `ERROR` names `rejection_bugs_created` | `tests/orchestrator/test_release_qc.py::test_qc_reject_without_bugs_kept_in_qc` |
+| 7 | Given RC-01 `REJECTED` with two rejection bugs When the first completes Then no successor; when the second completes Then RC-02 `BUILDING` and a build is scheduled | `tests/orchestrator/test_release_rejection_loop.py::test_last_rejection_bug_triggers_next_rc` |
+| 8 | Given the successor exists When `on_bug_completed` is called again Then no third RC | `tests/orchestrator/test_release_rejection_loop.py::test_next_rc_idempotent` |
+| 9 | Given a completed reject cycle When the ledger is queried Then `RC_TRANSITION` events `create, build_ok, qc_reject, next_rc` for RC-01/RC-02 in order and one `QC_RESULT` per QC run | `tests/orchestrator/test_release_rejection_loop.py::test_reject_cycle_ledger_trail` |
+| 10 | Given RC-01 in `QC` When `walk rc qc RC-01` Then exit 0 and the carrier id printed; RC in `PASSED` Then exit 2 | `tests/cli/test_cmd_rc_qc.py::test_rc_qc_reopens_step` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the fixture repo with scripted fake QC outputs: `walk rc build RC-01` → `walk run --once` (QC rejects) → `walk rc show RC-01` (REJECTED, bug id) → bug loop via fakes → `walk rc list` (RC-02 BUILDING) → `walk ledger query --kind RC_TRANSITION`.
+
+#### Notes
+- Carrier-task mechanism (header, binding); §63 QC authority (only QC creates the rejection bugs, through `AgentOutput.new_bugs`); §64 bug loop unchanged; ARCHITECTURE §4.3 `QC_RESULT`/`BUG_CREATED` write point; E11-X01 item 5 confirms the single run-completion path.
+- Release instructions are given in the carrier description (`release_step_brief`), not in `QC.md.j2`, so no `PROMPT` behaviour version changes in this story.
+- `NEW NAME:` `RELEASE_STEP_CONTRACTS`, `release_step_brief`, hook callable `release_bug_complete_next_rc`, `ReleaseManager.open_step/on_run_completed/on_bug_completed`, `QC_RESULT` payload key `rc_id`, `CommandConsumer` command `rc.qc`, `walk rc qc`.
+- Commit subject: `feat: add final qc and rejection loop for release candidates (E11-S04)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
