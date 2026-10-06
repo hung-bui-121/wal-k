@@ -1,4 +1,5 @@
 import importlib.metadata
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -6,9 +7,11 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_keyring import FakeKeyringBackend
+from tests.fakes.fake_shim import write_shim
 from tests.fakes.fake_subprocess import FakeSubprocessRunner
 from walk.common.errors import ConfigError, Timeout
 from walk.integrations import (
+    AsyncioSubprocessRunner,
     CredentialStore,
     DefaultIntegrationManager,
     ManifestStore,
@@ -157,6 +160,19 @@ async def test_detect_timeout_reports_unknown() -> None:
 
     assert status.state is ReadinessState.UNKNOWN
     assert "5 s" in status.detail
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shim")
+async def test_detect_reports_ready_for_cmd_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_shim(tmp_path, "dotnet", output="8.0.401")
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    status = await detect_dotnet(AsyncioSubprocessRunner())
+
+    assert status.state is ReadinessState.READY, status.detail
+    assert status.version == "8.0.401"
 
 
 async def test_detect_unity_reports_project_editor_version(tmp_path: Path) -> None:

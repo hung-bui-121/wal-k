@@ -3,6 +3,7 @@ import dataclasses
 import functools
 import importlib
 import json
+import shutil
 import sys
 import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -691,6 +692,7 @@ async def _probe(argv: list[str]) -> tuple[int, str, str]:
 async def test_sdk_client_available_checks_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    real_which = shutil.which
     record: dict[str, Any] = {}
     stub = _stub_sdk(tmp_path, record)
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", stub)
@@ -701,7 +703,11 @@ async def test_sdk_client_available_checks_cli(
     assert ok is False
     assert "not found" in detail
 
-    monkeypatch.setattr(client_module.shutil, "which", lambda _: sys.executable)
+    def which(name: str, path: str | None = None) -> str | None:
+        # Global patch: answer only the CLI lookup; the probe runner resolves through here too.
+        return sys.executable if name == "claude" else real_which(name, path=path)
+
+    monkeypatch.setattr(client_module.shutil, "which", which)
     ok, detail = await SdkClaudeClient(probe=_probe).available()
     assert ok is True
     assert "Python" in detail

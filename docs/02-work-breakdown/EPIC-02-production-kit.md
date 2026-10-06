@@ -2138,7 +2138,7 @@ _pending_
 
 ### E02-B01 — Subprocess runner resolves Windows `.cmd`/`.bat` shims
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §26, §27, §91
 **Depends on:** E02-S02
@@ -2212,7 +2212,40 @@ def unsafe_batch_argument(executable: str, args: list[str]) -> int | None:
 - Commit subject: `bugfix: resolve windows batch shims in subprocess runner (E02-B01)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12.11):
+```
+364 files already formatted
+All checks passed!
+Success: no issues found in 362 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1142 passed, 3 deselected in 415.46s (0:06:55)
+```
+Touched modules: `integrations/subprocess.py` 100 %, `model_router/adapters/codex/process.py` 100 %.
+All seven acceptance tests pass on this Windows host (AC 1, 4, 6 and 7 are `skipif(sys.platform != "win32")`; AC 2, 3 and 5 run everywhere).
+
+Demo on a temporary git repository outside this repository. Codex is **not installed** on this host, and this batch's instructions forbid running real provider CLIs, so the owner-host demo with npm Codex was replaced by a fake `codex.cmd` batch shim (answers `--version` and `exec --help` with the ADR-0014 flags) put first on `PATH`:
+```
+$ PATH="<scratch>/b01shims:$PATH" walk doctor --repo <tmp>/game
+component                                state          version   detail
+---------------------------------------  -------------  --------  ------------------------------------------------------
+tools.git                                ready          2.41.0
+tools.graphify                           ready          0.9.48
+tools.dotnet                             ready          10.0.100
+providers.codex                          ready          0.160.1
+  providers.codex: missing -> ready 0.160.1
+exit=0
+```
+Before this change the same probe gave `providers.codex  missing  executable not found: codex` (E02-S02 Evidence). The real npm-Codex demo is still open for the owner's host.
+
+Level-0 decisions:
+- **Refusal message index.** `unsafe_batch_argument` returns an index into `args` (`argv[1:]`), as AC 5 fixes. The stderr message `refused: argument <n> is unsafe for batch file <name>` reports the **argv position** (`n = index + 1`), so `run([shim, "a&b"])` says `argument 1`. `AsyncioCodexProcessLauncher` uses the same numbering in its `PermissionError`.
+- **One lookup per call.** `run` resolves `argv[0]` once, then decides 127 / 126 / spawn. A `FileNotFoundError` from the spawn itself (the file vanished after the lookup) is still reported as 127, with the OS reason appended.
+- **Codex launcher.** The local copy is a private `_spawnable(executable, args)` (resolve, then refuse). `launch` raises `PermissionError`, and `_quick` catches `FileNotFoundError` and `PermissionError` and returns `(False, <message>)`. The probe arguments are constants, so a refusal there cannot happen in practice. `launch` keeps resolving on the kernel's `PATH` (Behavior 4 applies to the runner only).
+- **`write_shim(directory, name, *, output, marker=None) -> Path`.** On Windows it writes `<name>.cmd` with `@echo off`, `echo <output>` and, with `marker`, `type nul > "<marker>"`. Elsewhere it writes an executable `#!/bin/sh` script.
+- **No re-export.** The new names stay in `walk.integrations.subprocess`. `walk/integrations/__init__.py` is not in the Files table.
+
+File outside the Files table (named in the commit body): `tests/model_router/adapters/claude/test_adapter.py::test_sdk_client_available_checks_cli`. The test patches the global `shutil.which` with a one-argument lambda that answers `sys.executable` for **every** name. The runner it uses as a probe now calls `shutil.which(name, path=...)`, so the lambda raised `TypeError`, and it would also have resolved `no-such-cli.exe` to Python. The stub now answers only the `claude` lookup and delegates every other name to the real `which`. All assertions are unchanged.
 
 ---
 

@@ -6,8 +6,11 @@ so that it can be unit-tested with a scripted fake instead of spawning processes
 
 import asyncio
 import logging
+import shutil
+import sys
 import time
-from typing import Protocol
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 from pydantic import Field
 
@@ -15,7 +18,11 @@ from walk.common.errors import Timeout
 from walk.common.models import FrozenModel
 
 _LOG = logging.getLogger(__name__)
-_EXIT_NOT_FOUND = 127  # POSIX shell convention for "command not found"
+_EXIT_NOT_FOUND: Final = 127  # POSIX shell convention for "command not found"
+_EXIT_REFUSED: Final = 126  # POSIX "found but cannot be executed"
+_BATCH_SUFFIXES: Final = (".cmd", ".bat")
+
+BATCH_UNSAFE_CHARS: str = '%!"&|<>^\r\n'  # characters cmd.exe re-parses in batch-file arguments
 _MS_PER_S = 1000
 
 
@@ -63,30 +70,38 @@ class AsyncioSubprocessRunner:
     ) -> SubprocessResult:
         """Run ``argv``; ``env=None`` inherits the environment, a dict replaces it entirely.
 
-        ``input_text`` is written to stdin (UTF-8). A missing executable is reported as exit
-        code 127 with the reason on stderr, like a POSIX shell.
+        ``argv[0]`` is resolved with `resolve_executable` (``PATHEXT`` shims on Windows), and the
+        resolved path is spawned. ``input_text`` is written to stdin (UTF-8). A missing
+        executable is reported as exit code 127, and an argument that ``cmd.exe`` would re-parse
+        for a ``.cmd``/``.bat`` executable as exit code 126; in both cases nothing is spawned
+        and the reason is on stderr, like a POSIX shell.
 
         Raises:
             Timeout: The command ran longer than ``timeout_s``; it has been killed.
         """
         started = time.monotonic()
+        executable = resolve_executable(argv[0], env)
+        if executable is None:
+            return _unspawned(argv, _EXIT_NOT_FOUND, f"executable not found: {argv[0]}", started)
+        unsafe = unsafe_batch_argument(executable, argv[1:])
+        if unsafe is not None:
+            position = unsafe + 1  # argv position: argument 1 is the first after the executable
+            _LOG.warning("refused batch-file argument", extra={"argv0": argv[0], "index": position})
+            reason = f"refused: argument {position} is unsafe for batch file {argv[0]}"
+            return _unspawned(argv, _EXIT_REFUSED, reason, started)
         try:
             proc = await asyncio.create_subprocess_exec(
-                *argv,
+                executable,
+                *argv[1:],
                 cwd=cwd,
                 env=env,
                 stdin=asyncio.subprocess.PIPE if input_text is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except FileNotFoundError as exc:
-            return SubprocessResult(
-                argv=list(argv),
-                exit_code=_EXIT_NOT_FOUND,
-                stdout="",
-                stderr=f"executable not found: {argv[0]} ({exc})",
-                duration_ms=_elapsed_ms(started),
-            )
+        except FileNotFoundError as exc:  # removed between lookup and spawn
+            reason = f"executable not found: {argv[0]} ({exc})"
+            return _unspawned(argv, _EXIT_NOT_FOUND, reason, started)
         stdin = input_text.encode("utf-8") if input_text is not None else None
         try:
             out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout_s)
@@ -103,6 +118,59 @@ class AsyncioSubprocessRunner:
             stderr=err.decode("utf-8", errors="replace"),
             duration_ms=_elapsed_ms(started),
         )
+
+
+def resolve_executable(name: str, env: Mapping[str, str] | None) -> str | None:
+    """Absolute path of executable ``name``, searched the way the child's spawn would search.
+
+    The search path is the ``PATH`` of ``env`` when ``env`` is given and has one (matched
+    case-insensitively on Windows), else the kernel's ``PATH``. On Windows `shutil.which` applies
+    the kernel's ``PATHEXT``, so ``codex`` finds ``codex.cmd``.
+
+    Returns:
+        The resolved path, or None when ``name`` is not found.
+    """
+    return shutil.which(name, path=_search_path(env))
+
+
+def unsafe_batch_argument(executable: str, args: list[str]) -> int | None:
+    """Index in ``args`` of the first argument ``cmd.exe`` would re-parse for a batch file.
+
+    Applies only when ``executable`` ends with ``.cmd`` or ``.bat`` (case-insensitive): an
+    argument containing a `BATCH_UNSAFE_CHARS` character could inject commands (the
+    CVE-2024-24576 class). Pure; independent of the running platform.
+
+    Returns:
+        The index of the first unsafe argument, or None when there is none or the executable
+        is not a batch file.
+    """
+    if not executable.lower().endswith(_BATCH_SUFFIXES):
+        return None
+    for index, arg in enumerate(args):
+        if any(char in BATCH_UNSAFE_CHARS for char in arg):
+            return index
+    return None
+
+
+def _unspawned(argv: list[str], exit_code: int, reason: str, started: float) -> SubprocessResult:
+    """The result of a command that was not spawned; ``reason`` goes to stderr."""
+    return SubprocessResult(
+        argv=list(argv),
+        exit_code=exit_code,
+        stdout="",
+        stderr=reason,
+        duration_ms=_elapsed_ms(started),
+    )
+
+
+def _search_path(env: Mapping[str, str] | None) -> str | None:
+    """The ``PATH`` value of ``env``; None (the kernel's ``PATH``) when absent."""
+    if env is None:
+        return None
+    if sys.platform == "win32":
+        values = [value for key, value in env.items() if key.upper() == "PATH"]
+        return values[0] if values else None
+    return env.get("PATH")
 
 
 def _elapsed_ms(started: float) -> int:

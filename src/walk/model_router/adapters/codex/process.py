@@ -16,6 +16,10 @@ from walk.model_router.adapters.codex.command import CODEX_BINARY
 
 _LINE_LIMIT_BYTES: Final = 16 * 1024 * 1024  # one JSONL event can carry a large tool output
 _QUICK_TIMEOUT_S: Final = 30.0
+# Local copy of walk.integrations.subprocess.BATCH_UNSAFE_CHARS (model_router may not import
+# integrations): characters cmd.exe re-parses in the arguments of a .cmd/.bat file.
+_BATCH_UNSAFE_CHARS: Final = '%!"&|<>^\r\n'
+_BATCH_SUFFIXES: Final = (".cmd", ".bat")
 
 
 class CodexProcess(Protocol):
@@ -107,8 +111,10 @@ class AsyncioCodexProcessLauncher:
 
         Raises:
             FileNotFoundError: ``argv[0]`` cannot be found.
+            PermissionError: ``argv[0]`` resolves to a batch file and an argument contains a
+                character ``cmd.exe`` would re-parse; nothing is started.
         """
-        executable = _resolve(argv[0])
+        executable = _spawnable(argv[0], argv[1:])
         stdin = Path(stdin_path).open("rb") if stdin_path is not None else None  # noqa: ASYNC230, SIM115 - handed to the child, closed below
         try:
             process = await asyncio.create_subprocess_exec(
@@ -136,8 +142,8 @@ class AsyncioCodexProcessLauncher:
 
     async def _quick(self, *args: str) -> tuple[bool, str]:
         try:
-            executable = _resolve(self._binary)
-        except FileNotFoundError as exc:
+            executable = _spawnable(self._binary, list(args))
+        except (FileNotFoundError, PermissionError) as exc:
             return False, str(exc)
         process = await asyncio.create_subprocess_exec(
             executable, *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -147,9 +153,15 @@ class AsyncioCodexProcessLauncher:
         return process.returncode == 0, text or f"exit code {process.returncode}"
 
 
-def _resolve(executable: str) -> str:
+def _spawnable(executable: str, args: list[str]) -> str:
+    """The resolved path of ``executable``, refusing batch-file arguments ``cmd.exe`` re-parses."""
     resolved = shutil.which(executable)
     if resolved is None:
         msg = f"executable not found: {executable}"
         raise FileNotFoundError(msg)
+    if resolved.lower().endswith(_BATCH_SUFFIXES):
+        for index, arg in enumerate(args, start=1):
+            if any(char in _BATCH_UNSAFE_CHARS for char in arg):
+                msg = f"refused: argument {index} is unsafe for batch file {executable}"
+                raise PermissionError(msg)
     return resolved
