@@ -1750,6 +1750,7 @@ READ_ONLY_PURPOSES: frozenset[str] = frozenset({"REVIEW", "QC", "TRIAGE", "PLAN"
 - Demo with both fakes on the E01 gate fixture extended by the test: `walk work show STORY-0001` shows `READY_FOR_REVIEW → LEAD_DEV_REVIEW (start_review, KERNEL)` and `LEAD_DEV_REVIEW → REWORK (review_rejected, LEAD_DEV)`; `cat .walk/work/LOCAL-2.md` shows the `Review rejected:` comment; `walk handover show STORY-0001` shows reason `REASSIGN`.
 
 #### Notes
+- From E01-B01 (2026-10-07): when this story adds READY_FOR_REVIEW admission, also add `tests/e2e/test_e01_gate.py`-style coverage proving a REVIEW run starts on the same branch after the implementer run completed (the REVIEW variant of E01-B01 AC 5, which Epic 01 could only prove through the rework path).
 - §61, §23, Invariant 4 (ARCHITECTURE §7 row 4), ADR-0006 consequence ("review/QC verdicts are workflow events raised by the kernel"), INTERFACES §5.1, E03-S07 rule 5.
 - `NEW NAME:` `ADMISSION_EVENTS`, `Scheduler.admission_payload`, `ReviewFlow`, `REVIEW_FINDINGS_SECTION`, `READ_ONLY_PURPOSES`, `scheduled_states.yaml` rows for `LEAD_DEV_REVIEW`, handover reason `REASSIGN` used for review feedback (value exists in `Handover.reason`), idempotency key `handover:{review_run_id}:0` (ARCHITECTURE §5.4 format with checkpoint_seq 0), counters `scheduler.admission_rejected`, `review.rejected_without_findings`.
 - Also read: E01-S29 presumably hard-codes `start_implementation` on admission; replace it with the `ADMISSION_EVENTS` lookup in this commit (no behaviour change for READY/REWORK stories).
@@ -2370,6 +2371,7 @@ class Scheduler:
 - Demo (fixture from `test_two_stories_run_concurrently_in_separate_worktrees`, `--repo <tmp>`): `walk status --verbose` while both runs are active → two active runs and the last tick report; `git worktree list` shows two run worktrees on two `story/` branches.
 
 #### Notes
+- From E01-B01 review (2026-10-07): worktrees of FAILED and BLOCKED runs are kept and reused by the item's next run, and nothing removes them when the item reaches COMPLETE or CANCELLED. This story adds that cleanup (remove the worktree, keep the branch unless merged) and a test for it.
 - INTERFACES §4 "Scheduling order", §5.1; ARCHITECTURE §3.2 "Concurrency"; ADR-0009 D-4/D-5; §60.
 - `NEW NAME:` `TickReport`, `SkipReason`, `ORDER_GROUPS`, `Scheduler.order`, `Scheduler.running_by_role` (extended by E07-S01), `Scheduler.last_report`, counters `scheduler.admitted`, `scheduler.skipped.<reason>`, SENIOR_DEV default `max_parallel_runs: 2`.
 - Also read: E01-S29/S30 are not yet written; `orchestrator/scheduler.py`, `orchestrator/models.py` and `cli/cmd_status.py` are the assumed file names (WBS §3.7). If E01-S29 already sorts items, replace its key with `order` in this commit.

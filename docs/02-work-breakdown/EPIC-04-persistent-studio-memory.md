@@ -621,6 +621,7 @@ CLI: `walk handover show (ITEM_ID | HO_ID) [--json]`; `walk handover create RUN_
 - Demo: `walk handover show STORY-0001` → document with `reason: PARTIAL` front matter.
 
 #### Notes
+- From E01-B05 (2026-10-07): handover document/row/HANDOFF-checkpoint consistency is already delivered by E01-B05. Behavior 1 is satisfied; keep its acceptance test only if it adds coverage beyond `tests/runtime` E01-B05 tests, otherwise drop it and record that in Evidence.
 - ADR-0002 D-5, ADR-0004 D-5. `handovers.ai_path` is set by `CheckpointManager` after `MemoryManager.write_handover` returns the path.
 - `NEW NAME:` `CheckpointManager.open_handover_for`, `CheckpointManager.close_handover`; command action `handover.create`.
 - Commit subject: `feat: add handover document lifecycle and cli (E04-S06)`.
