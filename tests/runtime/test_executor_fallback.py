@@ -21,7 +21,7 @@ from walk.model_router import FallbackTrigger, ModelAdapter, RunSession
 from walk.model_router.models import AgentEvent
 from walk.permissions import ApprovalRepository, Approver
 from walk.runtime import AgentRun, AgentRunState, CheckpointKind, HandoverRepository
-from walk.telemetry import LedgerEventKind
+from walk.telemetry import DefaultTelemetryManager, LedgerEventKind, LedgerRepository
 from walk.workflow import WorkItemState
 
 K = LedgerEventKind
@@ -315,3 +315,39 @@ async def test_continuation_final_audit_covers_parent_commits(
     assert new.failure_reason == f"boundary: {forbidden}"
     error = (await env.events(new.id, K.ERROR))[0]
     assert error.payload == {"kind": "BOUNDARY", "violations": [forbidden]}
+
+
+async def test_run_ended_payload_carries_handover_in_id(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters, _ = _adapters(fake_clock, _outage(), script(tool_calls=5))
+    env = await make_executor_env(adapters=adapters)
+
+    await env.run_to_end()
+
+    run_a, run_b = await _chain(env)
+    (ended_a,) = await env.events(run_a.id, K.AGENT_RUN_ENDED)
+    (ended_b,) = await env.events(run_b.id, K.AGENT_RUN_ENDED)
+    assert ended_a.payload["handover_in_id"] is None
+    assert ended_b.payload["handover_in_id"] == "HO-0001"
+    assert ended_b.outcome == "OK"
+
+
+async def test_failed_continuations_count_as_failed_handoffs(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters, _ = _adapters(fake_clock, _outage(), _outage())
+    env = await make_executor_env(adapters=adapters)
+
+    await env.run_to_end()
+
+    chain = await _chain(env)
+    assert [r.handover_in_id for r in chain] == [None, "HO-0001", "HO-0002"]
+    assert chain[-1].state is AgentRunState.BLOCKED_PROVIDER
+    telemetry = DefaultTelemetryManager(env.repo, LedgerRepository(env.db), fake_clock)
+    try:
+        metrics = await telemetry.metrics()
+    finally:
+        telemetry.close()
+    assert metrics.failed_handoffs == 2
+    assert metrics.fallbacks == 2

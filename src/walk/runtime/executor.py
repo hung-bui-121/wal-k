@@ -1205,6 +1205,7 @@ class DefaultAgentExecutor:
                 "tool_calls": live.run.tool_calls,
                 "repair_turns": live.run.repair_turns,
                 "failure_reason": end.reason,
+                "handover_in_id": live.run.handover_in_id,  # failed_handoffs metric (E01-B04)
                 **(payload or {}),
             }
             await self._ledger.append(

@@ -1507,6 +1507,11 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
     {state: FAILED, failure_reason, mode: "recovery"} (outcome FAILED) is written; after commit ON_TASK_FAILED fires
     (a hook failure is logged). The run is reported in RecoveryReport.failed and the loop continues. A run already
     HANDED_OVER when the error is raised (its continuation started) keeps that state and its single AGENT_RUN_ENDED.
+
+ E01-B04: every AGENT_RUN_ENDED payload (executor: COMPLETED, FAILED*, HANDED_OVER, BLOCKED_*, CANCELLED; recovery:
+ HANDED_OVER and the failure path) carries handover_in_id = the ended run's handover_in_id (null for a run that did not
+ start from a handover). TelemetryManager's failed_handoffs metric counts AGENT_RUN_ENDED with outcome FAILED and a
+ non-null handover_in_id.
 ```
 
 ### 5.4 Context-first retrieval (§40, §42) — `ContextManager.build` (ADR-0012)

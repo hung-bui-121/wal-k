@@ -372,6 +372,7 @@ async def test_recover_failure_ends_run_and_unassigns_item(
         "state": "FAILED",
         "failure_reason": "recovery: disk full",
         "mode": "recovery",
+        "handover_in_id": None,
     }
     assert kinds.index(K.ERROR) < kinds.index(K.AGENT_RUN_ENDED)
     failed = new.hooks_fired(HookName.ON_TASK_FAILED)

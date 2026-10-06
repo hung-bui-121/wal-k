@@ -6048,7 +6048,7 @@ seq  at                         kind                actor       item        run 
 
 ### E01-B03 — A fallback or recovery continuation measures `has_commit` from the lineage start
 
-**Status:** DONE (pending)
+**Status:** DONE (db8d4ec)
 **Type:** bugfix
 **Requirements:** §21, §22, §132, §137 (Inv. 12)
 **Depends on:** E01-R01
@@ -6140,7 +6140,7 @@ seq  at                         kind                  actor       item        ru
 
 ### E01-B04 — `AGENT_RUN_ENDED` carries `handover_in_id` so `failed_handoffs` counts real runs
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §81, §115, §22
 **Depends on:** E01-R01
@@ -6160,6 +6160,8 @@ seq  at                         kind                  actor       item        ru
 | `src/walk/runtime/executor.py` | modify | — (`_end` payload) |
 | `src/walk/runtime/recovery.py` | modify | — (`_continued` payload) |
 | `tests/runtime/test_executor_fallback.py` | modify | — |
+| `tests/runtime/test_recovery.py` | modify | — (added in implementation: E01-B02 exact-payload assertion gains the key) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (added in implementation: §5.3 records the payload key) |
 
 #### Interface contract
 `AGENT_RUN_ENDED.payload` gains `handover_in_id: HandoverId | None` (the ended run's `handover_in_id`) on every path: COMPLETED, FAILED, HANDED_OVER, BLOCKED_*, CANCELLED, recovery. The E01-S06 metric SQL is unchanged.
@@ -6185,7 +6187,35 @@ seq  at                         kind                  actor       item        ru
 - Commit subject: `bugfix: record handover_in_id on agent run end (E01-B04)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** `handover_in_id` was written only on `AGENT_ASSIGNED`/`AGENT_RUN_STARTED`. The E01-S06 `failed_handoffs` query reads it from `AGENT_RUN_ENDED.payload`, so the metric was 0 on every real ledger. `tests/telemetry/test_metrics.py` passed only because it builds the `AGENT_RUN_ENDED` event by hand.
+
+**Fix** (metric SQL unchanged):
+- `DefaultAgentExecutor._end` adds `"handover_in_id": live.run.handover_in_id`. `_end` is the single end path of COMPLETED, FAILED, FAILED_HOOK, FAILED_BOUNDARY, HANDED_OVER, BLOCKED_BUDGET, BLOCKED_PROVIDER and CANCELLED.
+- `RecoveryManager._continued` adds the interrupted run's `handover_in_id`.
+- E01-B02's recovery failure end (`RecoveryManager._fail`) adds it as well, because the contract says "every path … recovery".
+- INTERFACES §5.3 records the payload key (additive contract change).
+
+**Files outside the Files table:**
+- `tests/runtime/test_recovery.py`: E01-B02's exact-payload assertion in `test_recover_failure_ends_run_and_unassigns_item` gains `"handover_in_id": None`.
+- `docs/01-architecture/INTERFACES.md`: the payload key above.
+
+Both are in the commit body.
+
+**Reproduce first** (before the fix):
+- AC 1 failed with `KeyError: 'handover_in_id'`.
+- AC 2 failed with `failed_handoffs == 0` (expected 2: run B HANDED_OVER from HO-0001, and run C BLOCKED_PROVIDER from HO-0002, both outcome FAILED).
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.93%
+1015 passed, 2 deselected in 385.56s (0:06:25)
+src/walk/runtime/executor.py  99% (missing 689, 708)
+src/walk/runtime/recovery.py  99% (missing 167-168)
+```
 
 ---
 

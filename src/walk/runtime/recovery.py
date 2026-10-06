@@ -156,6 +156,7 @@ class RecoveryManager:
                 "state": AgentRunState.FAILED.value,
                 "failure_reason": reason,
                 "mode": _RECOVERY,
+                "handover_in_id": failed.handover_in_id,
             }
             await self._ledger.append(
                 self._event(LedgerEventKind.AGENT_RUN_ENDED, failed, "FAILED", ended), uow=uow
@@ -279,7 +280,11 @@ class RecoveryManager:
         handover: Handover | None,
     ) -> None:
         """The interrupted run ends HANDED_OVER; RECOVERY_RESUMED and ON_RECOVERY_RESUME."""
-        ended: JsonDict = {"state": AgentRunState.HANDED_OVER.value, "mode": mode}
+        ended: JsonDict = {
+            "state": AgentRunState.HANDED_OVER.value,
+            "mode": mode,
+            "handover_in_id": run.handover_in_id,
+        }
         resumed: JsonDict = {
             "from_run_id": run.id,
             "mode": mode,
