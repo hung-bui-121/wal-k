@@ -138,10 +138,13 @@ class AgentManager(Protocol):
 ### 1.3 `walk.workflow.protocols`
 
 ```python
+type GuardSubject = WorkItem | Phase | ReleaseCandidate  # phase/RC tables share the guard registry
+
+
 class Guard(Protocol):
     """Pure predicate used in TransitionTable rows."""
 
-    def __call__(self, item: WorkItem, ctx: "TransitionContext") -> "GuardResult": ...
+    def __call__(self, item: GuardSubject, ctx: "TransitionContext") -> "GuardResult": ...
 
 
 class TransitionContext(FrozenModel):
@@ -157,33 +160,34 @@ class GuardResult(FrozenModel):
     reason: str = ""
 
 
-class Transition(FrozenModel):
-    from_state: WorkItemState | Literal["*"]  # "*" = any state not in excluded_states
-    excluded_states: tuple[WorkItemState, ...] = ()  # YAML "* except A,B"
+class Transition[S: StrEnum](FrozenModel):  # S = WorkItemState | PhaseState | ReleaseCandidateState
+    from_state: S | Literal["*"]  # "*" = any state not in excluded_states
+    excluded_states: tuple[S, ...] = ()  # YAML "* except A,B"
     event: str
-    to_state: WorkItemState | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"]  # PREVIOUS = payload resume_state
+    to_state: S | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"]  # PREVIOUS = payload resume_state
     # (unblock); CHILDREN_READY_FOR_REVIEW = state unchanged, effect force_children_review moves the children
     guards: tuple[str, ...]  # guard names (registered callables)
     allowed_roles: tuple[AgentRole, ...]  # USER may raise any event; guards still apply (§6)
     hooks: tuple[HookName, ...]  # fired after commit, in order
-    effects: tuple[str, ...] = ()  # increment_fix_loops | increment_reopen_count | store_resume_state | force_children_review
+    effects: tuple[str, ...] = ()  # increment_fix_loops | increment_reopen_count | store_resume_state |
+    # force_children_review | increment_gate_round | next_release_candidate
 
-    def applies_to(self, state: WorkItemState) -> bool: ...
+    def applies_to(self, state: S) -> bool: ...
 
 
-class TransitionTable(FrozenModel):
+class TransitionTable[S: StrEnum](FrozenModel):
     """BehaviorVersion kind=WORKFLOW, name in {'feature_workflow','story_workflow','bug_workflow','phase_workflow','rc_workflow'}."""
 
     name: str
     version: str
     kinds: tuple[WorkItemKind, ...] = ()  # work-item kinds the table governs (none for phase/RC)
-    transitions: tuple[Transition, ...]
+    transitions: tuple[Transition[S], ...]
 
 
 class WorkflowManager(Protocol):
     """§53–§54 explicit, persisted state machine. Hosted by walk.workflow."""
 
-    def table_for(self, kind: WorkItemKind) -> TransitionTable: ...
+    def table_for(self, kind: WorkItemKind) -> TransitionTable[WorkItemState]: ...
 
     async def create(
         self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None

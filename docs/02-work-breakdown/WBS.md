@@ -142,8 +142,8 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E01-S07 | Hooks runtime core: `HookManager` | hooks | DONE (eb4f3e8) |
 | E01-S08 | Work-item aggregates, repository, `WorkflowManager.create/get/query`, `walk work list/show` | workflow, cli | DONE (dff4ff5) |
 | E01-S09 | `StateMachine`, YAML `TransitionTable` loader, guard registry, `raise_event`, `story_workflow`, `walk work transition` | workflow, cli | DONE (459669b) |
-| E01-S10 | `feature_workflow`/`bug_workflow` tables, remaining guards, Definition of Ready, `ready_items`, done dimensions | workflow | DONE (pending) |
-| E01-S11 | Phases and release candidates: models, `phase_workflow`/`rc_workflow`, `walk phase list/start/gate` (minimal) | workflow, cli | Phase/RC lifecycle data model and transitions exist; gate records a decision only |
+| E01-S10 | `feature_workflow`/`bug_workflow` tables, remaining guards, Definition of Ready, `ready_items`, done dimensions | workflow | DONE (1a3924a) |
+| E01-S11 | Phases and release candidates: models, `phase_workflow`/`rc_workflow`, `walk phase list/start/gate` (minimal) | workflow, cli | DONE (pending) |
 | E01-S12 | Budgets and cost: `BudgetManager`, `CostManager`, `walk cost` | budgets, cli | Multi-scope metering with soft/hard thresholds, cost records, roll-ups |
 | E01-S13 | Effort resolution: `EffortManager.resolve/request_change` | effort | INTERFACES §5.2 algorithm, pure and tested on every branch |
 | E01-S14 | Tool and skill catalogues: `ToolRegistry`, builtin `tools.yaml`, `Skill`/`SkillProjector` models | tools, skills | Closed tool set with availability resolution; skill contracts for adapters |

@@ -7,19 +7,13 @@ from typing import Annotated
 
 import typer
 
-from walk.cli.composition import open_database
+from walk.cli.composition import open_database, open_workflow
 from walk.cli.output import exit_with, render_json, render_table
-from walk.common.clock import SystemClock
 from walk.common.errors import ConfigError, WalkError
 from walk.common.models import JsonDict
 from walk.common.roles import AgentRole
-from walk.hooks import DefaultHookManager, HookExecutionRepository
-from walk.persistence import Database, IdSequenceStore
-from walk.telemetry import DefaultLedgerManager, LedgerRepository
+from walk.persistence import Database
 from walk.workflow import (
-    TABLES_DIR,
-    DefaultWorkflowManager,
-    ProjectRepository,
     StoryContract,
     TransitionContext,
     TransitionSource,
@@ -43,23 +37,6 @@ RepoOption = Annotated[
     ),
 ]
 JsonOption = Annotated[bool, typer.Option("--json", help="Emit JSON (same as the global --json).")]
-
-
-def _workflow_manager(db: Database) -> DefaultWorkflowManager:
-    clock = SystemClock()
-    ids = IdSequenceStore(db)
-    ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, clock)
-    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, clock)
-    return DefaultWorkflowManager(
-        db,
-        WorkflowRepository(db),
-        ProjectRepository(db),
-        ids,
-        ledger,
-        hooks,
-        clock,
-        TABLES_DIR,
-    )
 
 
 def _global(ctx: typer.Context, key: str) -> object:
@@ -105,7 +82,7 @@ def list_items(
     """Print work items matching every given filter, oldest first."""
     db = _open(ctx, repo)
     try:
-        items = asyncio.run(_workflow_manager(db).query(states=state, kinds=kind, phase_id=phase))
+        items = asyncio.run(open_workflow(db).query(states=state, kinds=kind, phase_id=phase))
     finally:
         db.close()
     if _wants_json(ctx, json_output):
@@ -128,7 +105,7 @@ def show(
     """Print one item with its contract and transitions; runs and cost arrive in later stories."""
     db = _open(ctx, repo)
     try:
-        item = asyncio.run(_workflow_manager(db).get(item_id))
+        item = asyncio.run(open_workflow(db).get(item_id))
         transitions = asyncio.run(WorkflowRepository(db).transitions(item.id))
     except WalkError as exc:
         exit_with(exc)
@@ -165,7 +142,7 @@ def transition(
     )
     db = _open(ctx, repo, writable=True)
     try:
-        row = asyncio.run(_workflow_manager(db).raise_event(item_id, event, context))
+        row = asyncio.run(open_workflow(db).raise_event(item_id, event, context))
     except WalkError as exc:
         exit_with(exc)
     finally:

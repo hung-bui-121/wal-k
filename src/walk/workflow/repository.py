@@ -1,4 +1,4 @@
-"""SQLite repositories of the workflow aggregates (``work_items``, ``projects``)."""
+"""SQLite repositories of the workflow aggregates (work items, projects, phases, RCs)."""
 
 import sqlite3
 from collections.abc import Sequence
@@ -8,10 +8,17 @@ from typing import ClassVar
 from pydantic import TypeAdapter
 
 from walk.common.errors import ConfigError
-from walk.common.ids import PhaseId, WorkItemId
+from walk.common.ids import PhaseId, ProjectKey, WorkItemId
 from walk.common.models import utcnow
 from walk.persistence import Repository, UnitOfWork
-from walk.workflow.models import Project, WorkItem, WorkItemState, WorkItemTransition
+from walk.workflow.models import (
+    Phase,
+    Project,
+    ReleaseCandidate,
+    WorkItem,
+    WorkItemState,
+    WorkItemTransition,
+)
 
 _WORK_ITEM: TypeAdapter[WorkItem] = TypeAdapter(WorkItem)
 _CREATION_ORDER = "created_at, id"
@@ -169,3 +176,51 @@ class ProjectRepository(Repository[Project]):
             msg = f"expected exactly one project in the database, found {len(projects)}"
             raise ConfigError(msg, detail={"projects": [p.key for p in projects]})
         return projects[0]
+
+
+class PhaseRepository(Repository[Phase]):
+    """``phases``: the `Phase` JSON plus ordinal/state columns (ordinal unique per project)."""
+
+    _table: ClassVar[str] = "phases"
+    _model = Phase
+
+    def projection(self, obj: Phase) -> dict[str, object]:
+        """Indexed columns of the ``phases`` table.
+
+        ``Phase`` has no ``updated_at`` field; the column records the time of the write.
+        """
+        return {
+            "project_key": obj.project_key,
+            "ordinal": obj.ordinal,
+            "state": obj.state,
+            "gate_round": obj.gate_round,
+            "updated_at": _utc_text(utcnow()),
+        }
+
+    async def ordered(self) -> list[Phase]:
+        """Return every phase by ordinal."""
+        return await self.list_where(order_by="ordinal")
+
+    async def by_ordinal(self, project_key: ProjectKey, ordinal: int) -> Phase | None:
+        """Return the project's phase with ``ordinal``, or ``None``."""
+        found = await self.list_where(
+            "project_key = ? AND ordinal = ?", [project_key, ordinal], limit=1
+        )
+        return found[0] if found else None
+
+
+class ReleaseCandidateRepository(Repository[ReleaseCandidate]):
+    """``release_candidates``: the `ReleaseCandidate` JSON plus number/state/commit columns."""
+
+    _table: ClassVar[str] = "release_candidates"
+    _model = ReleaseCandidate
+
+    def projection(self, obj: ReleaseCandidate) -> dict[str, object]:
+        """Indexed columns of the ``release_candidates`` table."""
+        return {
+            "project_key": obj.project_key,
+            "number": obj.number,
+            "state": obj.state,
+            "commit_sha": obj.commit,
+            "created_at": _utc_text(obj.created_at),
+        }

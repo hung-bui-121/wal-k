@@ -1,0 +1,12 @@
+# Release-candidate lifecycle (INTERFACES §3.6, §76). States are ReleaseCandidateState values.
+# effect next_release_candidate: the rejected RC stays REJECTED and a new RC (number + 1) starts
+# in BUILDING from payload["commit"].
+name: rc_workflow
+version: "1.0"
+transitions:
+  - {from: BUILDING, event: build_ok, to: QC, guards: [build_evidence_present], roles: [KERNEL], hooks: [on_build_success]}
+  - {from: BUILDING, event: build_failed, to: REJECTED, guards: [], roles: [KERNEL], hooks: [on_build_failure]}
+  - {from: QC, event: qc_pass, to: PASSED, guards: [qc_report_evidence, no_open_blocker_bugs], roles: [QC], hooks: [on_qc_result]}
+  - {from: QC, event: qc_reject, to: REJECTED, guards: [rejection_bugs_created], roles: [QC], hooks: [on_qc_result, on_bug_created]}
+  - {from: REJECTED, event: next_rc, to: BUILDING, guards: [rejection_bugs_complete], roles: [KERNEL], hooks: [], effects: [next_release_candidate]}
+  - {from: PASSED, event: release, to: RELEASED, guards: [approval_user], roles: [USER, UA_RELEASE], hooks: []}

@@ -16,6 +16,7 @@ from walk.workflow.models import (
     DoneDimension,
     Feature,
     GuardResult,
+    GuardSubject,
     Phase,
     ReleaseCandidate,
     TransitionContext,
@@ -29,9 +30,9 @@ from walk.workflow.models import (
 
 
 class Guard(Protocol):
-    """Pure predicate used in TransitionTable rows."""
+    """Pure predicate used in TransitionTable rows (work items, phases, release candidates)."""
 
-    def __call__(self, item: WorkItem, ctx: TransitionContext) -> GuardResult:
+    def __call__(self, item: GuardSubject, ctx: TransitionContext) -> GuardResult:
         """Evaluate the guard for ``item`` with the caller-supplied facts in ``ctx``."""
         ...
 
@@ -44,7 +45,7 @@ class WorkflowManager(Protocol):
     may not import (ARCHITECTURE §2.2).
     """
 
-    def table_for(self, kind: WorkItemKind) -> TransitionTable:
+    def table_for(self, kind: WorkItemKind) -> TransitionTable[WorkItemState]:
         """Return the transition table that governs ``kind``."""
         ...
 

@@ -9,8 +9,10 @@ from walk.workflow import (
     DoneDimension,
     Feature,
     GuardResult,
+    GuardSubject,
     Phase,
     PhaseState,
+    ReleaseCandidate,
     Story,
     TransitionContext,
     TransitionSource,
@@ -383,3 +385,86 @@ def test_children_guards_with_no_children() -> None:
     result = get_guard("all_stories_integrated")(_feature(), _ctx(children_states={}))
     assert result == GuardResult(ok=False, reason="no children")
     assert not get_guard("reopen_at_max")(_story(), _ctx()).ok
+
+
+RC = ReleaseCandidate(id="RC-01", project_key="DEMO", number=1, commit="abc1234")
+
+# guard, subject, passing payload, failing payload
+LIFECYCLE_CASES: list[tuple[str, GuardSubject, dict[str, Any], dict[str, Any]]] = [
+    (
+        "previous_phase_complete_or_first",
+        PHASE,
+        {"previous_phase_state": None},
+        {"previous_phase_state": "ACTIVE"},
+    ),
+    ("scope_non_empty", PHASE.model_copy(update={"scope_epic_ids": ["EPIC-001"]}), {}, {}),
+    ("kit_validated", PHASE, {}, {"kit_validated": False}),
+    (
+        "all_scope_features_terminal",
+        PHASE,
+        {"scope_feature_states": {"FEAT-0001": "COMPLETE", "FEAT-0002": "BLOCKED"}},
+        {"scope_feature_states": {"FEAT-0001": "QC"}},
+    ),
+    ("evidence_package_written", PHASE, {"evidence_package_written": True}, {}),
+    ("retrospective_written", PHASE, {"retrospective_written": True}, {}),
+    ("feedback_non_empty", PHASE, {"feedback": "more juice"}, {"feedback": " "}),
+    ("rework_work_items_created", PHASE, {"rework_work_items_created": True}, {}),
+    ("impact_analysis_evidence_present", PHASE, {"impact_analysis_evidence_present": True}, {}),
+    ("approval_user", RC, {"approval_id": "APV-0001"}, {}),
+    (
+        "build_evidence_present",
+        RC,
+        {"build_evidence_ids": ["EVD-000001"]},
+        {"build_evidence_ids": []},
+    ),
+    ("qc_report_evidence", RC, {"qc_report_evidence_id": "EVD-000002"}, {}),
+    ("rejection_bugs_created", RC, {"rejection_bug_ids": ["BUG-0001"]}, {}),
+    (
+        "rejection_bugs_complete",
+        RC,
+        {"rejection_bug_states": {"BUG-0001": "COMPLETE"}},
+        {"rejection_bug_states": {"BUG-0001": "QC"}},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "subject", "passing", "failing"),
+    LIFECYCLE_CASES,
+    ids=[c[0] for c in LIFECYCLE_CASES],
+)
+def test_phase_and_rc_guards_evaluate_payload_keys(
+    name: str, subject: GuardSubject, passing: dict[str, Any], failing: dict[str, Any]
+) -> None:
+    guard = get_guard(name)
+    assert guard(subject, _ctx(**passing)) == GuardResult(ok=True)
+    failing_subject = PHASE if name == "scope_non_empty" else subject
+    result = guard(failing_subject, _ctx(**failing))
+    assert not result.ok
+    assert result.reason
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "definition_of_ready",
+        "fix_loops_below_max",
+        "fix_loops_at_max",
+        "in_phase_scope",
+        "all_applicable_dimensions_done",
+        "reopen_below_max",
+    ],
+)
+def test_work_item_guards_reject_phase_and_rc_subjects(name: str) -> None:
+    assert get_guard(name)(PHASE, _ctx()).reason.startswith("PHASE has no ")
+    assert get_guard(name)(RC, _ctx()).reason.startswith("RC has no ")
+    assert not get_guard("scope_non_empty")(_feature(), _ctx()).ok
+
+
+def test_lifecycle_guards_payload_missing() -> None:
+    for name in ("previous_phase_complete_or_first", "all_scope_features_terminal"):
+        assert get_guard(name)(PHASE, _ctx()) == GuardResult(ok=False, reason="payload missing")
+    for name in ("build_evidence_present", "rejection_bugs_complete"):
+        assert get_guard(name)(RC, _ctx()) == GuardResult(ok=False, reason="payload missing")
+    user = TransitionContext(actor_role=AgentRole.USER, source=TransitionSource.USER)
+    assert get_guard("approval_user")(RC, user).ok

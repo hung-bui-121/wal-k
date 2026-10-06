@@ -1,0 +1,19 @@
+# Phase lifecycle (INTERFACES §3.4, §66-§72). States are PhaseState values; rows evaluated in order.
+# request_review has two rows: the guarded one, then the USER force row (no guard).
+# effect increment_gate_round runs in the transition's transaction (gate_round += 1).
+name: phase_workflow
+version: "1.0"
+transitions:
+  - {from: PLANNED, event: start, to: ACTIVE, guards: [previous_phase_complete_or_first, scope_non_empty, kit_validated], roles: [USER, KERNEL], hooks: [on_phase_start]}
+  - {from: ACTIVE, event: request_review, to: EVIDENCE_REVIEW, guards: [all_scope_features_terminal], roles: [KERNEL, USER], hooks: [on_phase_review_start]}
+  - {from: ACTIVE, event: request_review, to: EVIDENCE_REVIEW, guards: [], roles: [USER], hooks: [on_phase_review_start]}
+  - {from: EVIDENCE_REVIEW, event: package_ready, to: USER_GATE, guards: [evidence_package_written, retrospective_written], roles: [KERNEL], hooks: [], effects: [increment_gate_round]}
+  - {from: USER_GATE, event: "decide:GO", to: COMPLETE, guards: [], roles: [USER], hooks: [on_phase_gate_decision, on_phase_complete]}
+  - {from: USER_GATE, event: "decide:REWORK", to: REWORK, guards: [feedback_non_empty], roles: [USER], hooks: [on_phase_gate_decision]}
+  - {from: USER_GATE, event: "decide:CHANGE", to: CHANGE_ANALYSIS, guards: [feedback_non_empty], roles: [USER], hooks: [on_phase_gate_decision]}
+  - {from: USER_GATE, event: "decide:STOP", to: STOPPED, guards: [], roles: [USER], hooks: [on_phase_gate_decision]}
+  - {from: REWORK, event: rework_planned, to: ACTIVE, guards: [rework_work_items_created], roles: [KERNEL], hooks: [on_phase_start]}
+  - {from: CHANGE_ANALYSIS, event: change_plan_approved, to: PLANNED, guards: [impact_analysis_evidence_present, approval_user], roles: [USER], hooks: []}
+  - {from: CHANGE_ANALYSIS, event: change_rejected, to: USER_GATE, guards: [], roles: [USER], hooks: []}
+  - {from: STOPPED, event: reopen, to: PLANNED, guards: [], roles: [USER], hooks: []}
+  - {from: "*", event: stop, to: STOPPED, guards: [], roles: [USER], hooks: []}

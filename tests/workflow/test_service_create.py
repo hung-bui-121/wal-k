@@ -21,8 +21,6 @@ from walk.workflow import (
     Severity,
     Story,
     StoryContract,
-    TransitionContext,
-    TransitionSource,
     WorkflowManager,
     WorkflowRepository,
     WorkItemDraft,
@@ -277,8 +275,6 @@ async def test_query_filters(workflow: DefaultWorkflowManager, fake_clock: FakeC
 @pytest.mark.parametrize(
     ("method", "story"),
     [
-        ("phase_event", "E01-S11"),
-        ("rc_event", "E01-S11"),
         ("children_states", "E03-S17"),
         ("open_blocker_bug_count", "E03-S17"),
         ("gdd_coverage", "E06-S06"),
@@ -287,10 +283,7 @@ async def test_query_filters(workflow: DefaultWorkflowManager, fake_clock: FakeC
 async def test_deferred_methods_name_their_story(
     workflow: DefaultWorkflowManager, method: str, story: str
 ) -> None:
-    ctx = TransitionContext(actor_role=AgentRole.USER, source=TransitionSource.USER)
     calls: dict[str, Callable[[], Awaitable[object]]] = {
-        "phase_event": lambda: workflow.phase_event("PHASE-01", "start", ctx),
-        "rc_event": lambda: workflow.rc_event("RC-01", "qc_passed", ctx),
         "children_states": lambda: workflow.children_states("FEAT-0001"),
         "open_blocker_bug_count": lambda: workflow.open_blocker_bug_count("FEAT-0001"),
         "gdd_coverage": lambda: workflow.gdd_coverage("DEMO"),

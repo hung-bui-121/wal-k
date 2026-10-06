@@ -419,17 +419,21 @@ class GuardResult(FrozenModel):
     reason: str = Field(default="", description="Why it failed; empty when ok.")
 
 
-class Transition(FrozenModel):
-    """One row of a transition table."""
+class Transition[S: StrEnum](FrozenModel):
+    """One row of a transition table over the state enum ``S``.
 
-    from_state: WorkItemState | Literal["*"] = Field(
+    ``S`` is `WorkItemState` for work items, `PhaseState` for phases and
+    `ReleaseCandidateState` for release candidates (one engine, ADR-0010 D-4).
+    """
+
+    from_state: S | Literal["*"] = Field(
         description="State the row applies to; '*' = any state not in excluded_states."
     )
-    excluded_states: tuple[WorkItemState, ...] = Field(
+    excluded_states: tuple[S, ...] = Field(
         default=(), description="States a '*' row does not apply to ('* except A,B')."
     )
     event: str = Field(description="Event name.")
-    to_state: WorkItemState | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"] = Field(
+    to_state: S | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"] = Field(
         description="Target state; 'PREVIOUS' = the payload resume_state (unblock); "
         "'CHILDREN_READY_FOR_REVIEW' = unchanged, effect force_children_review moves the children."
     )
@@ -442,14 +446,14 @@ class Transition(FrozenModel):
         "increment_fix_loops.",
     )
 
-    def applies_to(self, state: WorkItemState) -> bool:
+    def applies_to(self, state: S) -> bool:
         """Return whether the row's ``from`` side matches ``state``."""
         if self.from_state == "*":
             return state not in self.excluded_states
         return self.from_state == state
 
 
-class TransitionTable(FrozenModel):
+class TransitionTable[S: StrEnum](FrozenModel):
     """BehaviorVersion kind=WORKFLOW.
 
     Name in {'feature_workflow','story_workflow','bug_workflow','phase_workflow','rc_workflow'}.
@@ -460,4 +464,8 @@ class TransitionTable(FrozenModel):
     kinds: tuple[WorkItemKind, ...] = Field(
         default=(), description="Work-item kinds governed by the table (none for phase/RC)."
     )
-    transitions: tuple[Transition, ...] = Field(description="Rows in evaluation order.")
+    transitions: tuple[Transition[S], ...] = Field(description="Rows in evaluation order.")
+
+
+type GuardSubject = Epic | Feature | Story | Task | Bug | Phase | ReleaseCandidate
+"""What a guard evaluates: a work item, a phase or a release candidate."""

@@ -1339,7 +1339,7 @@ Level-0 decisions:
 
 ### E01-S10 — `feature_workflow`/`bug_workflow` tables, remaining guards, DoR, `ready_items`, done dimensions
 
-**Status:** DONE (pending)
+**Status:** DONE (1a3924a)
 **Type:** feat
 **Requirements:** §6.5, §53, §58, §61, §64, §131, §137 (Inv. 6)
 **Depends on:** E01-S09
@@ -1482,7 +1482,7 @@ Level-0 decisions:
 
 ### E01-S11 — Phases and release candidates: models, tables, `walk phase list/start/gate`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §66, §68, §70, §76, §93 (stop phase)
 **Depends on:** E01-S09
@@ -1562,7 +1562,47 @@ CLI: `walk phase list`, `walk phase start ID`, `walk phase gate ID --decision GO
 - Commit: `feat: add phase and release candidate lifecycles with phase cli (E01-S11)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+94 files already formatted
+All checks passed!
+Success: no issues found in 91 source files
+Required test coverage of 85% reached. Total coverage: 99.90%
+381 passed in 20.22s
+```
+Touched modules: `workflow/lifecycle.py`, `guards.py`, `state_machine.py`, `repository.py`, `service.py`, `models.py`, `cli/cmd_phase.py`, `cli/cmd_work.py`, `cli/composition.py` each 100%.
+
+Demo (scratch repo seeded with `PHASE-01` "Prototype", scope `EPIC-001`, and `PHASE-02`):
+```
+$ walk phase list --repo ./demo
+id        ordinal  name            state
+--------  -------  --------------  -------
+PHASE-01  1        Prototype       PLANNED
+PHASE-02  2        Vertical Slice  PLANNED
+$ walk phase start PHASE-01 --repo ./demo
+PHASE-01: PLANNED -> ACTIVE
+$ walk phase start PHASE-02 --repo ./demo
+error: 'start' rejected for PHASE-02: previous_phase_complete_or_first: previous phase is ACTIVE; scope_non_empty: no scope epics      (exit 2)
+$ walk phase gate PHASE-01 --decision MAYBE --repo ./demo
+error: unknown decision 'MAYBE'; expected GO, REWORK, CHANGE, STOP      (exit 1)
+$ walk ledger query --kind PHASE_TRANSITION --repo ./demo
+seq  at                                kind              actor  item  run  outcome
+4    2026-10-06T11:40:03.649394+00:00  PHASE_TRANSITION  USER              OK
+```
+
+Contract changes (docs updated in this commit; owner attention):
+- **Generic engine:** `Transition[S: StrEnum]` and `TransitionTable[S: StrEnum]` are now generic over the state enum (pydantic PEP 695 generics). `S` is `WorkItemState`, `PhaseState` or `ReleaseCandidateState`. `TableLoader.load(path)` still returns `TransitionTable[WorkItemState]`, and `load_lifecycle(path, states)` is added for phase/RC tables. `StateMachine`, `PhaseStateMachine` and `RcStateMachine` share the private `_Engine[S]`, as the Files table asks ("same engine generic over state enum"). `table_for` returns `TransitionTable[WorkItemState]`. Code that builds `Transition(...)` from enum members keeps working.
+- **Guard subject:** `Guard.__call__(item: GuardSubject, ctx)` with `type GuardSubject = WorkItem | Phase | ReleaseCandidate`, so the phase/RC guards live in the same registry and the RC table can reuse `no_open_blocker_bugs`. Work-item guards that read item fields fail with `"<PHASE|RC> has no <field>"` on a phase/RC subject.
+- `create_phase(..., scope_epic_ids: Sequence[EpicId] = ())`: the contract sketch typed it `list[EpicId] = ()`, which does not type-check.
+- `NEW NAME:` `walk.workflow.lifecycle` (`Lifecycles`, `LIFECYCLE_TABLE_FILES`). `DefaultWorkflowManager` delegates `create_phase/list_phases/phase_event/rc_event` to it, so the class does not keep growing (the service module was already ~600 lines). `walk.cli.composition.open_workflow(db, *, clock=None)` is the one place that wires the workflow manager for the CLI (CONVENTIONS §2); `cmd_work` now uses it instead of wiring services itself.
+
+Outside the Files table: `workflow/models.py`, `protocols.py`, `lifecycle.py`, `__init__.py`, `cli/composition.py`, `cli/cmd_work.py`, `docs/01-architecture/INTERFACES.md`. Also earlier tests: the custom table folders now include the phase/RC tables, a `Transition` annotation, and the S08 deferred-method test drops `phase_event`/`rc_event`.
+
+Level-0 decisions:
+- Phase table: 13 rows. INTERFACES §3.4 lists 12 lines; `request_review` "… or USER force" is two rows (guarded KERNEL/USER row, then a guard-free USER row), so KERNEL is held to `all_scope_features_terminal` and USER can force. `any → stop` is `from: "*"`. `package_ready` carries effect `increment_gate_round`. RC table: 6 rows. `next_rc` carries effect `next_release_candidate`: the rejected RC stays REJECTED, and a new `RC-NN` (number + 1, BUILDING) is created from `payload["commit"]`. A missing or invalid commit raises `ConfigError`. `RC_TRANSITION` payload is `{rc_id, from, to, event, reason, previous_rc_id?}`.
+- Kernel facts override caller values. Phase: `previous_phase_state` (state of the highest lower ordinal, `None` for the first) and `scope_feature_states` (FEATUREs with `phase_id` = the phase); `ctx.phase` is the phase. RC: `build_evidence_ids`, `qc_report_evidence_id`, `rejection_bug_ids`, `rejection_bug_states`. Caller facts: `kit_validated` (default True), `evidence_package_written`, `retrospective_written`, `feedback`, `rework_work_items_created`, `impact_analysis_evidence_present`, `approval_id` (`approval_user` also passes when the actor is USER), `open_blocker_bug_count`. `NEW NAME:` payload keys `previous_phase_state`, `scope_feature_states`, `rejection_bug_states`, `approval_id`.
+- `phase_event` runs in one transaction. `start` sets `started_at` and also makes the phase `Project.current_phase_id` (the E01-S29 status reads it). Entering COMPLETE sets `completed_at`. `decide:*` sets `last_decision` and writes `PHASE_GATE_DECISION` `{decision, feedback, gate_round}` next to `PHASE_TRANSITION` `{from, to, event, reason, gate_round}`. `decide:STOP` pauses the project. Row hooks fire after commit with `HookContext(phase_id, payload)`. `ON_STATE_TRANSITION` stays work-item only. Phases keep no transition rows (`work_item_transitions` references work items). `create_phase` writes no ledger event (§4.3 has no phase-created kind) and rejects ordinal < 1 or a duplicate ordinal (`ConfigError`, checked before the unique index). An unknown phase or RC raises `ConfigError` (exit 1).
+- CLI: `walk phase list|start|gate` with `--json`/`--repo` after the subcommand. `start` prints `ID: FROM -> TO`. `gate --decision` is case-insensitive and validated by hand, so an unknown value exits 1 (click would exit 2). `--feedback @FILE` reads the file. Writes require an existing DB.
 
 ---
 

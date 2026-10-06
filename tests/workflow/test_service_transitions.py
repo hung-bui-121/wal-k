@@ -401,8 +401,10 @@ async def test_custom_table_effects_and_wildcard(
     )
     _write_table(folder, "bug_workflow", "BUG", [reopen])
     _write_table(folder, "story_workflow", "STORY", [reopen])
-    scheduled = (TABLES_DIR / "scheduled_states.yaml").read_text(encoding="utf-8")
-    (folder / "scheduled_states.yaml").write_text(scheduled, encoding="utf-8")
+    for name in ("scheduled_states.yaml", "phase_workflow.yaml", "rc_workflow.yaml"):
+        (folder / name).write_text(
+            (TABLES_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
     workflow = _manager_for(db, ledger, hooks, fake_clock, folder)
     await workflow.create(
         WorkItemDraft(kind=WorkItemKind.FEATURE, title="F", description=""),

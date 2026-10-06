@@ -1,5 +1,6 @@
 """Default workflow manager (INTERFACES §1.3); E01-S08 implements create/get/query."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, NoReturn
@@ -16,6 +17,7 @@ from pydantic import (
 from walk.common.clock import Clock
 from walk.common.errors import ConfigError, GuardRejected
 from walk.common.ids import (
+    EpicId,
     EvidenceId,
     FeatureId,
     PhaseId,
@@ -31,6 +33,7 @@ from walk.persistence import Database, IdSequenceStore, UnitOfWork
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
 from walk.workflow.errors import WorkItemNotFound
+from walk.workflow.lifecycle import LIFECYCLE_TABLE_FILES, Lifecycles
 from walk.workflow.models import (
     Bug,
     BugDraft,
@@ -106,8 +109,8 @@ class DefaultWorkflowManager:
             tables_dir: Folder of the ``*_workflow.yaml`` transition tables (`TABLES_DIR`).
 
         Raises:
-            ConfigError: If a table or ``scheduled_states.yaml`` is missing or invalid, or two
-                tables govern the same kind.
+            ConfigError: If a table (work-item, phase or RC) or ``scheduled_states.yaml`` is
+                missing or invalid, or two tables govern the same kind.
         """
         self._db = db
         self._items = items
@@ -119,6 +122,16 @@ class DefaultWorkflowManager:
         self._tables = _load_tables(tables_dir)
         self._machine = StateMachine(self._tables)
         self._scheduled = _load_scheduled_states(tables_dir / _SCHEDULED_STATES_FILE)
+        self._lifecycles = Lifecycles(
+            db,
+            items=items,
+            projects=projects,
+            ids=ids,
+            ledger=ledger,
+            hooks=hooks,
+            clock=clock,
+            tables_dir=tables_dir,
+        )
 
     async def create(
         self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None
@@ -193,7 +206,7 @@ class DefaultWorkflowManager:
         where = " AND ".join(clauses) or "1=1"
         return await self._items.list_where(where, params, order_by="created_at, id")
 
-    def table_for(self, kind: WorkItemKind) -> TransitionTable:
+    def table_for(self, kind: WorkItemKind) -> TransitionTable[WorkItemState]:
         """Return the transition table that governs ``kind``.
 
         Raises:
@@ -322,17 +335,52 @@ class DefaultWorkflowManager:
         del feature_id
         _deferred("open_blocker_bug_count", "E03-S17")
 
+    async def create_phase(
+        self, name: str, ordinal: int, *, goal: str = "", scope_epic_ids: Sequence[EpicId] = ()
+    ) -> Phase:
+        """Persist a PLANNED phase with id ``PHASE-NN`` (no ledger event).
+
+        Raises:
+            ConfigError: ``ordinal`` < 1 or already used by another phase.
+        """
+        return await self._lifecycles.create_phase(
+            name, ordinal, goal=goal, scope_epic_ids=scope_epic_ids
+        )
+
+    async def list_phases(self) -> list[Phase]:
+        """Return every phase by ordinal."""
+        return await self._lifecycles.list_phases()
+
     async def phase_event(self, phase_id: PhaseId, event: str, ctx: TransitionContext) -> Phase:
-        """Not available before E01-S11 (raises `ConfigError`)."""
-        del phase_id, event, ctx
-        _deferred("phase_event", "E01-S11")
+        """Raise ``event`` on the phase (``phase_workflow``) in one transaction.
+
+        Kernel facts for the guards: ``previous_phase_state`` and ``scope_feature_states``;
+        ``ctx.phase`` is the phase. Writes ``PHASE_TRANSITION`` and, for ``decide:*``,
+        ``PHASE_GATE_DECISION`` (payload ``decision``, ``feedback``). ``start`` sets
+        ``started_at`` and makes the phase current; COMPLETE sets ``completed_at``;
+        ``package_ready`` increments ``gate_round``; ``decide:STOP`` pauses the project. The
+        row's hooks fire after commit.
+
+        Raises:
+            ConfigError: No phase has ``phase_id``.
+            UnknownTransition, PermissionDenied, GuardRejected: As `raise_event`.
+        """
+        return await self._lifecycles.phase_event(phase_id, event, ctx)
 
     async def rc_event(
         self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext
     ) -> ReleaseCandidate:
-        """Not available before E01-S11 (raises `ConfigError`)."""
-        del rc_id, event, ctx
-        _deferred("rc_event", "E01-S11")
+        """Raise ``event`` on the release candidate (``rc_workflow``) in one transaction.
+
+        Kernel facts: ``build_evidence_ids``, ``qc_report_evidence_id``, ``rejection_bug_ids``
+        and ``rejection_bug_states``. Writes ``RC_TRANSITION``. ``next_rc`` keeps the rejected
+        candidate and returns a new one (number + 1, BUILDING) built from ``payload["commit"]``.
+
+        Raises:
+            ConfigError: No candidate has ``rc_id``, or ``next_rc`` lacks a valid commit.
+            UnknownTransition, PermissionDenied, GuardRejected: As `raise_event`.
+        """
+        return await self._lifecycles.rc_event(rc_id, event, ctx)
 
     async def gdd_coverage(self, project_key: ProjectKey) -> dict[str, float]:
         """Not available before E06-S06 (raises `ConfigError`)."""
@@ -363,7 +411,7 @@ class DefaultWorkflowManager:
     async def _commit(
         self,
         item: WorkItem,
-        row: Transition,
+        row: Transition[WorkItemState],
         target: WorkItemState,
         event: str,
         *,
@@ -530,14 +578,16 @@ def _dependencies(item: WorkItem) -> list[WorkItemId]:
     return [] if contract is None else list(contract.dependencies)
 
 
-def _load_tables(tables_dir: Path) -> dict[WorkItemKind, TransitionTable]:
-    """Load every ``*_workflow.yaml`` table and index it by the kinds it governs."""
+def _load_tables(tables_dir: Path) -> dict[WorkItemKind, TransitionTable[WorkItemState]]:
+    """Load every work-item ``*_workflow.yaml`` table and index it by the kinds it governs."""
     if not tables_dir.is_dir():
         msg = f"transition tables folder not found: {tables_dir}"
         raise ConfigError(msg, detail={"tables_dir": str(tables_dir)})
     loader = TableLoader()
-    tables: dict[WorkItemKind, TransitionTable] = {}
+    tables: dict[WorkItemKind, TransitionTable[WorkItemState]] = {}
     for path in sorted(tables_dir.glob("*_workflow.yaml")):
+        if path.name in LIFECYCLE_TABLE_FILES:
+            continue
         table = loader.load(path)
         for kind in table.kinds:
             if kind in tables:
@@ -548,7 +598,11 @@ def _load_tables(tables_dir: Path) -> dict[WorkItemKind, TransitionTable]:
 
 
 def _apply(
-    item: WorkItem, row: Transition, target: WorkItemState, reason: object, now: datetime
+    item: WorkItem,
+    row: Transition[WorkItemState],
+    target: WorkItemState,
+    reason: object,
+    now: datetime,
 ) -> WorkItem:
     """Return the item after the transition: state, version, timestamps and effects."""
     update: dict[str, object] = {

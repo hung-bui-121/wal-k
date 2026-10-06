@@ -9,6 +9,7 @@ from walk.workflow.models import (
     Feature,
     GddRef,
     GuardResult,
+    GuardSubject,
     Phase,
     PhaseDecision,
     PhaseState,
@@ -33,9 +34,20 @@ from walk.workflow.models import (
     WorkItemTransition,
 )
 from walk.workflow.protocols import Guard, WorkflowManager
-from walk.workflow.repository import ProjectRepository, WorkflowRepository
+from walk.workflow.repository import (
+    PhaseRepository,
+    ProjectRepository,
+    ReleaseCandidateRepository,
+    WorkflowRepository,
+)
 from walk.workflow.service import DefaultWorkflowManager
-from walk.workflow.state_machine import TABLES_DIR, StateMachine, TableLoader
+from walk.workflow.state_machine import (
+    TABLES_DIR,
+    PhaseStateMachine,
+    RcStateMachine,
+    StateMachine,
+    TableLoader,
+)
 
 __all__ = [
     "TABLES_DIR",
@@ -48,13 +60,18 @@ __all__ = [
     "GddRef",
     "Guard",
     "GuardResult",
+    "GuardSubject",
     "Phase",
     "PhaseDecision",
+    "PhaseRepository",
     "PhaseState",
+    "PhaseStateMachine",
     "Priority",
     "Project",
     "ProjectRepository",
+    "RcStateMachine",
     "ReleaseCandidate",
+    "ReleaseCandidateRepository",
     "ReleaseCandidateState",
     "Risk",
     "Severity",

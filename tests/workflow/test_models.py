@@ -90,7 +90,7 @@ def test_transition_value_objects() -> None:
     assert ctx.run_id is None
     assert ctx.payload == {}
     assert ctx.phase is None
-    row = Transition(
+    row: Transition[WorkItemState] = Transition(
         from_state=WorkItemState.READY,
         event="start_implementation",
         to_state=WorkItemState.IMPLEMENTING,

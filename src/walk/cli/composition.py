@@ -1,11 +1,21 @@
 """Composition root: the only place that wires concrete implementations together.
 
-`build_kernel` (E01-S30) will live here; until then this module opens the project database.
+`build_kernel` (E01-S30) will live here; until then this module opens the project database
+and wires the services the CLI commands use.
 """
 
 from pathlib import Path
 
-from walk.persistence import Database
+from walk.common.clock import Clock, SystemClock
+from walk.hooks import DefaultHookManager, HookExecutionRepository
+from walk.persistence import Database, IdSequenceStore
+from walk.telemetry import DefaultLedgerManager, LedgerRepository
+from walk.workflow import (
+    TABLES_DIR,
+    DefaultWorkflowManager,
+    ProjectRepository,
+    WorkflowRepository,
+)
 
 _AI_DIR = ".ai"
 _DB_FILE = "kernel.db"
@@ -27,3 +37,29 @@ def open_database(repo: Path, *, read_only: bool = False) -> Database:
     db = Database(repo / _AI_DIR / _DB_FILE, read_only=read_only)
     db.connect()
     return db
+
+
+def open_workflow(db: Database, *, clock: Clock | None = None) -> DefaultWorkflowManager:
+    """Wire a `DefaultWorkflowManager` (with ledger and hook manager) on ``db``.
+
+    Args:
+        db: An open project database.
+        clock: Time source; the system clock when ``None`` (tests inject a fake).
+
+    Raises:
+        ConfigError: If a packaged transition table is invalid.
+    """
+    time = clock or SystemClock()
+    ids = IdSequenceStore(db)
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, time)
+    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, time)
+    return DefaultWorkflowManager(
+        db,
+        WorkflowRepository(db),
+        ProjectRepository(db),
+        ids,
+        ledger,
+        hooks,
+        time,
+        TABLES_DIR,
+    )

@@ -7,7 +7,14 @@ import yaml
 from walk.common.errors import ConfigError
 from walk.common.roles import AgentRole
 from walk.hooks import HookName
-from walk.workflow import TABLES_DIR, TableLoader, WorkItemKind, WorkItemState
+from walk.workflow import (
+    TABLES_DIR,
+    PhaseState,
+    ReleaseCandidateState,
+    TableLoader,
+    WorkItemKind,
+    WorkItemState,
+)
 
 ROW = "{from: IDEA, event: ready, to: READY, guards: [], roles: [USER], hooks: []}"
 
@@ -128,6 +135,8 @@ def test_tables_dir_contains_exactly_the_kernel_tables() -> None:
     assert sorted(path.name for path in TABLES_DIR.iterdir() if path.is_file()) == [
         "bug_workflow.yaml",
         "feature_workflow.yaml",
+        "phase_workflow.yaml",
+        "rc_workflow.yaml",
         "scheduled_states.yaml",
         "story_workflow.yaml",
     ]
@@ -176,3 +185,36 @@ def test_scheduled_states_match_routing_table() -> None:
     assert roles[("TASK", "READY_FOR_REVIEW")] == "contract.reviewer_role"
     assert roles[("BUG", "READY_FOR_REVIEW")] == "LEAD_DEV"
     assert re.fullmatch(r"[A-Z_]+", roles[("FEATURE", "IDEA")])
+
+
+def _lifecycle_rows(
+    name: str, states: type[PhaseState] | type[ReleaseCandidateState]
+) -> list[tuple[str, str, str]]:
+    table = TableLoader().load_lifecycle(TABLES_DIR / f"{name}.yaml", states)
+    assert table.kinds == ()
+    return [(str(row.from_state), row.event, str(row.to_state)) for row in table.transitions]
+
+
+def test_phase_workflow_matches_interfaces() -> None:
+    documented = _documented_rows("### 3.4 Phase lifecycle")
+    loaded = _lifecycle_rows("phase_workflow", PhaseState)
+    assert len(loaded) == 13
+    assert {(src, event) for src, event, _ in loaded} == {(s, e) for s, e, _ in documented}
+    targets = {(s, e): to for s, e, to in documented}
+    for src, event, target in loaded:
+        assert target == targets[(src, event)]
+    review = [row for row in loaded if row[1] == "request_review"]
+    assert len(review) == 2  # guarded row + USER force row
+
+
+def test_rc_workflow_matches_interfaces() -> None:
+    documented = _documented_rows("### 3.6 RC lifecycle")
+    loaded = _lifecycle_rows("rc_workflow", ReleaseCandidateState)
+    assert len(loaded) == 6
+    assert [(src, event, to) for src, event, to in loaded] == documented
+
+
+def test_lifecycle_table_rejects_work_item_states(tmp_path: Path) -> None:
+    path = _table(tmp_path, [ROW])
+    with pytest.raises(ConfigError, match="IDEA"):
+        TableLoader().load_lifecycle(path, PhaseState)

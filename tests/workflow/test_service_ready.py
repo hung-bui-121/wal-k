@@ -323,7 +323,13 @@ def test_scheduled_states_are_validated(
 ) -> None:
     folder = tmp_path / "tables"
     folder.mkdir()
-    for name in ("story_workflow.yaml", "feature_workflow.yaml", "bug_workflow.yaml"):
+    for name in (
+        "story_workflow.yaml",
+        "feature_workflow.yaml",
+        "bug_workflow.yaml",
+        "phase_workflow.yaml",
+        "rc_workflow.yaml",
+    ):
         (folder / name).write_text(
             (TABLES_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
         )
