@@ -448,7 +448,7 @@ Level-0 decisions:
 
 ### E01-S04 — `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore`
 
-**Status:** DONE (pending)
+**Status:** DONE (1513909)
 **Type:** feat
 **Requirements:** §54, §90, §137 (Inv. 9)
 **Depends on:** E01-S03
@@ -612,7 +612,7 @@ Level-0 decisions (no contract change):
 
 ### E01-S05 — Execution ledger: `LedgerManager`, `walk ledger tail/query`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.11, §81, §82, §86, §88, §137 (Inv. 9)
 **Depends on:** E01-S04
@@ -695,7 +695,49 @@ CLI: `walk ledger tail [--since SEQ] [--follow]`, `walk ledger query [--kind K].
 - Commit: `feat: add append-only execution ledger and ledger cli (E01-S05)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+55 files already formatted
+All checks passed!
+Success: no issues found in 52 source files
+Required test coverage of 85% reached. Total coverage: 99.68%
+127 passed in 4.29s
+```
+Touched modules: `telemetry/*` 100%, `cli/cmd_ledger.py` 100%, `cli/output.py` 100%.
+
+Demo (demo DB seeded with 7 events through `DefaultLedgerManager.append`):
+```
+$ walk ledger query --limit 5 --repo ./demo
+seq  at                                kind                  actor   item        run  outcome
+---  --------------------------------  --------------------  ------  ----------  ---  -------
+1    2026-10-06T10:38:23.367467+00:00  WORK_ITEM_CREATED     KERNEL  STORY-0001       OK
+2    2026-10-06T10:38:23.385711+00:00  WORK_ITEM_TRANSITION  KERNEL  STORY-0002       OK
+3    2026-10-06T10:38:23.385711+00:00  AGENT_RUN_STARTED     KERNEL  STORY-0001       OK
+4    2026-10-06T10:38:23.386216+00:00  WORK_ITEM_CREATED     KERNEL  STORY-0002       OK
+5    2026-10-06T10:38:23.386216+00:00  WORK_ITEM_TRANSITION  KERNEL  STORY-0001       OK
+$ walk ledger query --json --repo ./demo | head -c 200
+[
+  {
+    "seq": 1,
+    "id": "LED-01M48CP1M710F079ZZVKPRR2QQ",
+    "kind": "WORK_ITEM_CREATED",
+    "at": "2026-10-06T10:38:23.367467Z",
+    "project_key": "DEMO",
+    "actor_role": "KERNEL",
+$ walk ledger query --since not-a-date --repo ./demo
+error: invalid --since timestamp: 'not-a-date'      (exit 1)
+```
+Contract alignments (docs updated in this commit):
+- `LedgerEvent.id`/`at` now have defaults (`LED-<ulid>` / `utcnow`) in DOMAIN-MODEL §4.12. Behaviour 2 needs events built without them, and §4.12 made them required. `append` treats a field missing from `model_fields_set` as unset and fills it from the injected `IdFactory`/`Clock`; values the caller set are kept. The field types stay non-optional.
+- INTERFACES §1.14: `LedgerManager.append` gains `*, uow: UnitOfWork | None = None` (its docstring already said "when provided"). `tail` is declared `def tail(...) -> AsyncIterator[LedgerEvent]` in the Protocol, because an `async def` stub would type as a coroutine and reject the async-generator implementation. `DefaultLedgerManager.tail` is annotated `AsyncGenerator[LedgerEvent]`.
+
+Level-0 decisions:
+- `DefaultLedgerManager(..., *, sleep=asyncio.sleep)` is the "injected sleep" the contract asks for; the poll interval is 0.25 s, and polling only sleeps after an empty batch.
+- `ledger_events.at` is stored as fixed-width UTC text (`isoformat(timespec="microseconds")`) so `since`/`until` (inclusive, normalised to UTC) compare correctly as strings. The JSON column holds the event without `seq`; reads restore `seq` from the row. `limit` is clamped to `0..10000`. `report()` reads at most 10000 events.
+- Every pydantic field carries a `description=` (CONVENTIONS §4); metric descriptions only cite §115/§116.
+- `output.py`: `render_table(headers, rows) -> str` (left-aligned, dashed rule, `None` empty, trailing spaces stripped), `render_json(data) -> str` (indent 2), `exit_with(error: WalkError) -> NoReturn` (stderr `error: …`; `GuardRejected`/`PermissionDenied` → 2, other kernel errors → 1). Codes 3/4 arrive with their errors in later stories. `cmd_db` keeps its own exit helper because it is outside this story's Files table; a later CLI story can switch it to `exit_with`.
+- The ledger CLI opens the DB read-only and exits 1 if it is missing. Like `walk db`, it also accepts `--repo`/`--json` after the subcommand (global options are honoured too). A timestamp without an offset is read as UTC. `tail` without `--follow` prints every event after `--since` and exits. `--follow` prints one line per event (JSON lines with `--json`) until Ctrl+C, which exits 0. Command parameters are keyword-only (ruff PLR0917).
+- The kinds test reads the enum list straight from `DOMAIN-MODEL.md`, so drift between doc and code fails the gate.
 
 ---
 

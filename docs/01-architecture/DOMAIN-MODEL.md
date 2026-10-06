@@ -2006,12 +2006,14 @@ class Checkpoint(FrozenModel):
 ```python
 # src/walk/telemetry/models.py
 class LedgerEvent(FrozenModel):
-    """Append-only (§81). `seq` assigned by SQLite AUTOINCREMENT; `id` is a ULID."""
+    """Append-only (§81). `seq` assigned by SQLite AUTOINCREMENT; `id` is a ULID.
+    `id`/`at` default so callers may omit them; `LedgerManager.append` replaces any of the two
+    not in `model_fields_set` with the injected IdFactory ULID / Clock time (E01-S05)."""
 
     seq: int | None = Field(default=None, description="None before insert")
-    id: LedgerEventId
+    id: LedgerEventId = Field(default_factory=lambda: f"LED-{new_ulid()}")
     kind: LedgerEventKind
-    at: datetime
+    at: datetime = Field(default_factory=utcnow)
     project_key: ProjectKey
     actor_role: AgentRole
     work_item_id: WorkItemId | None = None

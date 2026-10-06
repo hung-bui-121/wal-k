@@ -735,7 +735,7 @@ class BoundaryAuditor(Protocol):
 class LedgerManager(Protocol):
     """§81–§83, §86. Hosted by walk.telemetry."""
 
-    async def append(self, event: LedgerEvent) -> LedgerEvent:
+    async def append(self, event: LedgerEvent, *, uow: UnitOfWork | None = None) -> LedgerEvent:
         """Insert; returns event with seq. Participates in the caller's UnitOfWork when provided."""
 
     async def query(
@@ -750,7 +750,8 @@ class LedgerManager(Protocol):
         limit: int = 1000,
     ) -> list[LedgerEvent]: ...
 
-    async def tail(self, after_seq: int) -> AsyncIterator[LedgerEvent]: ...
+    def tail(self, after_seq: int) -> AsyncIterator[LedgerEvent]:
+        """Async generator in implementations (`async def` + `yield`); polls until cancelled."""
 
     async def report(
         self,
