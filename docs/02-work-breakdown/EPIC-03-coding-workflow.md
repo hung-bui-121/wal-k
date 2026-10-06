@@ -1842,7 +1842,7 @@ class BugIntake:
 
 Ledger payloads (`NEW NAME:` payload shapes):
 - `QC_RESULT {verdict: "APPROVED"|"REJECTED", workflow_event, run_id, model_id, evidence_ids, bug_ids, findings: int, fix_loops, reopen_count?}` with `work_item_id`, `role=QC`.
-- `BUG_CREATED {bug_id, parent_id, severity, related_feature_id, found_in_run_id, found_against_commit, external_ref}` with `work_item_id=<bug id>`; `parent_id = bug.parent_id or bug.related_feature_id` (may be `null`), `severity` = the bug's severity at creation. Normative contract: DOMAIN-MODEL §4.12 "Ledger payload contracts" (E07-S08 `top_defect` groups by `parent_id`).
+- `BUG_CREATED {bug_id, parent_id, severity, related_feature_id, found_in_run_id, found_against_commit, external_ref, found_in_state}` (`found_in_state` = the state of `parent_id` when the bug was created, or null; `escaped_bugs` in E01-S06 counts `found_in_state == "COMPLETE"`) with `work_item_id=<bug id>`; `parent_id = bug.parent_id or bug.related_feature_id` (may be `null`), `severity` = the bug's severity at creation. Normative contract: DOMAIN-MODEL §4.12 "Ledger payload contracts" (E07-S08 `top_defect` groups by `parent_id`).
 
 Default bug contract (in `create(BugDraft)`): `goal = title` (unchanged), `acceptance_criteria = [f"Reproduction no longer reproduces: {reproduction}", f"Expected behaviour holds: {expected}"]`, `required_evidence = [AUTOMATED_TEST]` (regression test, guard `regression_test_evidence`), `owner_role` left to triage (E01-S08 rule 2), `reviewer_role = LEAD_DEV`, `priority` from severity (`BLOCKER→P0, MAJOR→P1, MINOR→P2, TRIVIAL→P3`).
 

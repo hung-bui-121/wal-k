@@ -1168,7 +1168,7 @@ Guards registered in this story (all read WBS §3.4 payload keys): `definition_o
 #### Behavior
 1. Loading a table whose guard, hook or role name is unknown raises `ConfigError` naming the row.
 2. `transition_for` evaluates rows in file order; wildcard `*` matches any state; `* except A,B` excludes listed states.
-3. `raise_event` runs in one `UnitOfWork`: `state`, `state_version += 1`, `updated_at`, effects, `work_item_transitions` row, `WORK_ITEM_TRANSITION` ledger (payload: `from, to, event, reason, resume_state?, state_version`); then after commit fires `ON_STATE_TRANSITION` and each transition hook with `HookContext(payload={"from":…, "to":…, "event":…})`.
+3. `raise_event` runs in one `UnitOfWork`: `state`, `state_version += 1`, `updated_at`, effects, `work_item_transitions` row, `WORK_ITEM_TRANSITION` ledger (payload: `from, to, event, reason, resume_state?, state_version, kind, fix_loops` — `kind` is the item's `WorkItemKind` value and `fix_loops` its counter after effects; both are read by the E01-S06 `METRIC_QUERIES`); then after commit fires `ON_STATE_TRANSITION` and each transition hook with `HookContext(payload={"from":…, "to":…, "event":…})`.
 4. `block` stores `resume_state = item.state` in the transition payload and on the item (`blocked_reason` from `ctx.reason` or payload); `unblock` with pseudo-target `PREVIOUS` resolves to the stored `resume_state`, else `GuardRejected("no resume_state")`.
 5. `GuardRejected.detail` lists each failing guard and its reason; `PermissionDenied.detail` carries actor and allowed roles.
 6. A hook failure (`HookFailed`) after commit does not roll back the transition; it is re-raised to the caller.

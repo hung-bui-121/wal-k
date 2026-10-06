@@ -2042,7 +2042,7 @@ Ledger payload contracts that other stories read (keys are normative; a writer m
 | `PROJECT_STARTED` | — / — | `kernel_instance`, recovery counts from `RecoveryReport` (`interrupted`, `resumed_native`, `restarted_with_handover`, `requeued`, `failed`) | `Orchestrator.start` (E01-S29) | status, reports |
 | `MODEL_FALLBACK` | failing item / failing run | executor path: `trigger`, `from`, `to`, `handover_id`, `checkpoint_id`, `rejected`; recovery path: `trigger` (= `PROVIDER_OUTAGE`), `from`, `to` | `AgentExecutor` / `RecoveryManager` (E01-S28) | `ON_MODEL_FALLBACK` hooks, retrospective `fallbacks` metric |
 | `RECOVERY_RESUMED` | item / new run | `from_run_id`, `mode` (`native` \| `handover`), `checkpoint_seq`, `handover_id` | `RecoveryManager` (E01-S28) | reports |
-| `BUG_CREATED` | the bug / creating run | `bug_id`, `parent_id`, `severity`, `related_feature_id`, `found_in_run_id`, `found_against_commit`, `external_ref` | `Orchestrator` via `BugIntake` (E03-S14) | `top_defect` (E07-S08), reports |
+| `BUG_CREATED` | the bug / creating run | `bug_id`, `parent_id`, `severity`, `related_feature_id`, `found_in_run_id`, `found_against_commit`, `external_ref`, `found_in_state` | `Orchestrator` via `BugIntake` (E03-S14) | `top_defect` (E07-S08), reports |
 
 `BUG_CREATED.parent_id` is the work item the defect is attributed to: `bug.parent_id` when set, else `bug.related_feature_id`, else `null`. `severity` is the bug's `Severity` value at creation (triage may change it later; the ledger keeps the creation value).
 
