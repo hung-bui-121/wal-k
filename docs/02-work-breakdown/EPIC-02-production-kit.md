@@ -1265,7 +1265,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** BLOCKED
+**Status:** TODO
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1405,6 +1405,7 @@ Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.m
 - Demo: `walk run --once` on a bootstrapped repo then `walk ledger query --kind HOOK_EXECUTED --limit 5` → shows `builtin.memory_index` under `ON_PROJECT_START`.
 
 #### Notes
+- **Owner decision 2026-10-07 (unblocks this story): option A.** Before applying a PARTIAL output, the executor takes a HANDOFF checkpoint that builds and writes the handover document (`HO-xxxx.md`, via the existing E01-S28 handover path); the workflow's `partial` transition then fires its hooks with payload `{from, to, event, checkpoint_id, handover_id}`. `builtin.handoff_checkpoint_and_handover` sees both ids and is a no-op (rule from E01-R01/B05), so it stays fail-closed for any transition that arrives without them. Add `src/walk/runtime/executor.py` and the workflow transition payload builder to the Files table as `modify`, update INTERFACES §5.3 and ARCHITECTURE §4.1, and add one AC: a PARTIAL implement run ends `HANDED_OVER`/`PARTIAL` (not FAILED), the item reaches the `partial` target state, and the handover document exists with `remaining_work`. Options B and C are rejected.
 - Binding (E01-R01 planner note): E01 checkpoints never send `wip_commit_done`. This story adds it: `CheckpointManager.checkpoint` puts `wip_commit_done: bool` (True when the WIP commit was created or there was nothing to commit) into the `ON_AGENT_CHECKPOINT` payload. `builtin.wip_commit` stays fail-closed on `False` and treats a missing key as a contract error raised during development tests, never as a silent pass.
 - ARCHITECTURE §4.1 (table and execution rule), §4.3; ADR-0009 D-7; ADR-0016 (module placement and single registration call site); WBS.md §3.5.
 - `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`, `workflow`, `default_branch`), `builtin_hooks`, `MUST_HOOK_IDS`, builtin hook ids (`builtin.*`, incl. `builtin.pause_all_runs`, `builtin.budget_escalate`, `builtin.approval_recorded`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `reason`, `mode`, counter `remaining_work_nonempty`.
@@ -2085,6 +2086,7 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 - Demo: after `walk run --once` with a scheduled fake run, `ls .walk/worktrees/<run>/.git` hooks dir (via `git rev-parse --git-path hooks`) shows `pre-commit`, `pre-push`.
 
 #### Notes
+- From E02-B02 (2026-10-07): the existing `UNITY_*` allowlist entry passes Unity CI licence secrets (`UNITY_PASSWORD`, `UNITY_SERIAL`, `UNITY_LICENSE`, `UNITY_EMAIL`) to agents. Replace the wildcard with an explicit list of non-secret Unity variables, add the Unity secret names to the credential catalogue, and add a test that none of them survive `scrubbed_env`.
 - ARCHITECTURE §6 table, §4.2 last row; ADR-0006 D-5; ADR-0009 consequence (sh on Windows via Git for Windows).
 - `NEW NAME:` `DEFAULT_FORBIDDEN_PATHS`, `EVIDENCE_EXCEPTIONS`, `walk.memory.secrets` (`contains_secret`, `SECRET_PATTERNS`), `RuntimePolicy.allowed_paths`, hook script files.
 - Pitfall: test 9 requires `sh` on PATH; mark `@pytest.mark.skipif(shutil.which("sh") is None)` — not `integration`, since Git for Windows ships `sh`.

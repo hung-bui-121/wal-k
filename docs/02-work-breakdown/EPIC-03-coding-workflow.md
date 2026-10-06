@@ -780,6 +780,7 @@ class Scheduler:
 - Demo: on the E01 gate fixture with both fakes, `walk ledger query --kind MODEL_SELECTED --item STORY-0001 --json` shows the REVIEW run's payload `rejected: [["fake-codex/sim", "cross_model_review"]]`.
 
 #### Notes
+- From E02-S04 (2026-10-07): `scheduled_states.yaml` has no `version` and is not covered by behavior-version pins, so routing changes are unpinned. Add `version: "1.0"` to it, load it through the versioned loader, and register it in the E02-S04 pin catalogue as `MODEL_ROUTING/scheduled_states` (§105).
 - INTERFACES §4, §5.1 steps 5–6, §5.3 step 3; ARCHITECTURE §3.2 "Concurrency" and §7 Invariant 4; ADR-0009 D-4.
 - `NEW NAME:` `DefaultTaskRouter.implementer_of`, `contract_paths`, `PATH_PATTERN`, `Scheduler.check_cross_model`, `CrossModelReviewUnsatisfiable`, builtin hook id `builtin.qc_cross_model`, approval payload reason `cross_model_review_unsatisfiable`, purpose → capability defaults table (Behavior 2).
 - Also read: E01-S29 is not yet written; `router.py`/`scheduler.py`/`errors.py` under `src/walk/orchestrator/` are the assumed E01-S29 file names (ARCHITECTURE §1.3 layout). Adjust the Files table if E01-S29 differs and say so in the commit body.

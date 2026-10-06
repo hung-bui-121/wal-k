@@ -435,7 +435,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S05 | `SkillRegistry` loading and builtin skills | feat | E01-S14 | MEDIUM | DONE (65ef1d3) |
 | E02-S06 | Skill projections for Claude and Codex, lock file, `walk skills list/sync` | feat | E02-S05, E01-S21, E01-S22, E01-S25 | HIGH | DONE (11d1d66) |
 | E02-S07 | Skill drift detection, `walk skills check-drift`, startup check | feat | E02-S06, E02-S02 | MEDIUM | DONE (9a8616c) |
-| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | BLOCKED |
+| E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | TODO |
 | E02-S09 | Project hooks from `.ai/agents/hooks.yaml` | feat | E02-S08 | MEDIUM | TODO |
 | E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | feat | E01-S15, E02-S03 | MEDIUM | TODO |
 | E02-S11 | Approval requests and `walk approve/deny/approvals` | feat | E02-S10, E01-S26 | HIGH | TODO |
