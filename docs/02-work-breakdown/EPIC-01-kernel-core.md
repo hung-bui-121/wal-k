@@ -6221,7 +6221,7 @@ src/walk/runtime/recovery.py  99% (missing 167-168)
 
 ### E01-B05 — The handover document matches its row and its HANDOFF checkpoint
 
-**Status:** DONE (pending)
+**Status:** DONE (f581938)
 **Type:** bugfix
 **Requirements:** §22, §137 (Inv. 2, 12)
 **Depends on:** E01-R01
@@ -6332,7 +6332,7 @@ ea4a1de wip(STORY-0002): checkpoint 2      (run A HANDOFF = worktree_head)
 
 ### E01-B06 — Architecture tests for module-level import cells and per-file process confinement
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §122, §137 (Inv. 1)
 **Depends on:** E01-R01
@@ -6379,4 +6379,55 @@ Test-only. The tests read `docs/01-architecture/ARCHITECTURE.md` §2.2 (includin
 - Commit subject: `bugfix: add module-level import and process confinement tests (E01-B06)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** import-linter expresses only package-level edges, and ruff's TID251 allowances are per file, not per banned module. The §2.2 module cells (`✔` = `models`/`protocols`/`errors` plus named modules), the `Default*` re-exports through package `__init__`s, and "subprocess only in these two files" had no mechanical check.
+
+**Implementation** (test-only, `tests/test_import_contracts.py`):
+- `_cell_violations(src, cells)` covers Behavior 1, 2 and 4. It walks every `src/walk/**/*.py` with `ast`, skipping the importer packages `orchestrator` and `cli` (§2.2 legend). Every `import walk.<pkg>.<mod>` / `from walk.<pkg>.<mod> import …` of another, non-infrastructure package (`common` and `persistence` are infrastructure) must name a module in `{models, protocols, errors}` ∪ the backticked `(+ …)` names of the §2.2 cell. `_table()` (E01-S31) parses that cell.
+- `from walk.<pkg> import Name` is resolved through `src/walk/<pkg>/__init__.py`, absolute and relative imports, to the defining submodule (`_reexports`). A failure line reads `file:line: <import text> uses walk.<pkg>.<mod>; <importer> -> <pkg> cell '<cell>' allows [...]`.
+- `_confinement_violations(src)` covers Behavior 3:
+  - `subprocess` (import) and `asyncio.create_subprocess_exec` (import or attribute use) only in `integrations/subprocess.py` and `model_router/adapters/codex/process.py`;
+  - `claude_agent_sdk` only under `model_router/adapters/claude/`;
+  - `typer` only under `cli/`;
+  - `keyring` only in `integrations/credentials.py`.
+- AC 2 builds a fixture tree under `tmp_path`. `beta/uses.py` imports `Thing` (from `alpha.models`) and `DefaultThing` (re-exported from `alpha.service`) through `walk.alpha`. Exactly line 2 is reported, naming `walk.alpha.service`. With the cell `✔ (+ `service`)` the tree is clean.
+
+**Level-0 decisions:**
+- A cell like `✔ (GitProvider protocol only)` allows the standard set. Narrowing it to `protocols` alone would be a new rule, not a §2.2 cell.
+- Imports under `TYPE_CHECKING` count as imports.
+- `sqlite3` stays out (architect item A5).
+
+**Result on `main`:** no violation (as E01-R01's scan found). Proof that the tests can fail, by re-running the checkers with the parsed table or allowance changed in a scratch script (not committed):
+```
+named cells: [('agents', 'memory'), ('budgets', 'workflow'), ('context', 'memory'), ('context', 'workflow'), ('runtime', 'agents'), ('runtime', 'model_router'), ('runtime', 'permissions'), ('runtime', 'workflow')]
+AC1 with every named-cell exception removed: 13 violations
+   agents/constitution_loader.py:14: from walk.memory.frontmatter import ... uses walk.memory.frontmatter; agents -> memory cell '✔' allows ['errors', 'models', 'protocols']
+   agents/handover.py:22: from walk.memory.paths import ... uses walk.memory.paths; agents -> memory cell '✔' allows ['errors', 'models', 'protocols']
+   budgets/service.py:27: from walk.workflow.repository import ... uses walk.workflow.repository; budgets -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   context/service.py:21: from walk.memory.frontmatter import ... uses walk.memory.frontmatter; context -> memory cell '✔' allows ['errors', 'models', 'protocols']
+   context/service.py:32: from walk.workflow.repository import ... uses walk.workflow.repository; context -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/checkpoints.py:13: from walk.agents.handover import ... uses walk.agents.handover; runtime -> agents cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/checkpoints.py:36: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/executor.py:71: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/inputs.py:29: from walk.model_router.output import ... uses walk.model_router.output; runtime -> model_router cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/inputs.py:34: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/metering.py:9: from walk.model_router.costing import ... uses walk.model_router.costing; runtime -> model_router cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/recovery.py:38: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/tool_invoker.py:40: from walk.permissions.repository import ... uses walk.permissions.repository; runtime -> permissions cell '✔' allows ['errors', 'models', 'protocols']
+AC1 with only runtime -> workflow (+ repository) removed:
+   runtime/checkpoints.py:36: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/executor.py:71: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/inputs.py:34: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+   runtime/recovery.py:38: from walk.workflow.repository import ... uses walk.workflow.repository; runtime -> workflow cell '✔' allows ['errors', 'models', 'protocols']
+AC3 with codex/process.py removed from the subprocess allowance:
+   model_router/adapters/codex/process.py:10: uses subprocess; allowed only in integrations/subprocess.py
+```
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.89%
+1021 passed, 2 deselected in 396.32s (0:06:36)
+```
