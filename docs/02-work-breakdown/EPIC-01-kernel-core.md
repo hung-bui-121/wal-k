@@ -3834,7 +3834,7 @@ Level-0 decisions:
 
 ### E01-S25 — Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor`
 
-**Status:** DONE (pending)
+**Status:** DONE (65bdf50)
 **Type:** feat
 **Requirements:** §22, §41, §54, §60, §89, §90, §91 (repository boundary), §137 (Inv. 10, 12, 13)
 **Depends on:** E01-S18, E01-S20, E01-S23
@@ -4025,7 +4025,7 @@ Level-0 decisions:
 
 ### E01-S26 — `ToolInvoker`: permission enforcement point, Claude `can_use_tool` bridge, Codex sandbox config
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §30, §31, §32 (`on_tool_*`), §81 (tool invocation), §91, §92, §137 (Inv. 7, 9)
 **Depends on:** E01-S15, E01-S25, E01-S07, E01-S12
@@ -4049,6 +4049,10 @@ Every tool call an agent makes is decided by the kernel at one enforcement point
 | `tests/runtime/test_tool_invoker.py` | create | — |
 | `tests/runtime/test_approval_wait.py` | create | — |
 | `tests/model_router/adapters/codex/test_sandbox.py` | create | — |
+| `src/walk/permissions/protocols.py` | modify | `PermissionManager.decide_approval(..., expired=False)` (added during implementation, see Evidence) |
+| `src/walk/permissions/service.py` | modify | `DefaultPermissionManager.decide_approval(..., expired=False)` |
+| `tests/permissions/test_approvals.py` | modify | — |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.10 `decide_approval`) |
 
 #### Interface contract
 Protocol: INTERFACES.md §1.13 `ToolInvoker`. Deltas:
@@ -4168,7 +4172,61 @@ class CodexAdapter:
 - Commit subject: `feat: add tool invoker enforcement point with approval pausing and codex sandbox config (E01-S26)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+281 files already formatted
+All checks passed!
+Success: no issues found in 279 source files
+Required test coverage of 85% reached. Total coverage: 99.96%
+855 passed, 2 deselected in 76.57s
+```
+Touched modules: `runtime/tool_invoker.py` 100%, `permissions/service.py` 100%, `model_router/adapters/codex/*` 100%.
+
+Demo: the AC 4 scenario as a script, with a `PollingApprovalWaiter` whose first poll approves the request, then the real CLI:
+```
+decision ALLOW APV-0001
+$ walk ledger query --run RUN-01J00000000000000000000000
+seq  at                                kind                actor     item        run                             outcome
+---  --------------------------------  ------------------  --------  ----------  ------------------------------  -------
+1    2026-10-06T14:22:18.469837+00:00  APPROVAL_REQUESTED  LEAD_DEV  STORY-0001  RUN-01J00000000000000000000000  OK
+2    2026-10-06T14:22:18.470840+00:00  CHECKPOINT_CREATED  LEAD_DEV  STORY-0001  RUN-01J00000000000000000000000  OK
+3    2026-10-06T14:22:18.471840+00:00  APPROVAL_DECIDED    USER      STORY-0001  RUN-01J00000000000000000000000  OK
+4    2026-10-06T14:22:18.471840+00:00  TOOL_INVOKED        LEAD_DEV  STORY-0001  RUN-01J00000000000000000000000  OK
+```
+`test_require_approval_pauses_then_allows` asserts the same sequence: the run's ledger events with `HOOK_EXECUTED` filtered out.
+
+The commit subject is shortened to `feat: add tool invoker with approval pausing and codex sandbox (E01-S26)` (72 characters), because the prescribed one has 97.
+
+Contract changes (small and additive, see the commit body; INTERFACES.md §1.10 updated):
+- **For owner attention: approval expiry.** `PermissionManager.decide_approval(..., expired: bool = False)`. Behavior 5 asks for the request to become **EXPIRED** "via `decide_approval(..., approve=False, by="kernel", note="timeout")`", but `decide_approval` can only produce APPROVED/DENIED. With `expired=True` it records EXPIRED, with the same `APPROVAL_DECIDED` event (payload `state: "EXPIRED"`); `approve=True` together with `expired=True` raises `ConfigError`. E02-S11's `expire_due` can reuse it.
+- `PollingApprovalWaiter(approvals, clock, *, permissions, sleep=asyncio.sleep, interval_s=1.0)`. The waiter needs the `PermissionManager` to expire a request, because only it writes `APPROVAL_DECIDED` (Behavior 7). `sleep` defaults to `asyncio.sleep`.
+- `sandbox_for_session(..., extra_writable: Sequence[str] = ())`: a tuple default on `list[str]` fails `mypy --strict` (the E01-S19 `exclude` precedent).
+
+Level-0 decisions:
+- **`authorize`.**
+  - The run is looked up by `request.run_id`; unknown → `RunNotFound`.
+  - A `bash` request whose command a CLI tool identifies is evaluated as that tool, with its kind. Its ledger events and hooks also use the identified name, so `git push --force` is logged as `git-cli`.
+  - ALLOW fires `ON_TOOL_BEFORE` (payload `{tool, command, paths}`) and then writes `TOOL_INVOKED(outcome=OK, payload {phase: "pre", matched_rule, approval_request_id?})`. Firing first means that a failing MUST hook stops the call before anything is logged as invoked.
+  - DENY writes `TOOL_DENIED(outcome=DENIED, payload {reason, matched_rule, approval_request_id?})` and then fires `ON_TOOL_DENIED` (`{tool, reason}`). `matched_rule` is the rule's tool pattern or `None`.
+- **REQUIRE_APPROVAL.**
+  - The kind is `PROTECTED_ACTION` when the catalogue tool has a `protected_action`, else `TOOL_CALL`; a tool missing from the catalogue counts as `TOOL_CALL`. The approver is the matched rule's approver, or USER.
+  - The run goes `PAUSED_FOR_APPROVAL`, a PAUSE checkpoint is taken (the item state is read, E01-S25), the run waits `approval_timeout_s`, then goes back to `RUNNING`.
+  - The decision returned is the original decision copied with `effect`, `approval_request_id` and, on denial, `reason="approval denied or expired"`.
+- **`invoke`.**
+  - The KERNEL-kind check and the handler lookup run **before** authorisation, so a call that could never run is neither approved nor metered (AC 10).
+  - Then authorise (DENY → `PermissionDenied(reason)`), then meter `TOOL_CALLS` by 1. EXHAUSTED raises `BudgetExhausted(detail {budget_id, hard_action, tool})`, so the call that reaches the limit is refused.
+  - Then dispatch. `duration_ms` comes from the injected clock and goes on the event's `duration_ms` field.
+  - A handler failure writes `TOOL_INVOKED(outcome=FAILED, payload {phase: "post", error})`. Kernel `WalkError`s propagate unchanged; others become `ToolCrashed` with `__cause__`. `ON_TOOL_AFTER` fires only on success (`{tool, paths, ok: true}`).
+- **`record_result`.** It writes `TOOL_INVOKED(phase=post, duration_ms, outcome OK|FAILED from result["ok"], default OK)`, fires `ON_TOOL_AFTER`, then meters. When the budget is exhausted it raises `BudgetExhausted` **after** recording, so the executor can block the run, as with `invoke`.
+- **Ledger events.** Every event carries `run_id`, the run's `work_item_id` and `model_id`, `tool`, and `actor_role=request.role`. The budget subject is `{project_key, role, work_item_id, run_id}`, with no phase.
+- **`authorizer_for(run)`.** The bound run is authoritative: `run_id` and `role` are always taken from it, and `worktree_path` too when the adapter left it empty. Other fields are re-validated from the fields the adapter set, so a `model_construct`ed request without `run_id` works (AC 12).
+- **`PollingApprovalWaiter.wait`.**
+  - It polls first, then sleeps `interval_s`. APPROVED → `True`; DENIED/EXPIRED → `False`.
+  - Once `timeout_s` has elapsed on the clock, it expires the request (`by="kernel"`, `note="timeout"`). If the request was decided between the last poll and the expiry, that decision stands.
+  - An unknown id raises `ConfigError`.
+- `CodexAdapter.configure_sandbox(session)` is `sandbox_for_session(session, network_enabled=False)` and is now the default `sandbox_factory`. Network stays off (Notes: `ToolSpec.requires_network` does not exist).
+- **For owner attention: imports outside the legend.** `runtime.tool_invoker` imports `walk.permissions.repository.ApprovalRepository` (the contract's `PollingApprovalWaiter` parameter). That is outside the "models/protocols/errors only" legend of ARCHITECTURE §2.2, like E01-S25's `walk.agents.handover`.
+- **For owner attention: Codex advisory calls (from E01-S22).** If the composition root hands `authorizer_for(run)` to a Codex session, a REQUIRE_APPROVAL decision would pause a Codex run for an action that already happened. E01-S27 should give Codex sessions an authorizer that never waits for approval.
 
 ---
 

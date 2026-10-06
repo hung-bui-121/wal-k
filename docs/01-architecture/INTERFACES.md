@@ -539,9 +539,16 @@ class PermissionManager(Protocol):
         """Persists PENDING; fires ON_PROTECTED_ACTION_REQUESTED; ledger APPROVAL_REQUESTED."""
 
     async def decide_approval(
-        self, approval_id: ApprovalRequestId, approve: bool, *, by: str, note: str | None
+        self,
+        approval_id: ApprovalRequestId,
+        approve: bool,
+        *,
+        by: str,
+        note: str | None,
+        expired: bool = False,
     ) -> ApprovalRequest:
-        """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run."""
+        """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run.
+        `expired=True` (kernel wait timeout, E01-S26; `approve` must be False) records EXPIRED instead of DENIED."""
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]: ...
 ```

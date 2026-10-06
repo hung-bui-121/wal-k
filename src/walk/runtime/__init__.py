@@ -25,8 +25,16 @@ from walk.runtime.protocols import (
 )
 from walk.runtime.repository import AgentRunRepository, CheckpointRepository, HandoverRepository
 from walk.runtime.sandbox import WORKTREES_DIR, DefaultSandboxManager, branch_name_for
+from walk.runtime.tool_invoker import (
+    APPROVAL_TIMEOUT_S,
+    ApprovalWaiter,
+    DefaultToolInvoker,
+    KernelToolHandler,
+    PollingApprovalWaiter,
+)
 
 __all__ = [
+    "APPROVAL_TIMEOUT_S",
     "DEFAULT_ALLOWED_PATHS",
     "DEFAULT_FORBIDDEN_PATHS",
     "WORKTREES_DIR",
@@ -36,6 +44,7 @@ __all__ = [
     "AgentRunRepository",
     "AgentRunState",
     "AppliedEffects",
+    "ApprovalWaiter",
     "BoundaryAuditor",
     "Checkpoint",
     "CheckpointKind",
@@ -45,8 +54,11 @@ __all__ = [
     "DefaultBoundaryAuditor",
     "DefaultCheckpointManager",
     "DefaultSandboxManager",
+    "DefaultToolInvoker",
     "HandoverRepository",
+    "KernelToolHandler",
     "OutputApplier",
+    "PollingApprovalWaiter",
     "RunNotFound",
     "SandboxManager",
     "ToolInvoker",

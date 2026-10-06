@@ -176,3 +176,22 @@ async def test_pending_filters_by_approver(manager: DefaultPermissionManager) ->
     await manager.decide_approval(decided, approve=False, by="user", note=None)
     assert [a.id for a in await manager.pending(Approver.USER)] == [first, third]
     assert len(await manager.pending()) == 3
+
+
+async def test_decide_approval_can_expire(
+    manager: DefaultPermissionManager, ledger: DefaultLedgerManager
+) -> None:
+    approval_id = await _request(manager)
+
+    expired = await manager.decide_approval(
+        approval_id, approve=False, by="kernel", note="timeout", expired=True
+    )
+
+    assert expired.state is ApprovalState.EXPIRED
+    assert expired.decision_note == "timeout"
+    events = await ledger.query(kinds=[LedgerEventKind.APPROVAL_DECIDED])
+    assert events[0].payload["state"] == "EXPIRED"
+    with pytest.raises(ConfigError, match="cannot approve and expire"):
+        await manager.decide_approval(
+            await _request(manager), approve=True, by="kernel", note=None, expired=True
+        )

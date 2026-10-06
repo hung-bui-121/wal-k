@@ -294,12 +294,24 @@ class DefaultPermissionManager:
         *,
         by: str,
         note: str | None,
+        expired: bool = False,
     ) -> ApprovalRequest:
         """Set APPROVED or DENIED with ``APPROVAL_DECIDED`` (actor = the approver's role).
 
+        ``expired=True`` (with ``approve=False``) records EXPIRED instead of DENIED: the kernel
+        gave up waiting (E01-S26 approval timeout).
+
         Raises:
-            ConfigError: If the id is unknown or the request is no longer PENDING.
+            ConfigError: If the id is unknown, the request is no longer PENDING, or
+                ``approve`` and ``expired`` are both set.
         """
+        if approve and expired:
+            msg = f"cannot approve and expire approval request {approval_id}"
+            raise ConfigError(msg, detail={"approval_id": approval_id})
+        if approve:
+            state = ApprovalState.APPROVED
+        else:
+            state = ApprovalState.EXPIRED if expired else ApprovalState.DENIED
         async with UnitOfWork(self._repo.db) as uow:
             current = await self._repo.get(approval_id)
             if current is None:
@@ -310,7 +322,7 @@ class DefaultPermissionManager:
                 raise ConfigError(msg, detail={"approval_id": approval_id})
             decided = current.model_copy(
                 update={
-                    "state": ApprovalState.APPROVED if approve else ApprovalState.DENIED,
+                    "state": state,
                     "decided_at": self._clock.now(),
                     "decided_by": by,
                     "decision_note": note,

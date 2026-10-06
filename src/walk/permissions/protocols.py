@@ -59,8 +59,12 @@ class PermissionManager(Protocol):
         *,
         by: str,
         note: str | None,
+        expired: bool = False,
     ) -> ApprovalRequest:
-        """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run."""
+        """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run.
+
+        ``expired=True`` (kernel timeout, ``approve=False``) records EXPIRED instead of DENIED.
+        """
         ...
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]:

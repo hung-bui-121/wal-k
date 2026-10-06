@@ -38,7 +38,7 @@ from walk.model_router.adapters.codex.events import (
 )
 from walk.model_router.adapters.codex.process import CodexProcess, CodexProcessLauncher
 from walk.model_router.adapters.codex.projector import CodexSkillProjector
-from walk.model_router.adapters.codex.sandbox import CodexSandboxConfig
+from walk.model_router.adapters.codex.sandbox import CodexSandboxConfig, sandbox_for_session
 from walk.model_router.errors import NotResumable
 from walk.model_router.models import (
     AdapterHealth,
@@ -107,8 +107,8 @@ class CodexAdapter:
             clock: Time source of events, health caching and the run watchdog.
             system_prompt_builder: Renders the system part of the prompt.
             user_message_builder: Renders the task part of the prompt.
-            sandbox_factory: Sandbox per run; default ``workspace-write`` on the worktree with
-                the network off (E01-S26 injects the policy-aware factory).
+            sandbox_factory: Sandbox per run; default `configure_sandbox` (``workspace-write``
+                on the worktree, network off).
             sleep: Awaited between watchdog checks; injected so tests do not wait.
         """
         self._launcher = launcher
@@ -116,11 +116,19 @@ class CodexAdapter:
         self._clock = clock
         self._system_prompt_builder = system_prompt_builder
         self._user_message_builder = user_message_builder
-        self._sandbox_factory = sandbox_factory or _default_sandbox
+        self._sandbox_factory = sandbox_factory or self.configure_sandbox
         self._sleep = sleep
         self._health: AdapterHealth | None = None
         self._runs: dict[RunId, _Run] = {}
         self._thread_roles: dict[str, AgentRole] = {}
+
+    def configure_sandbox(self, session: RunSession) -> CodexSandboxConfig:
+        """The run's sandbox: ``workspace-write`` on the worktree, network off, no extra roots.
+
+        ADR-0006 D-5 keys network access on a tool attribute DOMAIN-MODEL does not define yet,
+        so E01 keeps the network off for every run.
+        """
+        return sandbox_for_session(session, network_enabled=False)
 
     def descriptors(self) -> list[ModelDescriptor]:
         """The descriptors given at construction."""
@@ -355,10 +363,6 @@ class CodexAdapter:
     async def _watch(self, deadline: datetime) -> None:
         while self._clock.now() < deadline:
             await self._sleep(_WATCHDOG_POLL_S)
-
-
-def _default_sandbox(session: RunSession) -> CodexSandboxConfig:
-    return CodexSandboxConfig(cwd=session.worktree_path)
 
 
 def _write_inputs(worktree: Path, prompt: str, *, write_schema: bool) -> str:
