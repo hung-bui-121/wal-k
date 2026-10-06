@@ -1069,6 +1069,7 @@ class DefaultAgentExecutor:
             budget_consumed=self._consumed(live),
             context_manifest=live.agent_input.context.ref(),
         )
+        handover = await self._stored_handover(handover)
         request = FallbackRequest(
             role=run.role,
             policy=live.agent.runtime_policy.model_policy,
@@ -1116,6 +1117,14 @@ class DefaultAgentExecutor:
         )
         await self._checkpoints.close_handover(handover.id, child.id)
         await self._notify_finished(live)
+
+    async def _stored_handover(self, handover: Handover) -> Handover:
+        """The handover as its HANDOFF checkpoint stored it (post-commit head, E01-B05)."""
+        stored = await self._checkpoints.latest_open_handover(handover.work_item_id)
+        if stored is None or stored.id != handover.id:
+            msg = f"handover {handover.id} is not the open handover of {handover.work_item_id}"
+            raise ConfigError(msg, detail={"handover_id": handover.id})
+        return stored
 
     async def _block_provider(self, live: _Live, exc: BlockedProvider) -> None:
         """§21 level 3: no model left; the user decides (HANDOFF checkpoint stays)."""

@@ -6140,7 +6140,7 @@ seq  at                         kind                  actor       item        ru
 
 ### E01-B04 — `AGENT_RUN_ENDED` carries `handover_in_id` so `failed_handoffs` counts real runs
 
-**Status:** DONE (pending)
+**Status:** DONE (12fcc3f)
 **Type:** bugfix
 **Requirements:** §81, §115, §22
 **Depends on:** E01-R01
@@ -6221,7 +6221,7 @@ src/walk/runtime/recovery.py  99% (missing 167-168)
 
 ### E01-B05 — The handover document matches its row and its HANDOFF checkpoint
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §22, §137 (Inv. 2, 12)
 **Depends on:** E01-R01
@@ -6243,6 +6243,7 @@ src/walk/runtime/recovery.py  99% (missing 167-168)
 | `src/walk/runtime/recovery.py` | modify | — (same for the RECOVERY handover) |
 | `tests/runtime/test_checkpoints.py` | modify | — |
 | `tests/runtime/test_executor_fallback.py` | modify | — |
+| `docs/01-architecture/INTERFACES.md` | modify | — (added in implementation: §1.13 head stamping and document rewrite on close) |
 
 #### Interface contract
 No signature changes. `close_handover(handover_id, to_run_id) -> Handover` (INTERFACES §1.13) also updates the document through `MemoryManager.write` (which writes `CONTEXT_UPDATED`, not `HANDOVER_CREATED`).
@@ -6270,7 +6271,62 @@ No signature changes. `close_handover(handover_id, to_run_id) -> Handover` (INTE
 - Commit subject: `bugfix: keep handover document in sync with row (E01-B05)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** `build_handover` stamps `worktree_head` (and the `@ <sha>` in `current_state`) with the HEAD *before* the HANDOFF WIP commit. `checkpoint(..., handover=)` wrote that object unchanged to the document and the row, while the checkpoint's `head_sha` and the document's `freshness.commit` (stamped by `MemoryManager.write`) are the post-commit HEAD. `close_handover` updated only the row, so the document kept `to_run_id: null`. The continuing run received the caller's pre-commit object.
+
+**Fix:**
+- `runtime/checkpoints.py`:
+  - `checkpoint` replaces the handover with `_at_head(handover, head)`, using the post-commit HEAD, before it writes the document and the row. `_at_head` sets `worktree_head` and swaps the built-at sha inside `current_state`.
+  - `close_handover` closes the row as before. It then reads the document, sets `extra.to_run_id` and writes it with `MemoryManager.write`, which bumps the version and writes one `CONTEXT_UPDATED` (no second `HANDOVER_CREATED`). The write uses `head = worktree_head` and `branch = branch`, so freshness stays on the handover's head. The actor is the continuing run: role from the handover, model from its run row when present.
+- `runtime/executor.py` (`_fall_back`) and `runtime/recovery.py` (`_restart`, only when a RECOVERY handover was just built): after the HANDOFF checkpoint, the continuation gets the stored row (`_stored_handover`: `latest_open_handover`, checked to have the same id; otherwise `ConfigError`).
+- INTERFACES §1.13 (`CheckpointManager.checkpoint`) documents the stamping and the document rewrite on close.
+
+**Level-0 decisions:**
+- A handover row without its document makes `close_handover` log a warning and keep the closed row. It does not raise: the continuing run has already started when `close_handover` runs, and E01-S28 hands the row, not the document, to the run. This happens only when the document was deleted, or when a test inserts a bare row (`tests/orchestrator/test_scheduler.py::test_tick_passes_open_handover`).
+- The re-read helper is private and duplicated in the executor and recovery (6 lines). This avoids a new public name in `checkpoints.py`.
+
+**Files outside the Files table:** `docs/01-architecture/INTERFACES.md` §1.13 (contract note above; in the commit body).
+
+**Reproduce first** (before the fix):
+- AC 1: four distinct heads. The row and the document's `worktree_head` held the pre-commit sha, unlike `freshness.commit` and `head_sha`.
+- AC 2: `extra.to_run_id` was `None`.
+- AC 3: `AgentInput.handover.worktree_head` was the pre-commit sha, not the HANDOFF `head_sha`.
+
+Behavior 4 (lossless round trip) is asserted in AC 1 and AC 2 (`from_document(read_handover(id)) == row`).
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.89%
+1018 passed, 2 deselected in 388.71s (0:06:28)
+src/walk/runtime/checkpoints.py  100%
+src/walk/runtime/executor.py  99% (missing 689, 708, 1125-1126)
+src/walk/runtime/recovery.py  97% (missing 167-168, 279-280)
+```
+
+**Demo** (E01-S31 fallback scenario kept with `pytest --basetemp=.../b05demo tests/e2e/test_e01_gate.py::test_provider_outage_falls_back_with_handover`):
+```
+$ head -24 <repo>/.ai/handovers/HO-0001.md          (front matter, abridged)
+extra:
+  branch: feat/story-0002-wall-slide
+  from_run_id: RUN-01M49A2FVNPF4YNX991BERMPGY
+  reason: FALLBACK
+  to_run_id: RUN-01M49A2HKPSQZCK1WZ8JKF7B8D
+  worktree_head: ea4a1de18e1207630a4dd62447b07ea52b4e852e
+freshness:
+  commit: ea4a1de18e1207630a4dd62447b07ea52b4e852e
+updated_by: {model_id: fake-claude/sim, role: SENIOR_DEV, run_id: RUN-01M49A2HKPSQZCK1WZ8JKF7B8D}
+version: 2
+
+$ git -C <repo> log --format="%h %s" -3 feat/story-0002-wall-slide
+a4622e0 wip(STORY-0002): checkpoint 3      (run B END)
+1abb466 wip(STORY-0002): checkpoint 2      (run B periodic)
+ea4a1de wip(STORY-0002): checkpoint 2      (run A HANDOFF = worktree_head)
+```
+
+**For E04:** E04-S06 Behavior 1 (`worktree_head` = HEAD after the WIP commit) is delivered here. E04's refine should drop it from E04-S06, as this story's Notes say.
 
 ---
 

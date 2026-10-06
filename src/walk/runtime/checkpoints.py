@@ -6,6 +6,7 @@ and fires ``ON_AGENT_CHECKPOINT`` after the commit. Every external step is idemp
 ``(run, seq)``, so a checkpoint that failed half way is replayed safely.
 """
 
+import logging
 import re
 from typing import Final, get_args
 
@@ -20,6 +21,7 @@ from walk.context.models import ContextBundleRef
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.integrations.protocols import GitProvider
+from walk.memory.errors import DocumentNotFound
 from walk.memory.models import MemoryDocument
 from walk.memory.protocols import MemoryManager
 from walk.persistence.database import Database
@@ -32,6 +34,8 @@ from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
 from walk.workflow.models import WorkItem, WorkItemState
 from walk.workflow.repository import WorkflowRepository
+
+_LOG = logging.getLogger(__name__)
 
 _DEFAULT_NEXT_ACTION: Final = "Continue the task from the current worktree state"
 _HANDOVER_REASONS: Final = frozenset(get_args(Handover.model_fields["reason"].annotation))
@@ -107,7 +111,9 @@ class DefaultCheckpointManager:
         """WIP commit, optional handover document, checkpoint row + ledger, then the hook.
 
         A ``handover`` is written to `.ai/handovers/<id>.md`, recorded in ``handovers`` and
-        set as ``run.handover_out_id`` (the run row is updated from ``run``).
+        set as ``run.handover_out_id`` (the run row is updated from ``run``). Its
+        ``worktree_head`` (and the sha named in ``current_state``) become the HEAD after the WIP
+        commit, so the document, the row and the checkpoint name one head (E01-B05).
 
         Raises:
             ConfigError: ``workflow_state`` missing for a kind other than START/PAUSE, or the
@@ -126,6 +132,7 @@ class DefaultCheckpointManager:
         head = await self._git.head(worktree)
         dirty = await self._git.status(worktree)
         if handover is not None:
+            handover = _at_head(handover, head)
             await self._write_handover_document(run, seq, handover, head)
         now = self._clock.now()
         checkpoint = Checkpoint(
@@ -243,8 +250,38 @@ class DefaultCheckpointManager:
         return await self._memory.read_handover(handover.id)
 
     async def close_handover(self, handover_id: HandoverId, to_run_id: RunId) -> Handover:
-        """Record the run that continues the handover."""
-        return await self._handovers.close(handover_id, to_run_id)
+        """Record the run that continues the handover, in its row and its document (E01-B05).
+
+        The document is rewritten through `MemoryManager.write` (version bumped,
+        ``CONTEXT_UPDATED``) with ``extra.to_run_id`` set and its freshness kept at the
+        handover's ``worktree_head``. A missing document is logged; the row stays closed.
+
+        Raises:
+            ConfigError: No handover has ``handover_id``.
+        """
+        closed = await self._handovers.close(handover_id, to_run_id)
+        try:
+            doc = await self._memory.read_handover(handover_id)
+        except DocumentNotFound:
+            _LOG.warning(
+                "handover document missing; only the row records its successor",
+                extra={"handover_id": handover_id, "to_run_id": to_run_id},
+            )
+            return closed
+        successor = await self._runs.get(to_run_id)
+        actor = Actor(
+            role=closed.role,
+            model_id=successor.model_id if successor is not None else None,
+            run_id=to_run_id,
+        )
+        extra = {**doc.front_matter.extra, "to_run_id": to_run_id}
+        updated = doc.model_copy(
+            update={"front_matter": doc.front_matter.model_copy(update={"extra": extra})}
+        )
+        await self._memory.write(
+            updated, actor=actor, head=closed.worktree_head, branch=closed.branch
+        )
+        return closed
 
     async def _write_handover_document(
         self, run: AgentRun, seq: int, handover: Handover, head: str
@@ -309,6 +346,13 @@ class DefaultCheckpointManager:
             },
         )
         await self._hooks.fire(HookName.ON_AGENT_CHECKPOINT, context)
+
+
+def _at_head(handover: Handover, head: str) -> Handover:
+    """``handover`` naming ``head`` (the post-commit HEAD) instead of the head it was built at."""
+    built_at = handover.worktree_head
+    state = handover.current_state.replace(built_at, head) if built_at else handover.current_state
+    return handover.model_copy(update={"worktree_head": head, "current_state": state})
 
 
 def _worktree(run: AgentRun) -> str:

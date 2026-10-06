@@ -351,3 +351,24 @@ async def test_failed_continuations_count_as_failed_handoffs(
         telemetry.close()
     assert metrics.failed_handoffs == 2
     assert metrics.fallbacks == 2
+
+
+async def test_continuation_receives_post_commit_handover_head(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters, claude = _adapters(fake_clock, _outage(), script(tool_calls=5))
+    env = await make_executor_env(adapters=adapters)
+
+    await env.run_to_end()
+
+    old, _ = await _chain(env)
+    handoff = env.checkpoints_of(old.id)[-1]
+    assert handoff.kind is CheckpointKind.HANDOFF
+    assert handoff.wip_commit_sha is not None
+    received = claude.inputs[0].handover
+    assert received is not None
+    assert received.worktree_head == handoff.head_sha
+    assert handoff.head_sha in received.current_state
+    stored = await HandoverRepository(env.db).get("HO-0001")
+    assert stored is not None
+    assert received == stored.model_copy(update={"to_run_id": None})

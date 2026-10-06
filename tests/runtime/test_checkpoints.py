@@ -13,6 +13,7 @@ from walk.agents import (
     Finding,
     Handover,
     NextAction,
+    from_document,
 )
 from walk.budgets import BudgetDimension
 from walk.common.errors import ConfigError
@@ -449,3 +450,67 @@ async def test_latest_queries_and_interrupted_runs(
     assert await manager.latest_for_item(STORY_ID) == other
     interrupted = await manager.interrupted_runs("instance-a")
     assert [r.id for r in interrupted] == [RUN_B]
+
+
+async def test_handover_head_matches_handoff_checkpoint(
+    running: AgentRun,
+    git: GitCliProvider,
+    make_manager: ManagerFactory,
+    memory: DefaultMemoryManager,
+    handovers: HandoverRepository,
+) -> None:
+    worktree = Path(running.worktree_path or "")
+    (worktree / "Jump.cs").write_text("class Jump {}\n", encoding="utf-8")
+    manager = make_manager(git)
+    handover = await manager.build_handover(running, "FALLBACK", None)
+    before_commit = handover.worktree_head
+
+    checkpoint = await manager.checkpoint(
+        running, CheckpointKind.HANDOFF, handover=handover, workflow_state=IMPLEMENTING
+    )
+
+    assert checkpoint.wip_commit_sha is not None
+    assert checkpoint.head_sha != before_commit
+    row = await handovers.get("HO-0001")
+    assert row is not None
+    document = await memory.read_handover("HO-0001")
+    assert document.front_matter.freshness is not None
+    heads = {
+        row.worktree_head,
+        document.front_matter.extra["worktree_head"],
+        document.front_matter.freshness.commit,
+        checkpoint.head_sha,
+    }
+    assert heads == {checkpoint.head_sha}
+    assert checkpoint.head_sha in row.current_state
+    assert before_commit not in row.current_state
+    assert from_document(document) == row
+
+
+async def test_close_handover_updates_document(
+    *,
+    running: AgentRun,
+    git: GitCliProvider,
+    make_manager: ManagerFactory,
+    memory: DefaultMemoryManager,
+    handovers: HandoverRepository,
+    db: Database,
+) -> None:
+    manager = make_manager(git)
+    handover = await manager.build_handover(running, "FALLBACK", None)
+    await manager.checkpoint(
+        running, CheckpointKind.HANDOFF, handover=handover, workflow_state=IMPLEMENTING
+    )
+
+    closed = await manager.close_handover("HO-0001", RUN_B)
+
+    document = await memory.read_handover("HO-0001")
+    assert document.front_matter.extra["to_run_id"] == RUN_B
+    assert document.front_matter.version == 2
+    assert document.front_matter.updated_by.run_id == RUN_B
+    kinds = _ledger_kinds(db)
+    assert kinds.count("HANDOVER_CREATED") == 1
+    assert kinds.count("CONTEXT_UPDATED") == 2
+    row = await handovers.get("HO-0001")
+    assert row == closed
+    assert from_document(document) == row

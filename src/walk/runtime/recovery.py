@@ -16,7 +16,7 @@ from pydantic import Field
 from walk.agents.models import Handover
 from walk.agents.protocols import AgentManager
 from walk.common.clock import Clock
-from walk.common.errors import WalkError
+from walk.common.errors import ConfigError, WalkError
 from walk.common.ids import ProjectKey, RunId, WorkItemId
 from walk.common.models import FrozenModel, JsonDict
 from walk.hooks.errors import HookFailed
@@ -230,6 +230,7 @@ class RecoveryManager:
             await self._checkpoints.checkpoint(
                 run, CheckpointKind.HANDOFF, handover=handover, workflow_state=item.state
             )
+            handover = await self._stored_handover(handover)
         policy = self._agents.load_runtime_policy(run.role)
         agent = await self._agents.instantiate(
             run.role, item, checkpoint.model_id, checkpoint.effort, [], self._ready_env_keys()
@@ -270,6 +271,14 @@ class RecoveryManager:
             routing=decision,
         )
         return restarted, handover
+
+    async def _stored_handover(self, handover: Handover) -> Handover:
+        """The handover as its HANDOFF checkpoint stored it (post-commit head, E01-B05)."""
+        stored = await self._checkpoints.latest_open_handover(handover.work_item_id)
+        if stored is None or stored.id != handover.id:
+            msg = f"handover {handover.id} is not the open handover of {handover.work_item_id}"
+            raise ConfigError(msg, detail={"handover_id": handover.id})
+        return stored
 
     async def _continued(
         self,

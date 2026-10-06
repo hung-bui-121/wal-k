@@ -669,7 +669,12 @@ class CheckpointManager(Protocol):
         """1) WIP commit on run.branch (`wip(<work_item>): checkpoint <seq>`; skipped if clean) via GitProvider (idempotent key);
         2) insert checkpoints row; 3) if handover given → MemoryManager.write_handover; 4) fire ON_AGENT_CHECKPOINT; ledger CHECKPOINT_CREATED.
         E01-S25: `workflow_state` is required except for START and PAUSE (read from the work item); `budget_consumed` and
-        `context_manifest` default to empty."""
+        `context_manifest` default to empty.
+        E01-B05: a handover's `worktree_head` (and the sha in its `current_state`) is set to the HEAD after the WIP commit
+        before the document and the row are written, so document, row and checkpoint `head_sha` agree. The continuing run
+        receives the stored row. `DefaultCheckpointManager.close_handover(id, to_run_id)` closes the row and rewrites the
+        document with `extra.to_run_id` through MemoryManager.write (version bump, CONTEXT_UPDATED; HANDOVER_CREATED stays
+        once); a missing document is logged and the row stays closed."""
 
     async def latest(self, run_id: RunId) -> Checkpoint | None: ...
     async def latest_for_item(self, work_item_id: WorkItemId) -> Checkpoint | None: ...
