@@ -2715,7 +2715,7 @@ Level-0 decisions:
 
 ### E01-S19 — `ModelAdapter` protocol, `RunSession`, `AgentEvent`, `FakeModelAdapter`
 
-**Status:** DONE (pending)
+**Status:** DONE (627600b)
 **Type:** feat
 **Requirements:** §6.1, §16 (descriptor data), §17, §21 (triggers), §22, §126, §128, §137 (Inv. 1, 2), §138 (Model Lock-In)
 **Depends on:** E01-S18
@@ -2893,7 +2893,7 @@ Level-0 decisions:
 
 ### E01-S20 — Model router: `CapabilityRegistry`, `models.yaml`, `select`, `classify_error`, costing
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §14, §15, §16, §17, §21 (select path), §23, §84, §137 (Inv. 1), §138 (Model Lock-In)
 **Depends on:** E01-S19, E01-S12
@@ -3022,7 +3022,60 @@ class DefaultModelRouter:
 - Commit subject: `feat: add model registry, routing selection and usage costing (E01-S20)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+229 files already formatted
+All checks passed!
+Success: no issues found in 227 source files
+Required test coverage of 85% reached. Total coverage: 99.95%
+716 passed in 52.04s
+```
+Touched modules: `model_router/*` 100%.
+
+Demo (no CLI in this story; a script resolves every default family and level, then prices 1M input / 100k output tokens):
+```
+claude/opus    LOW       -> claude/claude-opus-5-5   {'effort': 'low', 'max_turns': 40} 600s
+claude/opus    MEDIUM    -> claude/claude-opus-5-5   {'effort': 'medium', 'max_turns': 80} 1500s
+claude/opus    HIGH      -> claude/claude-opus-5-5   {'effort': 'high', 'max_turns': 150} 2700s
+claude/opus    VERY_HIGH -> claude/claude-opus-5-5   {'effort': 'xhigh', 'max_turns': 300} 5400s
+claude/sonnet  LOW       -> claude/claude-sonnet-5-5 {'effort': 'low', 'max_turns': 40} 600s
+claude/sonnet  MEDIUM    -> claude/claude-sonnet-5-5 {'effort': 'medium', 'max_turns': 80} 1500s
+claude/sonnet  HIGH      -> claude/claude-sonnet-5-5 {'effort': 'high', 'max_turns': 150} 2700s
+claude/sonnet  VERY_HIGH -> claude/claude-opus-5-5   {'effort': 'xhigh', 'max_turns': 300} 5400s
+codex/default  LOW       -> codex/gpt-5-codex        {'model_reasoning_effort': 'low'} 600s
+codex/default  MEDIUM    -> codex/gpt-5-codex        {'model_reasoning_effort': 'medium'} 1500s
+codex/default  HIGH      -> codex/gpt-5-codex        {'model_reasoning_effort': 'high'} 2700s
+codex/default  VERY_HIGH -> codex/gpt-5-codex        {'model_reasoning_effort': 'xhigh'} 5400s
+cost of 1M in / 100k out on claude/claude-opus-5-5: 22.5 USD
+cost of 1M in / 100k out on claude/claude-sonnet-5-5: 4.5 USD
+cost of 1M in / 100k out on codex/gpt-5-codex: 2.25 USD
+```
+
+The commit subject is the prescribed one (71 characters).
+
+Level-0 decisions:
+- **For owner attention: model ids.** DOMAIN-MODEL §1.2 defines `ModelId` as `"<provider>/<model>"` and gives `claude/claude-opus-5-5` and `codex/gpt-5-codex` as examples; the existing tests and ARCHITECTURE §8 use the same form. The story's bare names (`claude-opus-5-5`) do not match that pattern.
+  - The default descriptors are therefore keyed `claude/claude-opus-5-5`, `claude/claude-sonnet-5-5` and `codex/gpt-5-codex`.
+  - `ModelId` is unchanged. The ADR-0011 D-2 values (model names, params, prices, windows, capabilities, execution times) are verbatim.
+  - Consequence for E01-S21/S22: the adapters pass the part after the first `/` to the SDK/CLI (`model=claude-opus-5-5`, `-c model=gpt-5-codex`).
+  - Acceptance test 4 asserts the prefixed id.
+- **For owner attention: `fallback` stub.** `DefaultModelRouter.fallback(request: object)` raises `ConfigError("implemented in E01-S28")` because `FallbackRequest` does not exist yet. E01-S28 narrows the parameter type and adds the method to the `ModelRouter` protocol (see E01-S19).
+- `models.yaml` layout is `version`, `models` keyed by id (the `id` field is injected from the key and must match it if given), and `families` → effort → `{model, params, execution_time_s, escalate_to?}`. `claude/sonnet` VERY_HIGH names the opus model and `escalate_to: claude/opus`.
+- `load_models_config`:
+  - Unknown top-level keys are rejected, as are non-mapping `models`/`families`, invalid YAML, schema errors (with `detail["errors"]` as `<loc>: <msg>` lines), negative prices, family names not matching `FAMILY_PATTERN`, and unknown `model`/`escalate_to` (`detail` = `{family, level, …}`).
+  - A missing or empty project file means no override. A project `version` replaces the default's.
+- `resolve_family`:
+  - A name that is both a family and a model id resolves as the family.
+  - A concrete model gets `params={}` and the ADR-0011 D-2 wall-clock bound for the effort.
+  - A family without the requested level raises `ConfigError` (`detail={family, level}`).
+- `select`:
+  - Removed candidates are also listed in `rejected`, so that `BlockedProvider` names every candidate: `restricted` (by family or resolved id), `MODEL_DISABLED`, and `excluded` (by family or id).
+  - Candidates are de-duplicated by resolved id, keeping the first origin.
+  - The `effort` check rejects when the level is unsupported and the descriptor lists no levels, or the adapter's `map_effort` raises a `WalkError`.
+  - Cross-model deferral records `cross_model_review` in `rejected` when it moves the implementer's model to the end. That model can still win when every other candidate fails.
+  - Adapter health is queried at most once per provider per call. An unknown family in a policy raises `ConfigError`. `role` is unused by the MVP rules.
+- `classify_error` walks the exception's MRO, so the most-derived mapped class wins. `BudgetExhausted` maps to `BUDGET_RESTRICTION` only when `detail["hard_action"]` is `FALLBACK_MODEL`: the class has no `hard_action` attribute, and E01-S12 documents the detail key.
+- `health_all` covers every model whose provider has an adapter; disabled models without an adapter are skipped.
 
 ---
 

@@ -1,0 +1,89 @@
+# Kernel model defaults (ADR-0011 D-2). Projects override in .ai/agents/models.yaml:
+# `models` entries replace by id, `families` entries replace by family name.
+# Model ids are "<provider>/<model>" (DOMAIN-MODEL §1.2); adapters pass the part after the
+# slash to the provider. Prices are USD per million tokens (ADR-0004 D-9).
+version: "1.0"
+
+models:
+  claude/claude-opus-5-5:
+    provider: claude
+    display_name: Claude Opus 5.5
+    capabilities:
+      CODING: 5
+      ARCHITECTURE: 5
+      REPOSITORY_NAVIGATION: 5
+      LONG_CONTEXT_REASONING: 5
+      DESIGN_REASONING: 5
+      VISUAL_REASONING: 4
+      TOOL_USE: 5
+      REVIEW: 5
+      PLANNING: 5
+    context_window_tokens: 200000
+    max_output_tokens: 32000
+    supports_effort_levels: [LOW, MEDIUM, HIGH, VERY_HIGH]
+    supports_native_resume: true
+    input_cost_per_mtok_usd: 15.0
+    output_cost_per_mtok_usd: 75.0
+    cache_read_cost_per_mtok_usd: 1.5
+
+  claude/claude-sonnet-5-5:
+    provider: claude
+    display_name: Claude Sonnet 5.5
+    capabilities:
+      CODING: 4
+      ARCHITECTURE: 4
+      REPOSITORY_NAVIGATION: 4
+      LONG_CONTEXT_REASONING: 4
+      DESIGN_REASONING: 4
+      VISUAL_REASONING: 3
+      TOOL_USE: 4
+      REVIEW: 4
+      PLANNING: 4
+    context_window_tokens: 200000
+    max_output_tokens: 32000
+    supports_effort_levels: [LOW, MEDIUM, HIGH, VERY_HIGH]
+    supports_native_resume: true
+    input_cost_per_mtok_usd: 3.0
+    output_cost_per_mtok_usd: 15.0
+    cache_read_cost_per_mtok_usd: 0.3
+
+  codex/gpt-5-codex:
+    provider: codex
+    display_name: GPT-5 Codex
+    capabilities:
+      CODING: 5
+      ARCHITECTURE: 3
+      REPOSITORY_NAVIGATION: 5
+      LONG_CONTEXT_REASONING: 4
+      DESIGN_REASONING: 2
+      VISUAL_REASONING: 1
+      TOOL_USE: 5
+      REVIEW: 4
+      PLANNING: 3
+    context_window_tokens: 272000
+    max_output_tokens: 32000
+    supports_effort_levels: [LOW, MEDIUM, HIGH, VERY_HIGH]
+    supports_native_resume: true
+    input_cost_per_mtok_usd: 1.25
+    output_cost_per_mtok_usd: 10.0
+    cache_read_cost_per_mtok_usd: 0.125
+
+# execution_time_s is the per-effort wall-clock bound: LOW 10, MEDIUM 25, HIGH 45, VERY_HIGH 90 min.
+families:
+  claude/opus:
+    LOW: {model: claude/claude-opus-5-5, params: {effort: low, max_turns: 40}, execution_time_s: 600}
+    MEDIUM: {model: claude/claude-opus-5-5, params: {effort: medium, max_turns: 80}, execution_time_s: 1500}
+    HIGH: {model: claude/claude-opus-5-5, params: {effort: high, max_turns: 150}, execution_time_s: 2700}
+    VERY_HIGH: {model: claude/claude-opus-5-5, params: {effort: xhigh, max_turns: 300}, execution_time_s: 5400}
+
+  claude/sonnet:
+    LOW: {model: claude/claude-sonnet-5-5, params: {effort: low, max_turns: 40}, execution_time_s: 600}
+    MEDIUM: {model: claude/claude-sonnet-5-5, params: {effort: medium, max_turns: 80}, execution_time_s: 1500}
+    HIGH: {model: claude/claude-sonnet-5-5, params: {effort: high, max_turns: 150}, execution_time_s: 2700}
+    VERY_HIGH: {model: claude/claude-opus-5-5, params: {effort: xhigh, max_turns: 300}, execution_time_s: 5400, escalate_to: claude/opus}
+
+  codex/default:
+    LOW: {model: codex/gpt-5-codex, params: {model_reasoning_effort: low}, execution_time_s: 600}
+    MEDIUM: {model: codex/gpt-5-codex, params: {model_reasoning_effort: medium}, execution_time_s: 1500}
+    HIGH: {model: codex/gpt-5-codex, params: {model_reasoning_effort: high}, execution_time_s: 2700}
+    VERY_HIGH: {model: codex/gpt-5-codex, params: {model_reasoning_effort: xhigh}, execution_time_s: 5400}
