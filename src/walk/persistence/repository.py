@@ -47,24 +47,24 @@ class Repository[T: WalkModel]:
     async def insert(self, obj: T, uow: UnitOfWork) -> T:
         """Insert ``obj``; a duplicate key raises ``sqlite3.IntegrityError``."""
         columns, values = self._row(obj)
-        sql = f"INSERT INTO {self._table} ({', '.join(columns)}) VALUES ({_marks(columns)})"  # noqa: S608 - identifiers validated
+        sql = f"INSERT INTO {self._table} ({_names(columns)}) VALUES ({_marks(columns)})"  # noqa: S608 - identifiers validated
         uow.conn.execute(sql, values)
         return obj
 
     async def upsert(self, obj: T, uow: UnitOfWork) -> T:
         """Insert ``obj`` or replace the JSON and projection columns of the existing row."""
         columns, values = self._row(obj)
-        updates = ", ".join(f"{c} = excluded.{c}" for c in columns if c != self._key)
+        updates = ", ".join(f'"{c}" = excluded."{c}"' for c in columns if c != self._key)
         sql = (
-            f"INSERT INTO {self._table} ({', '.join(columns)}) VALUES ({_marks(columns)}) "  # noqa: S608 - identifiers validated
-            f"ON CONFLICT({self._key}) DO UPDATE SET {updates}"
+            f"INSERT INTO {self._table} ({_names(columns)}) VALUES ({_marks(columns)}) "  # noqa: S608 - identifiers validated
+            f'ON CONFLICT("{self._key}") DO UPDATE SET {updates}'
         )
         uow.conn.execute(sql, values)
         return obj
 
     async def get(self, key: str) -> T | None:
         """Return the aggregate stored under ``key``, or ``None``."""
-        sql = f"SELECT json FROM {self._table} WHERE {self._key} = ?"  # noqa: S608 - identifiers validated
+        sql = f'SELECT json FROM {self._table} WHERE "{self._key}" = ?'  # noqa: S608 - identifiers validated
         row = self._db.connect().execute(sql, (key,)).fetchone()
         return None if row is None else self._load(row[0])
 
@@ -111,6 +111,11 @@ def _check_identifier(name: str, what: str) -> None:
     if not _IDENTIFIER_RE.match(name):
         msg = f"invalid SQL {what} name: {name!r}"
         raise ConfigError(msg, detail={what: name})
+
+
+def _names(columns: Sequence[str]) -> str:
+    """Quoted column list; quoting lets SQL keywords such as ``limit`` be column names."""
+    return ", ".join(f'"{column}"' for column in columns)
 
 
 def _marks(columns: Sequence[str]) -> str:

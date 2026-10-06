@@ -1482,7 +1482,7 @@ Level-0 decisions:
 
 ### E01-S11 — Phases and release candidates: models, tables, `walk phase list/start/gate`
 
-**Status:** DONE (pending)
+**Status:** DONE (7b73aef)
 **Type:** feat
 **Requirements:** §66, §68, §70, §76, §93 (stop phase)
 **Depends on:** E01-S09
@@ -1608,7 +1608,7 @@ Level-0 decisions:
 
 ### E01-S12 — Budgets and cost: `BudgetManager`, `CostManager`, `walk cost`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §20, §84, §85, §86
 **Depends on:** E01-S05, E01-S07
@@ -1706,7 +1706,44 @@ CLI: `walk cost --item ID | --phase ID | --project` → table `category | usd` a
 - Commit: `feat: add budget metering and cost accounting (E01-S12)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+106 files already formatted
+All checks passed!
+Success: no issues found in 103 source files
+Required test coverage of 85% reached. Total coverage: 99.91%
+409 passed in 21.75s
+```
+Touched modules: `budgets/*` 100%, `cli/cmd_cost.py` 100%, `cli/composition.py` 100%, `persistence/repository.py` 100%.
+
+Demo (scratch repo from the earlier demos; no cost recorded yet):
+```
+$ walk cost --project --repo ./demo
+category  usd
+--------  ----
+LLM       0.00
+ASSETS    0.00
+COMPUTE   0.00
+TIME      0.00
+total     0.00
+$ walk cost --item FEAT-0001 --json --repo ./demo
+{"categories": {"LLM": 0.0, "ASSETS": 0.0, "COMPUTE": 0.0, "TIME": 0.0}, "total_usd": 0.0}
+$ walk cost --repo ./demo
+error: walk cost needs exactly one of --item, --phase, --project      (exit 1)
+```
+
+Outside the Files table:
+- `persistence/repository.py`: the generic `Repository` now double-quotes column identifiers in INSERT/UPSERT/GET. The `budgets` table has a column named `"limit"` (an SQL keyword, quoted in the DDL), so unquoted generated SQL fails. Behaviour for every other table is unchanged.
+- `cli/composition.py`: `open_costs(db, *, clock=None)` wires `DefaultCostManager` with its budget manager, ledger and hook manager (CLI wiring stays in the composition root, as for `open_workflow` in E01-S11).
+- `DOMAIN-MODEL.md` §4.2: one comment line records that `BudgetPolicy` is implemented in `walk.budgets.models` (RELOCATE, WBS §3.2).
+
+Level-0 decisions:
+- `meter` only touches applicable budgets of the metered dimension. Verdict: EXHAUSTED (the first metered budget with `consumed >= limit`, with its `hard_action`), then SOFT_THRESHOLD (the first budget crossing `soft_threshold_ratio · limit` for the first time; `soft_notified` is set), then OK. `ON_BUDGET_THRESHOLD` fires once per budget. `ON_BUDGET_EXHAUSTED` fires when a budget crosses its limit, not again on later meters (the verdict stays EXHAUSTED). Both fire after commit: threshold hooks first, with payload `{budget_id, scope, scope_id, dimension, consumed, limit, hard_action}` and subject ids on the `HookContext`. `BUDGET_EVENT` (actor KERNEL; payload `{dimension, quantity, status, budgets: [{id, consumed, limit}]}`) is written only when at least one budget was metered. A meter with no matching budget returns OK and writes nothing.
+- `ensure` uses `limits` when given, else `policy.per_task`, and raises `ConfigError` when neither is given. The ratio and hard action come from `policy` (Budget defaults without one). It returns the requested dimensions' budgets, existing ones untouched. GLOBAL budgets use `scope_id = "GLOBAL"`; ROLE budgets use the role value. `applicable` is ordered GLOBAL, PROJECT, PHASE, ROLE, TASK, then dimension. `can_afford` matches budgets by `scope_id`; an empty list or a scope with no budget counts as unlimited.
+- `CostManager.record` commits the `cost_records` row and `COST_RECORDED` in one transaction. The event carries `cost_usd`/`model_id` columns and the payload `{record_id, category, provider, dimension, quantity, unit, input_tokens, output_tokens, cache_read_tokens}`; the token keys feed E01-S06 `METRIC_QUERIES`; actor = record role or KERNEL. `record` then meters `COST_USD` with `cost_usd`, and `TOKENS` with `quantity` when the record's dimension is TOKENS, as separate transactions after the commit.
+- `cost_of` requires exactly one subject (`ConfigError`) and returns every `CostCategory` (zeros included). A work item's tree is walked breadth-first: children via `parent_id`, plus bugs whose `related_feature_id` is any node of the tree. An unknown item raises `WorkItemNotFound`.
+- `BudgetExhausted(PermanentError)` is defined for callers (runtime, E01-S26/S27); nothing in this story raises it. Its docstring is the contract text as a sentence (ruff D415).
+- CLI: `walk cost` is the `cost_app` callback (no subcommands). Exactly one of `--item/--phase/--project` is required (else exit 1). `--project` uses the single project in the DB. Output is a table `category | usd` with a final `total` row, or JSON `{categories, total_usd}`. The DB is opened read-only and must exist.
 
 ---
 

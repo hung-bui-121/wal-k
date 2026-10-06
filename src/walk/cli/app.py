@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from walk import __version__
+from walk.cli.cmd_cost import cost_app
 from walk.cli.cmd_db import db_app
 from walk.cli.cmd_ledger import ledger_app
 from walk.cli.cmd_phase import phase_app
@@ -18,6 +19,7 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(db_app)
+app.add_typer(cost_app)
 app.add_typer(ledger_app)
 app.add_typer(phase_app)
 app.add_typer(work_app)

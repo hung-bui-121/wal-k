@@ -956,6 +956,7 @@ class EffortPolicy(WalkModel):
     stage_bump: dict[WorkItemState, int] = Field(default_factory=lambda: {WorkItemState.REWORK: 1})
 
 
+# Implemented in walk.budgets.models (RELOCATE, WBS §3.2; E01-S12): budgets may not import agents.
 class BudgetPolicy(WalkModel):
     """§20 per-role defaults; instantiated as Budget rows at ROLE and TASK scope."""
 

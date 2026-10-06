@@ -6,6 +6,12 @@ and wires the services the CLI commands use.
 
 from pathlib import Path
 
+from walk.budgets import (
+    BudgetRepository,
+    CostRepository,
+    DefaultBudgetManager,
+    DefaultCostManager,
+)
 from walk.common.clock import Clock, SystemClock
 from walk.hooks import DefaultHookManager, HookExecutionRepository
 from walk.persistence import Database, IdSequenceStore
@@ -63,3 +69,17 @@ def open_workflow(db: Database, *, clock: Clock | None = None) -> DefaultWorkflo
         time,
         TABLES_DIR,
     )
+
+
+def open_costs(db: Database, *, clock: Clock | None = None) -> DefaultCostManager:
+    """Wire a `DefaultCostManager` (with its budget manager, ledger and hooks) on ``db``.
+
+    Args:
+        db: An open project database.
+        clock: Time source; the system clock when ``None`` (tests inject a fake).
+    """
+    time = clock or SystemClock()
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), IdSequenceStore(db), time)
+    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, time)
+    budgets = DefaultBudgetManager(db, BudgetRepository(db), ledger, hooks, time)
+    return DefaultCostManager(db, CostRepository(db), ledger, budgets, WorkflowRepository(db))
