@@ -1031,7 +1031,7 @@ _pending_
 A `REQUIRE_APPROVAL` decision creates a persisted `ApprovalRequest`, pauses the run with a `PAUSE` checkpoint, and `walk approve|deny` resolves it and wakes the waiting tool invocation; unanswered requests expire to DENY.
 
 #### Scope
-- In: full `request_approval/decide_approval/pending`, `ApprovalWaiter` registry in runtime, expiry, CLI (in-process and via `CommandClient`), `ON_PROTECTED_ACTION_REQUESTED` payload.
+- In: full `request_approval/decide_approval/pending`, `EventApprovalWaiter` (event-driven implementation of the `ApprovalWaiter` protocol from E01-S26) in runtime, expiry, CLI (in-process and via `CommandClient`), `ON_PROTECTED_ACTION_REQUESTED` payload.
 - Out: escalation-kind approvals routing (E05-S02); artifact-change approvals content (E02-S12 uses this API).
 
 #### Files
@@ -1039,7 +1039,7 @@ A `REQUIRE_APPROVAL` decision creates a persisted `ApprovalRequest`, pauses the 
 |---|---|---|
 | `src/walk/permissions/service.py` | modify | `DefaultPermissionManager.request_approval/decide_approval/pending/expire_due` |
 | `src/walk/permissions/repository.py` | modify | `ApprovalRequestRepository.list_pending`, `expire_before` |
-| `src/walk/runtime/approvals.py` | create | `ApprovalWaiter` |
+| `src/walk/runtime/approvals.py` | create | `EventApprovalWaiter` (implements `walk.runtime.tool_invoker.ApprovalWaiter`; replaces `PollingApprovalWaiter` in the composition root) |
 | `src/walk/runtime/tool_invoker.py` | modify | — (`authorize` awaits `ApprovalWaiter.wait(approval_id, timeout)`) |
 | `src/walk/orchestrator/commands.py` | modify | — (`approve`, `deny` commands) |
 | `src/walk/orchestrator/service.py` | modify | — (`Scheduler.tick` calls `expire_due`) |
@@ -1059,7 +1059,7 @@ class DefaultPermissionManager:
         """PENDING with expires_at <= now → EXPIRED; ledger APPROVAL_DECIDED outcome=DENIED payload {'reason': 'expired'}."""
 
 # src/walk/runtime/approvals.py
-class ApprovalWaiter:
+class EventApprovalWaiter:  # implements ApprovalWaiter protocol (E01-S26)
     """In-process registry of asyncio.Events keyed by ApprovalRequestId; resolved by decide_approval through a callback."""
     def register(self, approval_id: ApprovalRequestId) -> None: ...
     async def wait(self, approval_id: ApprovalRequestId, timeout_s: int) -> ApprovalState:
@@ -1070,7 +1070,7 @@ CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `wal
 
 #### Behavior
 1. `request_approval` allocates `APV-NNNN` via `IdSequenceStore`, sets `expires_at = requested_at + approval_timeout_s`, persists PENDING, writes `APPROVAL_REQUESTED`, fires `ON_PROTECTED_ACTION_REQUESTED` (payload `{approval_id, tool, run_id}`) — whose builtin (E02-S08) pauses the run; then `ToolInvoker.authorize` creates a `PAUSE` checkpoint and awaits `ApprovalWaiter.wait`.
-2. `decide_approval(id, approve, by, note)`: PENDING → APPROVED/DENIED, `decided_at`, `decided_by`, ledger `APPROVAL_DECIDED` (`outcome` OK/DENIED, actor `USER`), then `ApprovalWaiter.resolve`; run state returns to `RUNNING` through `executor.resume(run_id)`; a non-PENDING request → `PermanentError("approval already decided")`.
+2. `decide_approval(id, approve, by, note)`: PENDING → APPROVED/DENIED, `decided_at`, `decided_by`, ledger `APPROVAL_DECIDED` (`outcome` OK/DENIED, actor `USER`), then `EventApprovalWaiter.resolve`; run state returns to `RUNNING` through `executor.resume(run_id)`; a non-PENDING request → `PermanentError("approval already decided")`.
 3. APPROVED → `authorize` returns `PermissionDecision(effect=ALLOW, approval_request_id=id)`; DENIED/EXPIRED → `DENY` + `TOOL_DENIED` ledger + `ON_TOOL_DENIED`.
 4. `expire_due` runs every scheduler tick and on `wait` timeout; expiry is idempotent.
 5. After a kernel restart the waiter registry is empty: `RecoveryManager` (E01-S28) re-registers waiters for runs in `PAUSED_FOR_APPROVAL` with PENDING requests and re-enters `wait`; APPROVED-while-down requests resume immediately.
@@ -1097,7 +1097,7 @@ CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `wal
 
 #### Notes
 - ADR-0006 D-4, D-7; ARCHITECTURE §6 protected actions paragraph.
-- `NEW NAME:` `ApprovalWaiter`, `expire_due`, `approval_timeout_s` policy key, command names `approve`/`deny` in `CommandConsumer`.
+- `NEW NAME:` `EventApprovalWaiter` (the `ApprovalWaiter` protocol itself is defined by E01-S26), `expire_due`, `approval_timeout_s` policy key, command names `approve`/`deny` in `CommandConsumer`.
 - Pitfall: `wait` must not hold a DB connection; poll the DB on wake-up to tolerate decisions made in-process by the CLI while the daemon is running.
 - Commit subject: `feat: add approval request lifecycle and approve commands (E02-S11)`.
 

@@ -639,7 +639,7 @@ User feedback given with `REWORK` becomes structured production work (§71): the
 | `src/walk/orchestrator/router.py` | modify | — (row `PHASE / REWORK → PRODUCT_OWNER if enabled else ORCHESTRATOR, purpose PLAN`) `(verify: E03-S07 full table module)` |
 | `src/walk/orchestrator/service.py` | modify | — (after `OutputApplier.apply` of a run on an intake task: `phase_gate.on_intake_completed(item, output)`) |
 | `src/walk/orchestrator/scheduler.py` | modify | — (in `REWORK`, only items labelled `phase-intake` are admissible) |
-| `src/walk/runtime/applier.py` | modify | — (`new_tasks` from an intake run inherit `phase_id`, `labels += ["rework:<category>"]`, parent = the feature named in the draft or the intake task) `(verify)` |
+| `src/walk/runtime/output_applier.py` | modify | — (`new_tasks` from an intake run inherit `phase_id`, `labels += ["rework:<category>"]`, parent = the feature named in the draft or the intake task) `(verify)` |
 | `src/walk/workflow/guards.py` | modify | — (`rework_work_items_created` reads `rework_task_ids` non-empty; `in_phase_scope` unchanged) |
 | `src/walk/agents/templates/PLAN.md.j2` | modify | — (block `rework_intake`: feedback text, §71 category list, scope epics/features list, instruction "one task per category, `phase_id` set, no scope expansion") |
 | `tests/orchestrator/test_rework_intake.py` | create | — |

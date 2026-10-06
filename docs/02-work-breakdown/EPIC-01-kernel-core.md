@@ -2618,4 +2618,742 @@ _pending_
 
 ---
 
-<!-- CONTINUE -->
+### E01-S27 — `AgentExecutor` event loop, output validation/repair, `OutputApplier` core
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §9, §22, §40, §41, §54, §81, §84, §86, §89, §91 (repository boundary), §126, §137 (Inv. 1, 2, 9, 12), §138 (Hallucinated Project State)
+**Depends on:** E01-S26, E01-S20, E01-S24, E01-S06
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`DefaultAgentExecutor.start` runs one `AgentRun` end-to-end as an asyncio task: worktree, `ContextBundle`, `AgentInput` and `RunSession` assembly, start ledger events, consumption of the adapter event stream (tool results recorded, usage metered into cost records, periodic and hinted checkpoints with a boundary audit before every WIP commit), validation of the final `AgentOutput` with one repair turn, and the `OutputApplier` core that writes context updates and evidence and raises the IMPLEMENT workflow event.
+
+#### Scope
+- In: `DefaultAgentExecutor.start/cancel/pause/running/wait`, `AgentInputBuilder`, `build_run_session`, `expected_output_for`, `UsageMeter`, `DefaultOutputApplier.apply` (context updates, evidence, IMPLEMENT event for STORY/TASK), boundary audit before WIP commits and at run end, `AGENT_ASSIGNED`/`AGENT_RUN_STARTED`/`MODEL_SELECTED`/`EFFORT_SET`/`AGENT_RUN_ENDED`/`RETRY`/`ERROR` write points, `ON_AGENT_START`/`ON_AGENT_END`/`ON_TASK_FAILED` firing, `WorkflowRepository.set_assigned_run`.
+- Out: retries with backoff, fallback, handover-on-fallback, `resume_native` and startup recovery (E01-S28 — `resume_native` raises `ConfigError("implemented in E01-S28")` here and every `ERROR` ends the run `FAILED`); scheduling (E01-S29); `new_tasks`/`new_bugs`, change reconciliation, final kernel commit and the YAML output-event table (E03-S08); PARTIAL-specific handover and `ON_AGENT_END` context repair (E04-S07); scrubbed env contents (E02-S01 — an injected provider returning `{}` here); MUST builtin hooks (E02-S08).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/executor.py` | create | `DefaultAgentExecutor`, `MAX_REPAIR_TURNS`, `REPAIR_INSTRUCTION`, `RUN_TIMEOUT_S` |
+| `src/walk/runtime/inputs.py` | create | `AgentInputBuilder`, `build_run_session`, `expected_output_for` |
+| `src/walk/runtime/metering.py` | create | `UsageMeter` |
+| `src/walk/runtime/output_applier.py` | create | `DefaultOutputApplier`, `IMPLEMENT_OUTPUT_EVENTS` |
+| `src/walk/runtime/__init__.py` | modify | re-exports |
+| `src/walk/workflow/repository.py` | modify | `WorkflowRepository.set_assigned_run` |
+| `tests/runtime/test_executor.py` | create | — |
+| `tests/runtime/test_executor_repair.py` | create | — |
+| `tests/runtime/test_executor_boundary.py` | create | — |
+| `tests/runtime/test_inputs.py` | create | — |
+| `tests/runtime/test_metering.py` | create | — |
+| `tests/runtime/test_output_applier.py` | create | — |
+| `tests/workflow/test_repository.py` | modify | — |
+
+#### Interface contract
+Protocols: INTERFACES.md §1.13 `AgentExecutor`, `OutputApplier`, `AppliedEffects`; §2.1 `RunSession`. Deltas:
+```python
+MAX_REPAIR_TURNS = 1                                   # ARCHITECTURE §5.5
+RUN_TIMEOUT_S = 2700                                   # used when the resolved FamilyLevel has no execution_time_s
+REPAIR_INSTRUCTION = ("Your final output was rejected by the kernel:\n{errors}\n"
+                      "Write a corrected AgentOutput JSON object to .walk/output.json and finish.")
+IMPLEMENT_OUTPUT_EVENTS: dict[AgentOutputStatus, str] = {COMPLETED: "submit_for_review", PARTIAL: "partial", BLOCKED: "block", NEEDS_INPUT: "block"}
+    # STORY/TASK + purpose IMPLEMENT only; FAILED → no event; E03-S08 replaces this constant with output_events.yaml
+
+def expected_output_for(purpose: str, item: WorkItem) -> ExpectedOutput: ...   # E01-S18 rule 8 status options; required_evidence from item.contract; deliverables [] in E01
+class AgentInputBuilder:
+    def __init__(self, agents: AgentManager, context: ContextManager, tools: ToolRegistry, budgets: BudgetManager,
+                 phases: PhaseRepository, clock: Clock, *, project_key: ProjectKey) -> None: ...
+    async def build(self, agent: AgentInstance, item: WorkItem, purpose: str, *, run_id: RunId, worktree_path: str, branch: str,
+                    descriptor: ModelDescriptor, handover: Handover | None = None, debate: Debate | None = None) -> AgentInput: ...
+def build_run_session(run: AgentRun, agent_input: AgentInput, authorizer: Callable[[ToolCallRequest], Awaitable[PermissionDecision]], *,
+                      max_turns: int, timeout_s: int, env_allowlist: dict[str, str]) -> RunSession: ...   # output_path = <worktree>/OUTPUT_RELATIVE_PATH
+
+class UsageMeter:
+    def __init__(self, costs: CostManager, descriptor: ModelDescriptor, subject: BudgetSubject, clock: Clock, *, new_id: Callable[[], str]) -> None: ...
+    async def observe(self, cumulative: UsageReport) -> CostRecord | None: ...   # meters only the delta since the last observe; None when no new tokens
+    @property
+    def total(self) -> UsageReport: ...
+
+class DefaultOutputApplier:
+    def __init__(self, memory: MemoryManager, evidence: EvidenceManager, workflow: WorkflowManager, git: GitProvider, clock: Clock) -> None: ...
+    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> AppliedEffects: ...   # `start_head` keyword is a delta to INTERFACES §1.13
+
+class DefaultAgentExecutor:
+    def __init__(self, db: Database, runs: AgentRunRepository, items: WorkflowRepository, workflow: WorkflowManager, router: ModelRouter,
+                 inputs: AgentInputBuilder, sandbox: SandboxManager, checkpoints: DefaultCheckpointManager, tool_invoker: DefaultToolInvoker,
+                 auditor: BoundaryAuditor, applier: DefaultOutputApplier, git: GitProvider, budgets: BudgetManager, costs: CostManager,
+                 hooks: HookManager, ledger: LedgerManager, ids: IdFactory, clock: Clock, *, project_key: ProjectKey, kernel_instance: str,
+                 env_allowlist: Callable[[], dict[str, str]] = dict, on_run_finished: Callable[[AgentRun], Awaitable[None]] | None = None,
+                 allowed_paths: tuple[str, ...] = DEFAULT_ALLOWED_PATHS, forbidden_paths: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS) -> None: ...
+    async def start(self, agent: AgentInstance, item: WorkItem, purpose: str, *, handover: Handover | None = None, parent_run_id: RunId | None = None,
+                    debate: Debate | None = None, routing: RoutingDecision | None = None, effort_resolution: EffortResolution | None = None) -> AgentRun: ...
+    async def resume_native(self, checkpoint: Checkpoint) -> AgentRun: ...   # ConfigError("implemented in E01-S28")
+    async def cancel(self, run_id: RunId, reason: str) -> AgentRun: ...
+    async def pause(self, run_id: RunId) -> AgentRun: ...
+    def running(self) -> list[AgentRun]: ...
+    async def wait(self, run_id: RunId) -> AgentRun: ...                     # awaits the run task; returns the persisted terminal run
+# WorkflowRepository
+async def set_assigned_run(self, work_item_id: WorkItemId, run_id: RunId | None, *, conn: sqlite3.Connection | None = None) -> WorkItem: ...
+```
+
+#### Behavior
+1. `start` precondition: the item has no non-terminal run (`assigned_run_id` set and that run in `PENDING|RUNNING|PAUSED_*`) → `ConfigError("work item <id> already has active run <run>")` (§60 one run per item). Unknown purpose (not in `TEMPLATE_PURPOSES`) → `ConfigError`.
+2. Allocation, in one `UnitOfWork`: `RunId` from `ids` (`RUN-` prefix); insert `AgentRun(state=PENDING, model_id=agent.model_id, provider=router.adapter_for(agent.model_id).provider, effort=agent.effort, purpose, parent_run_id, handover_in_id=handover.id if handover else None, kernel_instance)`; `set_assigned_run(item.id, run.id)`; ledger `AGENT_ASSIGNED` (payload role, purpose).
+3. Preparation: `worktree = sandbox.create(run, item)` (run row updated with `worktree_path`, `branch`); `descriptor = router.registry().models[run.model_id]`; `agent_input = inputs.build(...)` where the builder requests `ContextRequest(work_item_id, role, effort, token_budget=context.token_budget_for(effort, descriptor.context_window_tokens, descriptor.max_output_tokens))`, sets `allowed_tools = [tools.get(n) for n in agent.tools]`, `permissions = agent.permissions`, `budget = budgets.applicable(BudgetSubject(project_key, item.phase_id, role, item.id, run_id))`, `approved_artifacts = []`, `decisions = []` (filled by E04), `skills = []` (E02-S05 resolves `Skill` objects), `required_evidence = item.contract.required_evidence` (empty without contract), `expected_output = expected_output_for(purpose, item)`, `instructions_markdown = agents.render_instructions(agent, item, purpose)`, `handover` as given (rendered last by `render_input_sections`, E01-S18 rule 5). Any exception here → run `FAILED` with `failure_reason="prepare: <detail>"`, `ERROR` ledger, item unassigned, worktree kept for diagnosis.
+4. `session = build_run_session(run, agent_input, tool_invoker.authorizer_for(run), max_turns=50, timeout_s=<FamilyLevel.execution_time_s or RUN_TIMEOUT_S>, env_allowlist=env_allowlist())`.
+5. Start events, in one `UnitOfWork`: run → `RUNNING`, `started_at = clock.now()`; ledger `AGENT_RUN_STARTED` (payload purpose, branch, worktree, parent_run_id, handover_in_id, `context_item_ids`), `MODEL_SELECTED` (payload `reason`, `rejected`, `is_fallback`, `trigger` from `routing`; `{"reason": "direct"}` when `routing is None`), `EFFORT_SET` (payload effort, `degraded_from` from `adapter.map_effort(effort, model_id).params`, and the `effort_resolution` components when given). Every event carries `run_id`, `work_item_id`, `actor_role`, `model_id`, `effort`, and `behavior_versions["prompt:<purpose>"]`.
+6. After commit: fire `ON_AGENT_START` (payload `context_doc_ids` = memory-backed item ids of the bundle); `HookFailed` → run `FAILED_HOOK`, item unassigned, no adapter call. Then `checkpoints.checkpoint(run, START, workflow_state=item.state, context_manifest=bundle.ref())`; its `head_sha` is the run's `start_head`. Then an `asyncio.Task` drives the stream and `start` returns the `RUNNING` run.
+7. Event handling: `STARTED` → persist `run.provider_session`; `TEXT` → `logging.debug` only, never persisted; `TOOL_CALL_REQUESTED` → no action (authorisation happened through the session authorizer); `TOOL_CALL_RESULT` → `tool_invoker.record_result(request, result, duration_ms)` (KERNEL-kind results are already recorded by `invoke`), `run.tool_calls += 1`, and `tool_result["kernel_decision"] == "DENY"` (Codex advisory, E01-S22 rule 3) is remembered as a boundary violation; `CHECKPOINT_HINT` → checkpoint `AGENT_REQUESTED`; `USAGE` → `meter.observe(adapter.usage(run.id))` (event payload ignored; delta semantics make per-call and cumulative USAGE events equivalent); `PARTIAL_OUTPUT` → kept in memory as the run's latest partial output; `FINAL_OUTPUT` → rule 9; `ERROR` → rule 12; `ENDED` → loop ends.
+8. Periodic checkpoints: after the tool call that makes `run.tool_calls % agent.runtime_policy.checkpoint_every_tool_calls == 0`, the executor audits `git.status(worktree)` with `auditor.audit(...)` **before** calling `checkpoints.checkpoint(run, PERIODIC, workflow_state, budget_consumed=<meter totals by dimension>, context_manifest)`; a violation ends the run per rule 11 without committing.
+9. `FINAL_OUTPUT` validation: `output is None` (adapter could not parse, E01-S19 boundary rule) or `output.status ∉ expected_output.status_options` → invalid with `errors` = the event's `error` or `"status <s> not allowed for <purpose>"`. Invalid and `run.repair_turns < MAX_REPAIR_TURNS` and `run.provider_session.resumable` → `repair_turns += 1`, ledger `RETRY` (payload `reason="output_invalid"`, `errors`), the stream continues with `adapter.resume(run.provider_session, REPAIR_INSTRUCTION.format(errors=errors), session)`. Otherwise run `FAILED`, `failure_reason="output_invalid: <errors>"`.
+10. Valid output: (a) final audit of `git.status(worktree) ∪ git.diff_names(worktree, base=start_head)` — violation or remembered advisory DENY → rule 11; (b) `checkpoints.checkpoint(run, END, ...)` (final WIP commit); (c) `run.output = output`; `effects = applier.apply(run, output, start_head=start_head)`; (d) run `COMPLETED`; (e) meter `EXECUTION_TIME_S` with the run's wall-clock seconds; (f) ledger `AGENT_RUN_ENDED` (`outcome="OK"`, payload status, tool_calls, repair_turns, `effects` as JSON, `deferred_intents = {"new_tasks": n, "new_bugs": m}`, `cost_usd` = meter total); (g) item unassigned; (h) fire `ON_AGENT_END` (payload `status`, `context_updates` count, `no_context_change_reason`, `checkpoint_id` of the END checkpoint); (i) `on_run_finished(run)`.
+11. Boundary violation: `git.discard_changes(worktree)`, run `FAILED_BOUNDARY` with `failure_reason="boundary: <paths>"`, ledger `ERROR` (`outcome="FAILED"`, payload `kind="BOUNDARY"`, `violations`), item unassigned, `ON_TASK_FAILED` fired, output not applied, no workflow event.
+12. `ERROR` events and exceptions raised by the adapter iterator: run `FAILED` with `failure_reason="error: <trigger or 'none'>: <message>"`, `adapter.cancel(run.id)`, ledger `ERROR` (payload `trigger` = event trigger or `router.classify_error(exc, adapter)`), item unassigned, `ON_TASK_FAILED` fired, `AGENT_RUN_ENDED` with `outcome="FAILED"`. E01-S28 replaces this rule with retry/fallback.
+13. `BudgetExhausted` raised through the authorizer or after metering (any applicable budget with `hard_action=BLOCK` and zero headroom) → `adapter.cancel`, checkpoint `PAUSE`, run `BLOCKED_BUDGET`, ledger `ERROR` (payload `kind="BUDGET"`), item unassigned; no workflow event.
+14. `cancel(run_id, reason)`: `adapter.cancel`, awaits the task, checkpoint `PAUSE`, run `CANCELLED`, `failure_reason=reason`, `sandbox.remove(run, keep_branch=True)`, item unassigned, `AGENT_RUN_ENDED` (`outcome="SKIPPED"`). `pause(run_id)`: `adapter.cancel`, checkpoint `PAUSE`, run `PAUSED_BY_USER`, worktree kept, item stays assigned. Unknown run → `RunNotFound`. `running()` returns runs whose task is not done.
+15. `DefaultOutputApplier.apply`: (1) `context_updates` → `memory.apply_updates(updates, actor=Actor(role=run.role, model_id=run.model_id, run_id=run.id), head=git.head(worktree), branch=run.branch)` → `memory_docs`; (2) each `evidence` draft → relative `path_or_uri` resolved against the worktree; missing file → skipped with a `logging` warning; else `evidence.record(draft, actor, work_item_id=item.id, phase_id=item.phase_id, commit=head)` → `evidence_ids`; (3) `decisions`, `escalations`, `new_tasks`, `new_bugs` are left on `run.output` (`decision_ids = []`, `escalation_ids = []`, `created_work_items = []`); (4) `commit_sha = head if head != start_head else None`; (5) `event = IMPLEMENT_OUTPUT_EVENTS.get(status)` when `item.kind in (STORY, TASK)` and `run.purpose == "IMPLEMENT"`, else `None`; when set, `workflow.raise_event(item.id, event, TransitionContext(actor_role=run.role, source=AGENT, run_id=run.id, payload={output_status, has_commit: commit_sha is not None, evidence_kinds_present: kinds of evidence.for_item(item.id), handover_present: output.handover is not None, escalations_non_empty}, phase=None))`; (6) `GuardRejected` → re-raised as `GuardRejected`; the executor ends the run `FAILED` with `failure_reason="guard_rejected: <reason>"`, ledger `ERROR`, `ON_TASK_FAILED` (E03-S08 replaces with the `block` path).
+16. `UsageMeter.observe` computes the delta of `input_tokens`, `output_tokens`, `cache_read_tokens` against the previous cumulative report, builds `usage_to_cost_record(delta, descriptor, subject, record_id=new_id(), at=clock.now())` and calls `costs.record(...)` (which writes `COST_RECORDED` and meters `COST_USD`/`TOKENS`); a cumulative report lower than the previous one → `ConfigError` (adapter defect).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a STORY in IMPLEMENTING and a 3-call COMPLETED fake script, When `start` then `wait`, Then run `COMPLETED`, ledger kinds in order `AGENT_ASSIGNED, AGENT_RUN_STARTED, MODEL_SELECTED, EFFORT_SET, CHECKPOINT_CREATED(START)… AGENT_RUN_ENDED`, `ON_AGENT_START` and `ON_AGENT_END` fired once | `tests/runtime/test_executor.py::test_start_runs_to_completion_with_ledger_sequence` |
+| 2 | Given an item whose `assigned_run_id` is a RUNNING run, When `start`, Then `ConfigError` and no new run row | `tests/runtime/test_executor.py::test_start_rejects_second_active_run` |
+| 3 | Given a 12-call script and `checkpoint_every_tool_calls=5`, Then checkpoints `START, PERIODIC, PERIODIC, END` with seq 1–4 and two WIP commits before the END one | `tests/runtime/test_executor.py::test_periodic_checkpoints_every_n_tool_calls` |
+| 4 | Given `checkpoint_hint_at=[2]`, Then an `AGENT_REQUESTED` checkpoint after the second tool call | `tests/runtime/test_executor.py::test_checkpoint_hint_creates_agent_requested_checkpoint` |
+| 5 | Given three provider-native tool results, Then `TOOL_INVOKED(phase=post)` three times and `run.tool_calls == 3` | `tests/runtime/test_executor.py::test_tool_results_recorded_and_counted` |
+| 6 | Given a script with `TEXT` events, Then no ledger event, checkpoint or run field contains their text | `tests/runtime/test_executor.py::test_text_events_never_persisted` |
+| 7 | When `start`, Then `RunSession.worktree_path` is the sandbox path, `output_path` ends with `.walk/output.json`, `allowed_tools` equals the instance tools and `permission_authorizer` evaluates for the run | `tests/runtime/test_inputs.py::test_build_run_session_fields` |
+| 8 | Given a story with contract and a handover, When `AgentInputBuilder.build`, Then every §126 field present, `expected_output.status_options` for IMPLEMENT, `required_evidence` from contract, `handover` set, context token budget from the descriptor | `tests/runtime/test_inputs.py::test_agent_input_builder_populates_contract` |
+| 9 | Given `invalid_output_times=1`, Then one `RETRY` ledger with `reason=output_invalid`, `repair_turns == 1`, run `COMPLETED` | `tests/runtime/test_executor_repair.py::test_invalid_output_repaired_once` |
+| 10 | Given `invalid_output_times=2`, Then run `FAILED` with `failure_reason` starting `output_invalid` | `tests/runtime/test_executor_repair.py::test_invalid_output_twice_fails` |
+| 11 | Given a REVIEW run whose output status is `COMPLETED`, Then treated as invalid (`status COMPLETED not allowed for REVIEW`) and repaired | `tests/runtime/test_executor_repair.py::test_status_outside_expected_options_is_invalid` |
+| 12 | Given a non-resumable session and an invalid output, Then no repair turn and run `FAILED` | `tests/runtime/test_executor_repair.py::test_no_repair_when_session_not_resumable` |
+| 13 | Given a scripted write to `.ai/agents/roles/qc.md` before the first periodic checkpoint, Then run `FAILED_BOUNDARY`, no WIP commit contains the file, worktree clean, `ERROR(kind=BOUNDARY)` | `tests/runtime/test_executor_boundary.py::test_violation_detected_before_wip_commit` |
+| 14 | Given a Codex-style `TOOL_CALL_RESULT` with `kernel_decision == "DENY"`, Then the run ends `FAILED_BOUNDARY` and the output is not applied | `tests/runtime/test_executor_boundary.py::test_advisory_deny_fails_run` |
+| 15 | Given a scripted `ERROR(trigger=PROVIDER_OUTAGE)` after 3 calls, Then run `FAILED`, `ERROR` ledger with trigger, `ON_TASK_FAILED` fired, item unassigned | `tests/runtime/test_executor.py::test_error_event_fails_run_until_fallback_lands` |
+| 16 | Given a TOOL_CALLS budget exhausted mid-run, Then run `BLOCKED_BUDGET`, a `PAUSE` checkpoint, no workflow event | `tests/runtime/test_executor.py::test_budget_exhausted_blocks_run` |
+| 17 | When `cancel(run, "user")` mid-stream, Then run `CANCELLED`, `PAUSE` checkpoint, worktree removed, branch kept; `pause` → `PAUSED_BY_USER` with worktree kept | `tests/runtime/test_executor.py::test_cancel_and_pause` |
+| 18 | When `resume_native(ckpt)`, Then `ConfigError` mentioning E01-S28 | `tests/runtime/test_executor.py::test_resume_native_deferred` |
+| 19 | Given per-call USAGE events followed by a cumulative USAGE, Then the sum of `COST_RECORDED` tokens equals `adapter.usage(run).input+output` exactly | `tests/runtime/test_metering.py::test_usage_meter_records_deltas_only` |
+| 20 | Given a cumulative report lower than the previous, Then `ConfigError` | `tests/runtime/test_metering.py::test_usage_meter_rejects_decreasing_totals` |
+| 21 | Given a COMPLETED IMPLEMENT output with one context update and one AUTOMATED_TEST evidence on a story requiring it, When `apply`, Then memory doc written, `EVD-` id returned, story `READY_FOR_REVIEW`, `workflow_event == "submit_for_review"`, `commit_sha` set | `tests/runtime/test_output_applier.py::test_apply_completed_implement_submits_for_review` |
+| 22 | Given an evidence draft pointing at a missing file, Then it is skipped and the other effects still apply | `tests/runtime/test_output_applier.py::test_missing_evidence_file_skipped` |
+| 23 | Given a COMPLETED output with no commits since `start_head`, When `apply`, Then `GuardRejected` (has_commit) and the executor ends the run `FAILED` with `guard_rejected` | `tests/runtime/test_output_applier.py::test_guard_rejection_fails_run` |
+| 24 | Given a REVIEW run or a FEATURE item, When `apply`, Then `workflow_event is None` and `new_tasks` are left untouched | `tests/runtime/test_output_applier.py::test_non_implement_runs_raise_no_event` |
+| 25 | When `set_assigned_run(id, run)` then `set_assigned_run(id, None)`, Then `assigned_run_id` set then cleared and `ready_items` excludes then includes the item | `tests/workflow/test_repository.py::test_set_assigned_run_round_trip` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: from `tests/runtime/test_executor.py::test_periodic_checkpoints_every_n_tool_calls` paste `walk ledger query --run <RUN id>` output (or the equivalent `LedgerManager.query` dump) and `git -C <tmp repo> log --oneline <branch>` showing three `wip(STORY-0001): checkpoint n` commits.
+
+#### Notes
+- ARCHITECTURE §3.2 steps 3–7, §4.1 (`ON_AGENT_START`, `ON_AGENT_END`, `ON_TASK_FAILED`), §4.3 (`runtime.AgentExecutor` write point), §5.2, §5.5; ADR-0002 D-4/D-9; ADR-0004 D-2/D-3/D-6; ADR-0006 D-2/D-5; ADR-0011 D-4/D-6; INTERFACES §1.13, §2.1.
+- `NEW NAME:` `walk.runtime.executor` (`MAX_REPAIR_TURNS`, `REPAIR_INSTRUCTION`, `RUN_TIMEOUT_S`, `DefaultAgentExecutor.wait`, constructor callbacks `env_allowlist`, `on_run_finished`), `walk.runtime.inputs` (`AgentInputBuilder`, `build_run_session`, `expected_output_for`), `walk.runtime.metering.UsageMeter`, `walk.runtime.output_applier` (`DefaultOutputApplier`, `IMPLEMENT_OUTPUT_EVENTS`), `WorkflowRepository.set_assigned_run`; protocol deltas: `AgentExecutor.start` keywords `routing`, `effort_resolution` (needed because ARCHITECTURE §4.3 makes the executor the `MODEL_SELECTED`/`EFFORT_SET` write point while the scheduler holds the decision) and `OutputApplier.apply` keyword `start_head` — update INTERFACES §1.13 in this commit.
+- `expected_output_for` duplicates the purpose → status table of E01-S18 rule 8 (private there). `runtime` may not import `agents.service`, so the duplication is accepted in E01; E01-R01 checks that both tables agree.
+- Cross-epic coordination (non-blocking): E02-S08 registers `builtin.final_checkpoint` (`ON_AGENT_END` → `checkpoint(END)`), which would duplicate the END checkpoint made here in Behavior 10(b). The `ON_AGENT_END` payload carries `checkpoint_id`; E02-S08's hook must be a no-op when it is present. E04-S07 refers to `src/walk/runtime/applier.py`; the file is `output_applier.py` (E03-S08 uses this name).
+- Pitfall: the drive task must catch every exception and leave the run in a terminal state; an unhandled exception in an `asyncio.Task` is otherwise lost. Use one `UnitOfWork` per state change; never hold a transaction across an `await` on the adapter stream.
+- Pitfall: `run.tool_calls` is persisted after every result so that a crash between checkpoints loses at most the counter delta, not the checkpoint sequence.
+- Commit subject: `feat: add agent executor event loop, output repair and applier core (E01-S27)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S28 — Fallback, handover and recovery
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §21, §22, §41, §89, §90, §128, §132 (path exercised with fakes), §137 (Inv. 1, 12), §138 (Model Lock-In, Tool Failure)
+**Depends on:** E01-S27
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A run that hits a transient provider error is retried with backoff; a run whose error maps to a §21 trigger checkpoints, writes a structured handover and continues on another model in the same worktree (bounded by `max_fallbacks_per_run`); a crashed kernel's orphaned runs are resumed at startup, natively when the provider session is resumable and healthy, otherwise from the handover on a routed model.
+
+#### Scope
+- In: `DefaultModelRouter.fallback` (INTERFACES §5.3 steps 7–9) via `FallbackRequest`; executor retry with backoff, fallback steps 5, 6, 10, `BLOCKED_PROVIDER` + user escalation; `DefaultAgentExecutor.resume_native`; worktree adoption for child runs (`SandboxManager.adopt`); `RecoveryManager.recover` (ARCHITECTURE §5.3 steps 1–6); `MODEL_FALLBACK`, `RETRY`, `RECOVERY_RESUMED`, `ERROR(kind=INTERRUPTED)` write points; `ON_MODEL_FALLBACK`, `ON_RECOVERY_RESUME` firing.
+- Out: `ON_AGENT_HANDOFF` chaining and other MUST builtins (E02-S08); approval-waiter re-registration for `PAUSED_FOR_APPROVAL` runs (E02-S11 extends `RecoveryManager`); `IntegrationManager.reconcile` after recovery (ARCHITECTURE §5.3 step 7 — E03-S03); handover enrichment from context documents and decisions (E04-S06); PARTIAL/PAUSE/BUDGET handovers (E04-S07); calling `recover()` at startup (E01-S30).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/model_router/models.py` | modify | `FallbackRequest`, `MAX_FALLBACKS_PER_RUN` |
+| `src/walk/model_router/protocols.py` | modify | `ModelRouter.fallback` (signature takes `FallbackRequest`) |
+| `src/walk/model_router/service.py` | modify | `DefaultModelRouter.fallback`, `PROVIDER_WIDE_TRIGGERS` |
+| `src/walk/model_router/__init__.py` | modify | re-exports |
+| `src/walk/runtime/executor.py` | modify | `DefaultAgentExecutor.resume_native`, `RETRY_DELAYS_S`, `RESUME_INSTRUCTION` (constructor gains `agents`, `permissions`, `ready_env_keys`, `sleep`) |
+| `src/walk/runtime/protocols.py` | modify | `SandboxManager.adopt` |
+| `src/walk/runtime/sandbox.py` | modify | `DefaultSandboxManager.adopt` |
+| `src/walk/runtime/recovery.py` | create | `RecoveryManager`, `RecoveryReport` |
+| `src/walk/runtime/__init__.py` | modify | re-exports |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.4 `fallback` signature, §1.13 `SandboxManager.adopt`, §5.3 step ownership) |
+| `tests/model_router/test_fallback.py` | create | — |
+| `tests/runtime/test_executor_retry.py` | create | — |
+| `tests/runtime/test_executor_fallback.py` | create | — |
+| `tests/runtime/test_resume_native.py` | create | — |
+| `tests/runtime/test_recovery.py` | create | — |
+| `tests/runtime/test_sandbox.py` | modify | — |
+
+#### Interface contract
+INTERFACES.md §1.4 `ModelRouter`, §1.13 `AgentExecutor.resume_native`, §5.3; ARCHITECTURE.md §5.1, §5.3, §5.5. Deltas:
+```python
+# walk.model_router.models
+MAX_FALLBACKS_PER_RUN = 2                                   # ARCHITECTURE §5.5
+class FallbackRequest(FrozenModel):
+    role: AgentRole
+    policy: ModelPolicy
+    current_model_id: ModelId
+    trigger: FallbackTrigger
+    profile: TaskProfile
+    effort: Effort
+    fallbacks_so_far: int = Field(description="AgentRun.fallbacks of the failing run (chain count)")
+    max_fallbacks: int = MAX_FALLBACKS_PER_RUN
+    measured_context_tokens: int | None = None              # CONTEXT_OVERFLOW only
+# walk.model_router.protocols / service
+PROVIDER_WIDE_TRIGGERS: frozenset[FallbackTrigger] = frozenset({PROVIDER_OUTAGE, QUOTA_EXHAUSTED, RATE_LIMIT})
+async def fallback(self, request: FallbackRequest) -> RoutingDecision: ...   # raises BlockedProvider
+# walk.runtime
+RETRY_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)       # ARCHITECTURE §5.1, max 5 attempts; the default `sleep` adds 0–10 % jitter, tests inject a recording fake
+RESUME_INSTRUCTION = "Continue the task from the current worktree state. Write .walk/output.json when finished."
+class SandboxManager(Protocol):
+    async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str: ...   # reuse previous.worktree_path; re-add it on the same branch when missing
+class DefaultAgentExecutor:
+    def __init__(self, ..., agents: AgentManager, permissions: PermissionManager, *, ready_env_keys: Callable[[], set[str]] = set,
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep, ...) -> None: ...   # E01-S27 constructor plus these
+    async def resume_native(self, checkpoint: Checkpoint) -> AgentRun: ...
+class RecoveryReport(FrozenModel):
+    interrupted: list[RunId]
+    resumed_native: list[RunId]                  # new run ids
+    restarted_with_handover: list[RunId]         # new run ids
+    requeued: list[WorkItemId]                   # no checkpoint → item unassigned for the scheduler
+    failed: list[tuple[RunId, str]]
+class RecoveryManager:
+    def __init__(self, runs: AgentRunRepository, checkpoints: DefaultCheckpointManager, executor: DefaultAgentExecutor, router: ModelRouter,
+                 agents: AgentManager, items: WorkflowRepository, hooks: HookManager, ledger: LedgerManager, clock: Clock, *,
+                 kernel_instance: str, project_key: ProjectKey, ready_env_keys: Callable[[], set[str]] = set) -> None: ...
+    async def recover(self) -> RecoveryReport: ...
+```
+
+#### Behavior
+1. `DefaultModelRouter.fallback(request)`: (step 7) `fallbacks_so_far >= max_fallbacks` → `BlockedProvider([(current_model_id, "max_fallbacks")])`; (step 8) `exclude = [current_model_id]` plus every model with the same provider when `trigger ∈ PROVIDER_WIDE_TRIGGERS`; `CONTEXT_OVERFLOW` → profile copied with `estimated_context_tokens = measured_context_tokens` and surviving candidates ordered by `context_window_tokens` descending; `BUDGET_RESTRICTION` → surviving candidates ordered by `output_cost_per_mtok_usd` ascending; (step 9) otherwise `select(role, policy, profile, effort, exclude=exclude)`; the result has `is_fallback=True`, `trigger=trigger`. No ledger writes.
+2. Retry (ARCHITECTURE §5.1): a `TransientError` **raised** by the adapter iterator (not an `ERROR` event) is retried: for attempt `n` in `1..5`, ledger `RETRY` (payload attempt, delay, error class), `await sleep(RETRY_DELAYS_S[n-1])`, then continue with `adapter.resume(run.provider_session, RESUME_INSTRUCTION, session)` when the session is resumable, else `adapter.run(input, session)`. After the fifth failure the exception is classified (`router.classify_error`); a trigger → rule 3, `None` → E01-S27 failure path. `PermanentError` is never retried.
+3. Fallback: an `ERROR` event with `trigger` (adapter-classified, not retried) or a classified exhausted retry runs, in order: (step 5) `handover = checkpoints.build_handover(run, "FALLBACK", <latest PARTIAL_OUTPUT or None>)`, `ckpt = checkpoints.checkpoint(run, HANDOFF, handover=handover, workflow_state=item.state, budget_consumed=…, context_manifest=…)` (audit before the WIP commit as in E01-S27 rule 8); (steps 7–9) `decision = router.fallback(FallbackRequest(role, policy=agent.runtime_policy.model_policy, current_model_id=run.model_id, trigger, profile, effort=run.effort, fallbacks_so_far=run.fallbacks))`; (step 6) ledger `MODEL_FALLBACK` (payload `trigger`, `from`=run.model_id, `to`=decision.model_id, `handover_id`, `checkpoint_id`, `rejected`) and fire `ON_MODEL_FALLBACK` with the same payload; (step 10) in one `UnitOfWork` the old run → `HANDED_OVER` and the item is unassigned, ledger `AGENT_RUN_ENDED` (`outcome="FAILED"`, payload `state="HANDED_OVER"`, `trigger`); then `new_run = start(agent.model_copy(update={"model_id": decision.model_id, "effort": decision.effort}), item, run.purpose, handover=handover, parent_run_id=run.id, routing=decision)` with `new_run.fallbacks = run.fallbacks + 1`; `checkpoints.close_handover(handover.id, new_run.id)`.
+4. `BlockedProvider` from rule 3: old run → `BLOCKED_PROVIDER`, `failure_reason="blocked_provider: <rejections>"`, ledger `ERROR` (payload `kind="BLOCKED_PROVIDER"`, `rejected`), `permissions.request_approval(kind="ESCALATION", approver=USER, payload={"reason": "blocked_provider", "work_item_id", "run_id", "rejected"})` (§21 escalation to level 3), item unassigned, `ON_TASK_FAILED` fired. The HANDOFF checkpoint and handover document remain for a later manual resume.
+5. Worktree adoption: `start(..., parent_run_id=P)` where run `P` has a `worktree_path` calls `sandbox.adopt(new_run, P, item)` instead of `create`: the existing directory is reused unchanged (uncommitted residue kept); a missing directory is re-added with `git.add_worktree(path, P.branch)` and guard hooks re-installed. The new run's `worktree_path`/`branch` equal the parent's. `remove(P)` is never called while a child run uses the path.
+6. `resume_native(ckpt)`: loads the checkpoint's run `P` and item; `adapter = router.adapter_for(ckpt.model_id)`; requires `ckpt.provider_session.resumable` and `(await adapter.health()).ok` else raises `NotResumable`; instantiates `agents.instantiate(P.role, item, ckpt.model_id, ckpt.effort, budget_ids, ready_env_keys())`; creates a run with `parent_run_id=P.id`, `provider_session=ckpt.provider_session`, `tool_calls=ckpt.tool_calls_so_far`, same purpose; adopts the worktree (rule 5); writes the E01-S27 start events with `MODEL_SELECTED.payload.reason = "native_resume"`; drives `adapter.resume(ckpt.provider_session, RESUME_INSTRUCTION, session)`. A `NotResumable` raised by the adapter's first iteration → the run ends `FAILED` (`failure_reason="not_resumable"`) and the caller (`RecoveryManager`) takes the handover path.
+7. `RecoveryManager.recover()` (ARCHITECTURE §5.3): (1) `runs = checkpoints.interrupted_runs(kernel_instance)`; (2) each → `INTERRUPTED`, ledger `ERROR` (payload `kind="INTERRUPTED"`, previous state, previous `kernel_instance`); (3) `ckpt = checkpoints.latest(run.id)`; none → item unassigned, reported in `requeued`; (5) same model healthy and `ckpt.provider_session.resumable` → `executor.resume_native(ckpt)`, reported in `resumed_native`; otherwise or after `NotResumable` → `handover = checkpoints.latest_open_handover(item.id)` or, when none, `build_handover(run, "RECOVERY", None)` checkpointed as `HANDOFF` on the interrupted run; `decision = router.select(role, policy, profile, ckpt.effort, exclude=[ckpt.model_id] if the adapter is unhealthy else [])`; `executor.start(agent, item, run.purpose, handover=handover, parent_run_id=run.id, routing=decision)`; `close_handover`; reported in `restarted_with_handover`; (6) ledger `RECOVERY_RESUMED` (payload `from_run_id`, `mode` = `native`|`handover`, `checkpoint_seq`, `handover_id`) and fire `ON_RECOVERY_RESUME` (payload `handover_id`, `mode`).
+8. Recovery isolates failures per run: any exception for one run → that run `FAILED` (`failure_reason="recovery: <detail>"`), entry in `failed`, the loop continues. `recover()` is idempotent: a second call finds no orphaned runs (resumed runs carry the current `kernel_instance`).
+9. `TaskProfile` for fallback and recovery: `TaskProfile(required_capabilities=[], required_tools=agent.tools, required_skills=agent.skills, estimated_context_tokens=<last bundle total_tokens_estimate or 0>, risk=item.risk)`; E03-S07 replaces with the router-built profile.
+10. Invariant 1: the role, constitution and permissions of the continuing run are identical to the failing run's; only `model_id`/`provider`/`effort` change (asserted in tests by comparing `AgentInstance` dumps minus those fields).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given preferred `fake-codex/sim`, fallback `fake-claude/sim` and trigger `PROVIDER_OUTAGE`, When `fallback`, Then `fake-claude/sim`, `is_fallback`, `trigger == PROVIDER_OUTAGE` | `tests/model_router/test_fallback.py::test_fallback_excludes_failed_provider` |
+| 2 | Given two models of the failing provider and trigger `RATE_LIMIT`, Then both excluded; trigger `TIMEOUT` excludes only the current model | `tests/model_router/test_fallback.py::test_provider_wide_triggers_exclude_whole_provider` |
+| 3 | Given `fallbacks_so_far == 2`, Then `BlockedProvider` with `max_fallbacks` | `tests/model_router/test_fallback.py::test_fallback_respects_max_fallbacks` |
+| 4 | Given `CONTEXT_OVERFLOW` with measured tokens and two candidates, Then the larger window wins; `BUDGET_RESTRICTION` → the cheaper output price wins | `tests/model_router/test_fallback.py::test_context_and_budget_triggers_reorder_candidates` |
+| 5 | Given an adapter raising `RateLimited` twice then succeeding, Then two `RETRY` events with delays 1 and 2 from the fake sleep and run `COMPLETED` | `tests/runtime/test_executor_retry.py::test_transient_error_retried_with_backoff` |
+| 6 | Given an adapter raising `ProviderUnavailable` six times, Then five `RETRY` events and then the fallback path with trigger `PROVIDER_OUTAGE` | `tests/runtime/test_executor_retry.py::test_retries_exhausted_then_fallback` |
+| 7 | Given an adapter raising `PermissionDenied`, Then no `RETRY` and run `FAILED` | `tests/runtime/test_executor_retry.py::test_permanent_error_not_retried` |
+| 8 | Given a 12-call codex script failing with `ERROR(PROVIDER_OUTAGE)` after 3 calls, Then a `HANDOFF` checkpoint, `.ai/handovers/HO-0001.md`, `MODEL_FALLBACK(from=fake-codex/sim, to=fake-claude/sim)`, old run `HANDED_OVER`, new run `COMPLETED` with `parent_run_id`, `handover_in_id == HO-0001`, `fallbacks == 1`, handover row closed with the new run id | `tests/runtime/test_executor_fallback.py::test_provider_outage_falls_back_with_handover` |
+| 9 | Given that fallback, Then the new run's `worktree_path` and `branch` equal the old run's and the files written by the first run are present | `tests/runtime/test_executor_fallback.py::test_fallback_run_adopts_worktree` |
+| 10 | Given that fallback, Then the new run's `AgentInput.handover.next_action` is non-empty and its `AgentInstance` equals the old one except `model_id`, `effort` | `tests/runtime/test_executor_fallback.py::test_fallback_preserves_role_and_passes_handover` |
+| 11 | Given both fakes failing with `PROVIDER_OUTAGE`, Then after two fallbacks the third failure yields `BLOCKED_PROVIDER`, one `ESCALATION` approval request for USER, `ON_TASK_FAILED` fired | `tests/runtime/test_executor_fallback.py::test_exhausted_fallbacks_block_provider_and_escalate` |
+| 12 | Given an `ERROR` event without trigger, Then no fallback and run `FAILED` | `tests/runtime/test_executor_fallback.py::test_untriggered_error_does_not_fall_back` |
+| 13 | Given a checkpoint with a resumable session and a healthy adapter, When `resume_native`, Then a new run with the same model continues the script from the recorded tool-call index and completes | `tests/runtime/test_resume_native.py::test_resume_native_continues_session` |
+| 14 | Given `resumable=False` or an unhealthy adapter, When `resume_native`, Then `NotResumable` | `tests/runtime/test_resume_native.py::test_resume_native_requires_resumable_and_healthy` |
+| 15 | Given a RUNNING run owned by instance `old` with a checkpoint, When `recover()` under instance `new` with healthy adapters, Then the run is `INTERRUPTED`, `ERROR(kind=INTERRUPTED)`, a native resume run exists, `RECOVERY_RESUMED(mode=native)`, `ON_RECOVERY_RESUME` fired | `tests/runtime/test_recovery.py::test_recover_resumes_natively_when_possible` |
+| 16 | Given the codex fake unhealthy, When `recover()`, Then a handover is written (`reason=RECOVERY`) and the new run uses `fake-claude/sim` with `mode=handover` | `tests/runtime/test_recovery.py::test_recover_uses_handover_when_provider_unhealthy` |
+| 17 | Given an orphaned run without any checkpoint, Then the item is unassigned and listed in `requeued` | `tests/runtime/test_recovery.py::test_recover_requeues_runs_without_checkpoint` |
+| 18 | Given two orphaned runs where the first raises during recovery, Then the second is still resumed and the first is `FAILED` in `failed` | `tests/runtime/test_recovery.py::test_recover_isolates_failures` |
+| 19 | When `recover()` is called twice, Then the second report is empty | `tests/runtime/test_recovery.py::test_recover_is_idempotent` |
+| 20 | Given a parent run whose worktree directory was deleted, When `adopt`, Then the worktree is re-added on the parent's branch with guard hooks | `tests/runtime/test_sandbox.py::test_adopt_reuses_or_re_adds_worktree` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: from `tests/runtime/test_executor_fallback.py::test_provider_outage_falls_back_with_handover` paste the ledger sequence for the story (`AGENT_RUN_STARTED`, `CHECKPOINT_CREATED(HANDOFF)`, `HANDOVER_CREATED`, `MODEL_FALLBACK`, `AGENT_RUN_ENDED(HANDED_OVER)`, `AGENT_RUN_STARTED`, …) and the first 15 lines of `HO-0001.md`; equivalent CLI form `walk ledger query --item STORY-0002`.
+
+#### Notes
+- INTERFACES §5.3 steps 5–10; ARCHITECTURE §4.3 (`MODEL_FALLBACK`, `RETRY`, `RECOVERY_RESUMED` are `runtime.AgentExecutor` write points; `RecoveryManager` is in the same package and writes them on its behalf), §5.1, §5.3, §5.5; ADR-0002 D-5/D-6; ADR-0004 D-5/D-6; ADR-0011 D-6.
+- Architecture inconsistency (resolved here, needs architect confirmation): INTERFACES §1.4 declares `ModelRouter.fallback(run: AgentRun, …)` and §5.3 puts checkpointing and `AgentExecutor.start` inside it, but ARCHITECTURE §2.2 forbids `model_router → runtime`. This story splits it: the router owns the decision (steps 7–9, `FallbackRequest`), the executor owns the side effects (steps 5, 6, 10). INTERFACES §1.4/§5.3 are updated in this commit.
+- `NEW NAME:` `FallbackRequest`, `MAX_FALLBACKS_PER_RUN`, `PROVIDER_WIDE_TRIGGERS`, `RETRY_DELAYS_S`, `RESUME_INSTRUCTION`, `SandboxManager.adopt`, `RecoveryManager`, `RecoveryReport` (`RecoveryManager` is already referenced by E02-S11), ledger payload keys `kind="INTERRUPTED"|"BLOCKED_PROVIDER"`, `mode`.
+- Cross-epic coordination (non-blocking): E02-S08 `builtin.fallback_chain` fires `ON_AGENT_HANDOFF`, whose MUST attachment checkpoints and writes a handover; the HANDOFF checkpoint and handover already exist when `ON_MODEL_FALLBACK` fires here. The payload carries `checkpoint_id` and `handover_id`; E02-S08's handoff hook must be a no-op when both are present.
+- Pitfall: git refuses to check out one branch in two worktrees; never call `sandbox.create` for a child run (rule 5). The old run's task must be fully finished (adapter cancelled, stream closed) before the child run starts in the same directory.
+- Pitfall: `sleep` is injected so tests never wait and stay deterministic; jitter lives only in the default `sleep` wrapper built by the composition root.
+- Commit subject: `feat: add model fallback with handover, retries and startup recovery (E01-S28)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S29 — `TaskRouter`, `Scheduler`, `Orchestrator` service
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.2, §10.1 (assign role), §56, §60, §87 (status snapshot), §89, §90, §125, §137 (Inv. 4 — role check only, 12)
+**Depends on:** E01-S28, E01-S13, E01-S10, E01-S11
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The orchestrator package exists: `DefaultTaskRouter` resolves the role and purpose of a ready work item from `scheduled_states.yaml`, `Scheduler.tick` admits ready STORY/TASK work per INTERFACES §5.1 (pause flag, parallelism, idempotency key, budgets, effort, model selection, admission transition, open handover, executor start), and `DefaultOrchestrator` runs startup recovery, the tick loop with wake-ups, and a `KernelStatus` snapshot.
+
+#### Scope
+- In: `orchestrator.models` (`RouteDecision`, `KernelStatus`, `PhaseEvidencePackage`), `orchestrator.protocols` (`Orchestrator`, `TaskRouter`), `NoScheduledRole`, `DefaultTaskRouter.route` (literal and contract roles, `fallback_role`) and `can_run_parallel` (same item, dependency edge, same branch), `Scheduler.tick` with `ADMISSION_EVENTS` for STORY/TASK `READY|REWORK → start_implementation`, `DefaultOrchestrator.start/stop/wake/tick/run_once/status`, `StatusBuilder`.
+- Out: full routing profile, Invariant 4 implementer check and cross-model enforcement, contract-path parallelism (E03-S07); admission of REVIEW/QC/TRIAGE/PLAN/DESIGN work (E03-S09/S13/S14/S15 extend `ADMISSION_EVENTS`); bug-severity and BLOCKED-first ordering (E03-S18); per-role limits beyond `max_parallel_runs` and `max_parallel_agents > 2` (E07-S01); handover open/close refinements (E04-S06); `escalation_bump` from effort requests (E04-S07); daemon, lock and CLI (E01-S30); the deferred methods listed in Behavior 11.
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/orchestrator/__init__.py` | create | re-exports |
+| `src/walk/orchestrator/models.py` | create | `RouteDecision`, `KernelStatus`, `PhaseEvidencePackage` |
+| `src/walk/orchestrator/protocols.py` | create | `Orchestrator`, `TaskRouter` |
+| `src/walk/orchestrator/errors.py` | create | `NoScheduledRole` |
+| `src/walk/orchestrator/router.py` | create | `DefaultTaskRouter` |
+| `src/walk/orchestrator/scheduler.py` | create | `Scheduler`, `ADMISSION_EVENTS`, `DEFAULT_MAX_PARALLEL_AGENTS` |
+| `src/walk/orchestrator/status.py` | create | `StatusBuilder` |
+| `src/walk/orchestrator/service.py` | create | `DefaultOrchestrator`, `DEFAULT_POLL_INTERVAL_S` |
+| `tests/orchestrator/__init__.py` | create | — |
+| `tests/orchestrator/test_models.py` | create | — |
+| `tests/orchestrator/test_router_basic.py` | create | — |
+| `tests/orchestrator/test_scheduler.py` | create | — |
+| `tests/orchestrator/test_status.py` | create | — |
+| `tests/orchestrator/test_service.py` | create | — |
+
+#### Interface contract
+Models: INTERFACES.md §1.1 `RouteDecision`, `KernelStatus`; DOMAIN-MODEL §4.15 `PhaseEvidencePackage` verbatim. Protocols: INTERFACES.md §1.1 `Orchestrator`, `TaskRouter` verbatim. Algorithm: INTERFACES.md §5.1. Deltas:
+```python
+class NoScheduledRole(ConfigError): """(kind, state) has no row in scheduled_states.yaml."""
+
+class DefaultTaskRouter:
+    def __init__(self, scheduled_states: Path, agents: AgentManager, runs: AgentRunRepository, workflow: WorkflowManager) -> None: ...   # signature fixed for E03-S07
+    def route(self, item: WorkItem, state: WorkItemState) -> RouteDecision: ...
+    def can_run_parallel(self, a: WorkItem, b: WorkItem) -> bool: ...
+
+DEFAULT_MAX_PARALLEL_AGENTS = 2                                            # ARCHITECTURE §3.2 [MVP]
+ADMISSION_EVENTS: dict[tuple[WorkItemKind, WorkItemState], str] = {
+    (STORY, READY): "start_implementation", (STORY, REWORK): "start_implementation",
+    (TASK, READY): "start_implementation", (TASK, REWORK): "start_implementation"}
+class Scheduler:
+    def __init__(self, db: Database, projects: ProjectRepository, workflow: WorkflowManager, router: TaskRouter, agents: AgentManager,
+                 effort: EffortManager, budgets: BudgetManager, models: ModelRouter, executor: DefaultAgentExecutor,
+                 checkpoints: DefaultCheckpointManager, idempotency: IdempotencyStore, telemetry: TelemetryManager, clock: Clock, *,
+                 project_key: ProjectKey, max_parallel_agents: int = DEFAULT_MAX_PARALLEL_AGENTS,
+                 ready_env_keys: Callable[[], set[str]] = set) -> None: ...
+    async def tick(self) -> int: ...
+
+class StatusBuilder:
+    def __init__(self, projects: ProjectRepository, workflow: WorkflowManager, phases: PhaseRepository, runs: AgentRunRepository,
+                 budgets: BudgetManager, ledger: LedgerManager, *, project_key: ProjectKey,
+                 pending_approvals: Callable[[], Awaitable[list[ApprovalRequest]]] | None = None) -> None: ...
+    async def build(self) -> KernelStatus: ...
+
+DEFAULT_POLL_INTERVAL_S = 5.0                                              # ADR-0009 D-4 timer wake-up
+class DefaultOrchestrator:
+    def __init__(self, scheduler: Scheduler, executor: DefaultAgentExecutor, recovery: RecoveryManager, status_builder: StatusBuilder,
+                 hooks: HookManager, ledger: LedgerManager, clock: Clock, *, project_key: ProjectKey, kernel_instance: str,
+                 poll_interval_s: float = DEFAULT_POLL_INTERVAL_S) -> None: ...
+    async def run_once(self, *, wait_runs: bool = True) -> int: ...        # startup steps 4–6, one tick, optionally await the started runs, stop
+    # Orchestrator protocol methods per INTERFACES §1.1
+```
+
+#### Behavior
+1. `route(item, state)`: finds the `scheduled_states.yaml` row for `(item.kind, state)` (missing → `NoScheduledRole`); role = literal, or `item.contract.owner_role` / `item.contract.reviewer_role` for `contract.*` values (defaults `SENIOR_DEV` / `LEAD_DEV` when no contract); `fallback_role` used when the role is not in `agents.list_roles()`; `profile = TaskProfile(required_capabilities=[], required_tools=agents.load_runtime_policy(role).allowed_tools, required_skills=contract.required_skills or [], estimated_context_tokens=0, risk=item.risk, implementer_model_id=None)`; `cross_model_review = load_runtime_policy(role).model_policy.cross_model_review`. Pure apart from the YAML (loaded once in `__init__`).
+2. `can_run_parallel(a, b)` is `False` when `a.id == b.id`, when either is in the other's `contract.dependencies`, or when both `branch` values are set and equal; otherwise `True`. Symmetric, no I/O.
+3. `Scheduler.tick` (INTERFACES §5.1): (1) `ProjectRepository.get(project_key).paused` → return 0; (2) `items = workflow.ready_items(project.current_phase_id)` (order preserved: priority, created_at); (4) loop while `len(executor.running()) < max_parallel_agents`; items whose `(kind, state)` is not in `ADMISSION_EVENTS` are skipped (telemetry counter `scheduler.not_admitted`); (5) `route = router.route(item, item.state)`; (6) skip when running runs of `route.role` ≥ `RuntimePolicy.max_parallel_runs` or `can_run_parallel(item, r_item)` is `False` for any running run's item; (7) `key = f"schedule:{item.id}:{item.state}:{item.state_version}"` — `idempotency.has(key)` → skip.
+4. Tick continued: (8) `budgets.ensure(TASK, item.id, policy.budget_policy, None)` and `budgets.ensure(ROLE, role, policy.budget_policy, None)`; `headroom = budgets.headroom(BudgetSubject(project_key, item.phase_id, role, item.id))`; `budget_ok = all(v > 0 for v in headroom.values())`; (9) `resolution = effort.resolve(policy.effort_policy, item, item.state, escalation_bump=0, budget_headroom=headroom)`; (10) `routing = models.select(role, policy.model_policy, route.profile, resolution.effective)` — `BlockedProvider` → skip (counter `scheduler.blocked_provider`, `logging` warning with the rejections); (11) `agent = agents.instantiate(role, item, routing.model_id, routing.effort, [b.id for b in budgets], ready_env_keys())` — `ConfigError` → skip (counter `scheduler.instantiate_failed`).
+5. Admission transition: `workflow.raise_event(item.id, ADMISSION_EVENTS[(kind, state)], TransitionContext(actor_role=KERNEL, source=KERNEL, run_id=None, payload={"budget_ok": budget_ok, "branch_available": <no non-terminal run of another item uses item.branch>}, phase=None))`; `GuardRejected` → skip (counter `scheduler.admission_rejected`); the item is re-read after the transition.
+6. Start: (12) `handover = checkpoints.latest_open_handover(item.id)`; (13) `run = executor.start(agent, item, route.purpose, handover=handover, routing=routing, effort_resolution=resolution)`; in one `UnitOfWork` `idempotency.put(key, "schedule", run.id)`; when a handover was passed, `checkpoints.close_handover(handover.id, run.id)`; `started += 1`. An exception from `start` is logged, counted (`scheduler.start_failed`) and does not abort the tick.
+7. `tick` never raises for a single item's failure; it raises only when the project row is missing (`ConfigError`).
+8. `StatusBuilder.build()`: `project_key`, `paused`, `current_phase` (`PhaseRepository.get(project.current_phase_id)` or `None`), `phase_progress` = item count per `WorkItemState` for the current phase (all items when no phase), `gdd_coverage = {}` (E09-S04), `active_runs` = runs in `RUNNING|PAUSED_FOR_APPROVAL|PAUSED_BY_USER`, `blocked_items` = ids of `BLOCKED` items, `pending_approvals` from the injected callable (`[]` when `None`; E02-S11 wires it), `open_debates = []`, `model_usage` = `UsageReport` per `model_id` summed from `COST_RECORDED` ledger payloads (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd`; `turns`/`tool_calls`/`duration_s` 0), `qc_status = {}`, `build_status = None`, `budgets = budgets.applicable(BudgetSubject(project_key))`, `open_improvement_candidates = 0`.
+9. `DefaultOrchestrator.start()` (ARCHITECTURE §3.4 steps 4–6; steps 1–3 belong to the daemon, E01-S30, and E02): `hooks.register_builtins()`; `report = recovery.recover()`; ledger `PROJECT_STARTED` (payload `kernel_instance`, recovery counts); fire `ON_PROJECT_START`; snapshot `status`; then loop until `stop()`: `started = await tick()`, refresh the status snapshot, `await asyncio.wait_for(wake_event.wait(), poll_interval_s)` (timeout is normal), clear the event. `wake()` sets the event. `tick()` delegates to `Scheduler.tick`.
+10. `stop(drain=True)`: ends the loop; `drain=True` → `executor.pause(run_id)` for every running run (PAUSE checkpoint, `PAUSED_BY_USER`); `drain=False` → adapters cancelled without checkpoint and runs left `RUNNING`, so the next start's recovery resumes them from their latest checkpoint. `run_once(wait_runs=True)` = startup steps of rule 9, one `tick`, then waits until `executor.running()` is empty (so fallback and repair continuations started by the executor are included), then `stop(drain=False)`; returns the number started by the tick. `status()` returns the latest snapshot (built at least once in `start`/`run_once`).
+11. Deferred methods raise `ConfigError("implemented in <ID>")`: `submit_feature` → E03-S09, `plan_phase` → E06-S04, `start_phase` → E07-S02, `request_phase_review` → E07-S04, `decide_phase` → E07-S05, `handle_escalation` → E05-S02, `pause`/`resume`/`cancel_work_item` → E02-S13, `force_review` → E03-S16.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | When `RouteDecision`, `KernelStatus`, `PhaseEvidencePackage` are built from fixtures, Then JSON round-trips; `RouteDecision` and `KernelStatus` are frozen | `tests/orchestrator/test_models.py::test_orchestrator_models_round_trip` |
+| 2 | Given a READY story with contract `owner_role=SENIOR_DEV`, When `route`, Then `SENIOR_DEV`/`IMPLEMENT`; READY_FOR_REVIEW → contract reviewer role/`REVIEW`; FEATURE IDEA → `ORCHESTRATOR`/`PLAN` | `tests/orchestrator/test_router_basic.py::test_route_literal_and_contract_roles` |
+| 3 | Given DESIGN_LEADER not in `list_roles()`, When `route(FEATURE, DISCOVERY)`, Then `ORCHESTRATOR` | `tests/orchestrator/test_router_basic.py::test_route_uses_fallback_role` |
+| 4 | When `route(STORY, COMPLETE)`, Then `NoScheduledRole` | `tests/orchestrator/test_router_basic.py::test_route_unknown_state_raises` |
+| 5 | Given two stories with a dependency edge or the same branch, Then `can_run_parallel` is `False` both ways; unrelated stories → `True` | `tests/orchestrator/test_router_basic.py::test_can_run_parallel_basic_rules` |
+| 6 | Given a READY story and healthy fakes, When `tick`, Then 1 returned, the story is `IMPLEMENTING` via `start_implementation` (actor KERNEL), a run exists with `routing` in its `MODEL_SELECTED` payload, and the `schedule:` key is stored with the run id | `tests/orchestrator/test_scheduler.py::test_tick_admits_ready_story` |
+| 7 | Given the same item and `state_version`, When `tick` runs twice with the first run still RUNNING, Then only one run exists | `tests/orchestrator/test_scheduler.py::test_tick_is_idempotent_per_state_version` |
+| 8 | Given three READY stories and `max_parallel_agents=2`, Then two runs start and the third waits for the next tick | `tests/orchestrator/test_scheduler.py::test_tick_respects_max_parallel_agents` |
+| 9 | Given SENIOR_DEV `max_parallel_runs=1` and one running SENIOR_DEV run, Then a second READY story is not admitted | `tests/orchestrator/test_scheduler.py::test_tick_respects_role_parallelism` |
+| 10 | Given `projects.paused = 1`, When `tick`, Then 0 and no transition | `tests/orchestrator/test_scheduler.py::test_tick_returns_zero_when_paused` |
+| 11 | Given a READY_FOR_REVIEW story and a FEATURE in IDEA, When `tick`, Then neither is started and `scheduler.not_admitted` is counted | `tests/orchestrator/test_scheduler.py::test_tick_skips_states_without_admission_event` |
+| 12 | Given every candidate model unhealthy, Then the item is skipped, stays READY, and the tick continues with the next item | `tests/orchestrator/test_scheduler.py::test_blocked_provider_skips_item` |
+| 13 | Given an exhausted TASK budget, Then `start_implementation` is rejected by `budget_available` and no run starts | `tests/orchestrator/test_scheduler.py::test_budget_guard_blocks_admission` |
+| 14 | Given an open handover for the item, When `tick`, Then `AgentInput.handover.id` equals it and the handover is closed with the new run id | `tests/orchestrator/test_scheduler.py::test_tick_passes_open_handover` |
+| 15 | Given the effort policy of SENIOR_DEV and a HIGH-risk story, Then `EFFORT_SET` payload shows the resolved components and the run effort equals `resolution.effective` | `tests/orchestrator/test_scheduler.py::test_tick_uses_effort_resolution` |
+| 16 | Given items in several states, one BLOCKED, one RUNNING run and two COST_RECORDED events, When `StatusBuilder.build`, Then counts, `blocked_items`, `active_runs` and `model_usage` totals match | `tests/orchestrator/test_status.py::test_status_snapshot_from_db_and_ledger` |
+| 17 | When `run_once()` with one READY story, Then `PROJECT_STARTED` written, `ON_PROJECT_START` fired, recovery ran, one run started and awaited to `COMPLETED`, returns 1 | `tests/orchestrator/test_service.py::test_run_once_starts_and_waits` |
+| 18 | Given `start()` running in a task, When `wake()` is called, Then a tick runs before `poll_interval_s` elapses; `stop()` ends the loop | `tests/orchestrator/test_service.py::test_wake_triggers_tick_and_stop_ends_loop` |
+| 19 | Given a running run, When `stop(drain=True)`, Then `PAUSED_BY_USER` with a PAUSE checkpoint; with `drain=False` the run stays `RUNNING` and a new instance's `recover()` resumes it | `tests/orchestrator/test_service.py::test_stop_drain_modes` |
+| 20 | For each deferred method, When called, Then `ConfigError` naming its story id | `tests/orchestrator/test_service.py::test_deferred_methods_name_their_story` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: transcript of `tests/orchestrator/test_service.py::test_run_once_starts_and_waits` printing `orchestrator.status().model_dump_json(indent=2)` after the run (the CLI form `walk status --json` arrives in E01-S30).
+
+#### Notes
+- INTERFACES §1.1, §4, §5.1; ARCHITECTURE §3.1, §3.2 "Concurrency", §3.4; ADR-0009 D-3/D-4; ADR-0002 D-7 (`schedule:` key).
+- **Deferred-method pattern** (referenced by E01-S08): a protocol method whose behaviour belongs to a later story is implemented as `raise ConfigError("implemented in <story ID>")`, the story id is listed in Scope "Out", and one test asserts the message. No other placeholder (`NotImplementedError`, `pass`, `...`) is allowed in `src/`.
+- Write-point note: ARCHITECTURE §4.3 does not list `PROJECT_STARTED`; it is written by `DefaultOrchestrator.start` (the §4.1 `ON_PROJECT_START` MUST row names it). Record for the architect.
+- Known E01 limitation: a run that ends `FAILED` leaves its item in `IMPLEMENTING`, which `ready_items` does not schedule; the `ON_TASK_FAILED` escalation that re-queues or blocks it is E03-S16. The epic gate does not exercise this path.
+- `NEW NAME:` `NoScheduledRole`, `ADMISSION_EVENTS`, `DEFAULT_MAX_PARALLEL_AGENTS`, `DEFAULT_POLL_INTERVAL_S`, `StatusBuilder`, `DefaultOrchestrator.run_once`, telemetry counters `scheduler.*`. File names `router.py`, `scheduler.py`, `errors.py`, `service.py` match the assumptions of E03-S07/E03-S18/E04-S06.
+- Pitfall: `Scheduler.tick` must re-read `executor.running()` after every start; a run that fails during preparation leaves the running set immediately.
+- Pitfall: the orchestrator imports `walk.runtime` repositories and `Default*` runtime classes only as constructor parameter types; it never constructs them (composition root only).
+- Commit subject: `feat: add task router, scheduler tick and orchestrator service (E01-S29)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S30 — Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.2, §56, §87, §89, §93 (transport only), §122, §125, §128, §137 (Inv. 1, 9, 12), §139 (local daemon)
+**Depends on:** E01-S29
+**Effort:** HIGH   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`build_kernel` wires every E01 service from configuration (or test overrides) into a `KernelHandle`; `walk run` acquires the per-repository lock, migrates, recovers and either runs one tick (`--once`) or the daemon loop with the SQLite command channel; `walk status` prints the `KernelStatus` snapshot from a read-only connection; `walk work transition` goes through the daemon when one holds the lock.
+
+#### Scope
+- In: `KernelSettings`, `KernelOverrides`, `KernelHandle`, `build_kernel`, `build_status_reader`; `KernelLock` + `KernelLockHeld`; `KernelInstanceRegistry`; `Command`/`CommandResult` models; `CommandConsumer` (daemon side) with handlers `wake`, `stop`, `work.transition`; `CommandClient`, `daemon_running`, `run_mutation` (CLI side); `run_daemon`; `walk run [--once] [--max-parallel N] [--poll-interval S] [--skip-preflight]`; `walk status [--watch]`; `walk work transition` routed through `run_mutation`.
+- Out: preflight (`--skip-preflight` is accepted and recorded; preflight itself is E02-S02); Production Kit loading, version pins and drift checks at startup (E02-S03/S04/S07); `--webhook-port` and the `/status` HTTP endpoint (E03-S05, E09-S04); pause/resume/cancel/priority/policy commands (E02-S13); approve/deny commands (E02-S11); `walk phase gate` via the daemon (E07-S05); credential store and scrubbed env (E02-S01).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/cli/composition.py` | modify | `KernelSettings`, `KernelOverrides`, `KernelHandle`, `build_kernel`, `build_status_reader`, `DEFAULT_READY_ENV_KEYS` (keeps `open_database`) |
+| `src/walk/cli/daemon.py` | create | `run_daemon` |
+| `src/walk/cli/ipc.py` | create | `CommandClient`, `daemon_running`, `run_mutation`, `COMMAND_POLL_INTERVAL_S` |
+| `src/walk/cli/cmd_run.py` | create | `run` |
+| `src/walk/cli/cmd_status.py` | create | `status` |
+| `src/walk/cli/cmd_work.py` | modify | `transition` (routes through `run_mutation`) |
+| `src/walk/cli/app.py` | modify | registers `run`, `status` |
+| `src/walk/persistence/lock.py` | create | `KernelLock`, `LOCK_FILE_NAME` |
+| `src/walk/persistence/instances.py` | create | `KernelInstanceRegistry` |
+| `src/walk/persistence/errors.py` | modify | `KernelLockHeld` |
+| `src/walk/persistence/__init__.py` | modify | re-exports |
+| `src/walk/orchestrator/models.py` | modify | `Command`, `CommandResult` |
+| `src/walk/orchestrator/commands.py` | create | `CommandConsumer`, `CommandHandler` |
+| `src/walk/orchestrator/__init__.py` | modify | re-exports |
+| `tests/cli/test_composition.py` | create | — |
+| `tests/cli/test_daemon.py` | create | — |
+| `tests/cli/test_ipc.py` | create | — |
+| `tests/cli/test_cmd_run.py` | create | — |
+| `tests/cli/test_cmd_status.py` | create | — |
+| `tests/cli/test_cmd_work.py` | modify | — |
+| `tests/persistence/test_lock.py` | create | — |
+| `tests/persistence/test_instances.py` | create | — |
+| `tests/orchestrator/test_commands.py` | create | — |
+
+#### Interface contract
+CLI: INTERFACES.md §6 rows `walk run`, `walk status`, `walk work transition`; exit codes 0/1/2/3/4. IPC tables: DOMAIN-MODEL §6.2 `commands`, `command_results`, `kernel_instances`. Deltas:
+```python
+# walk.cli.composition
+DEFAULT_READY_ENV_KEYS: frozenset[str] = frozenset({"git"})          # used when git is on PATH; E02-S02 replaces with the EnvironmentManifest
+class KernelSettings(WalkModel):
+    repo_path: Path
+    max_parallel: int = DEFAULT_MAX_PARALLEL_AGENTS
+    poll_interval_s: float = DEFAULT_POLL_INTERVAL_S
+    webhook_port: int | None = None                                   # accepted, unused until E03-S05
+    skip_preflight: bool = False
+    json_output: bool = False
+class KernelOverrides(WalkModel):                                     # arbitrary_types_allowed; tests and e2e gates only
+    adapters: dict[str, ModelAdapter] | None = None                   # keyed by provider; replaces ClaudeAdapter/CodexAdapter
+    git: GitProvider | None = None
+    clock: Clock | None = None
+    id_factory: IdFactory | None = None                               # ULIDs only; sequences always come from IdSequenceStore
+    subprocess_runner: SubprocessRunner | None = None
+    sleep: Callable[[float], Awaitable[None]] | None = None
+    kernel_instance: str | None = None
+    ready_env_keys: set[str] | None = None
+class KernelHandle:
+    settings: KernelSettings; project_key: ProjectKey; kernel_instance: str; db: Database; ledger: LedgerManager; telemetry: TelemetryManager; evidence: EvidenceManager
+    hooks: HookManager; workflow: WorkflowManager; budgets: BudgetManager; costs: CostManager; effort: EffortManager; tools: ToolRegistry
+    permissions: PermissionManager; memory: MemoryManager; agents: AgentManager; router: ModelRouter; git: GitProvider; context: ContextManager
+    checkpoints: DefaultCheckpointManager; tool_invoker: DefaultToolInvoker; executor: DefaultAgentExecutor; recovery: RecoveryManager
+    scheduler: Scheduler; orchestrator: DefaultOrchestrator; status_builder: StatusBuilder
+    async def aclose(self) -> None: ...                               # cancels run tasks without checkpoint, closes the DB
+def build_kernel(settings: KernelSettings, *, overrides: KernelOverrides | None = None) -> KernelHandle: ...
+def build_status_reader(repo: Path) -> StatusBuilder: ...             # read-only connection; no adapters constructed
+# walk.persistence
+LOCK_FILE_NAME = "kernel.lock"                                        # <repo>/.ai/kernel.lock
+class KernelLockHeld(ConfigError): """Another live process holds the kernel lock; detail = holder pid, instance, started_at."""
+class KernelLock:
+    def __init__(self, ai_root: Path, *, kernel_instance: str, clock: Clock) -> None: ...
+    def acquire(self) -> None: ...                                    # non-blocking OS lock (msvcrt / fcntl); writes JSON {pid, kernel_instance, started_at}
+    def release(self) -> None: ...
+    def __enter__(self) -> "KernelLock": ...; def __exit__(self, *exc: object) -> None: ...
+    @staticmethod
+    def is_held(ai_root: Path) -> bool: ...
+class KernelInstanceRegistry:
+    def __init__(self, db: Database, clock: Clock) -> None: ...
+    async def register(self, kernel_instance: str, *, hostname: str, pid: int) -> None: ...
+    async def heartbeat(self, kernel_instance: str) -> None: ...
+# walk.orchestrator
+class Command(FrozenModel): id: int; name: str; args: JsonDict; requested_at: datetime; requested_by: str; state: Literal["PENDING", "RUNNING", "DONE", "FAILED"]
+class CommandResult(FrozenModel): command_id: int; finished_at: datetime; ok: bool; result: JsonDict; exit_code: int
+CommandHandler = Callable[[JsonDict], Awaitable[JsonDict]]
+class CommandConsumer:
+    def __init__(self, db: Database, clock: Clock, *, poll_interval_s: float = 0.25, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None: ...
+    def register(self, name: str, handler: CommandHandler) -> None: ...   # duplicate → ConfigError
+    async def poll_once(self) -> int: ...                                 # processes PENDING rows in id order; returns count
+    async def run(self, stop: asyncio.Event) -> None: ...
+# walk.cli.ipc
+COMMAND_POLL_INTERVAL_S = 0.25                                        # ADR-0009 D-3
+class CommandClient:
+    def __init__(self, db: Database, clock: Clock, *, timeout_s: float = 30.0, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None: ...
+    async def submit(self, name: str, args: JsonDict, *, requested_by: str = "USER") -> int: ...
+    async def wait(self, command_id: int) -> CommandResult: ...       # polls command_results every COMMAND_POLL_INTERVAL_S; timeout → Timeout
+def daemon_running(repo: Path) -> bool: ...
+async def run_mutation(repo: Path, name: str, args: JsonDict, in_process: Callable[[KernelHandle], Awaitable[JsonDict]]) -> CommandResult: ...
+# walk.cli.daemon
+async def run_daemon(settings: KernelSettings, *, once: bool, overrides: KernelOverrides | None = None) -> int: ...   # exit code
+```
+
+#### Behavior
+1. `build_kernel` performs no network or provider calls and starts no task: opens `<repo>/.ai/kernel.db` (creating `.ai/` when absent), applies pending migrations, constructs every E01 service with constructor injection in dependency order (persistence → telemetry → hooks → workflow → budgets/effort → tools/permissions → memory → context → agents → model_router → integrations.git → runtime → orchestrator), and returns the handle. The project key is the key of the single `projects` row (none → `ConfigError("no project in .ai/kernel.db; run 'walk bootstrap'")`, several → `ConfigError`). It is the only module importing `service.py` files of several packages (ARCHITECTURE §1.3).
+2. Configuration sources: kernel defaults for constitutions, policies and `models.yaml`, merged with `<repo>/.ai/agents/roles/`, `policies.yaml`, `models.yaml` when present (E01-S17/S20 loaders). Permission rules for `DefaultPermissionManager` = the union of every role's constitution `tool_permissions` (ADR-0006 D-6 defaults) until E02-S10 adds `permissions.yaml`.
+3. Adapters: `overrides.adapters` when given — their `descriptors()` are added to the models config for ids not already present, so fakes route without a project `models.yaml`; otherwise `CodexAdapter` (with `AsyncioCodexProcessLauncher`) and `ClaudeAdapter` when `claude_agent_sdk` is importable — when it is not, every `claude` descriptor is set `enabled=False` and a warning is logged. Prompt builders: system = `render_constitution(input.constitution, <project constitution markdown or None>)`; user = `input.instructions_markdown + "\n\n" + render_input_sections(input)` (E01-S18).
+4. Wiring details: `ContextManager.handovers = checkpoints.latest_open_handover_doc` (E01-S24 Notes), `head_resolver = git.head(repo_root)`; `executor.on_run_finished = orchestrator.wake` (late-bound); `executor.env_allowlist` returns `{}` until E02-S01; `ready_env_keys` = override or `DEFAULT_READY_ENV_KEYS` when `git` is on `PATH`, else `set()`; `kernel_instance` = override or a new UUID4; `scheduler.max_parallel_agents = settings.max_parallel`; `orchestrator.poll_interval_s = settings.poll_interval_s`.
+5. `KernelLock.acquire` takes a non-blocking exclusive OS lock on `<repo>/.ai/kernel.lock` and writes the holder JSON; a second acquirer in another process (or another `KernelLock` instance in the same process) gets `KernelLockHeld` with the holder details. A lock file left by a dead process does not block (the OS lock died with it). `is_held` probes without keeping the lock.
+6. `run_daemon(settings, once)`: (1) acquire lock — held → message `kernel already running (pid …)`, exit 1; (1b) no `projects` row → message `no project — run 'walk bootstrap'`; with `once=True` print `started 0 run(s)` (`{"started": 0}` with `--json`) and exit 0, in daemon mode exit 1; (2) `build_kernel`; (3) `KernelInstanceRegistry.register`; (4) preflight skipped with an info log (E02-S02); (5) `once=True` → `orchestrator.run_once()`, print `started <n> run(s)` (or JSON `{"started": n}` with `--json`), exit 0; `once=False` → register consumer handlers, run `consumer.run(stop)` and `orchestrator.start()` concurrently, heartbeat every tick; `KeyboardInterrupt`/`stop` command → `orchestrator.stop(drain=True)`; (6) `handle.aclose()` and lock release in `finally`. Unexpected exceptions → logged, exit 1.
+7. `CommandConsumer.poll_once`: selects `PENDING` rows ordered by `id`, sets `RUNNING`, awaits the handler, inserts `command_results(ok, result_json, finished_at)` and sets `DONE`/`FAILED` in one `UnitOfWork`; unknown name → `FAILED` with `{"error": "unknown command <name>", "exit_code": 1}`; `GuardRejected`/`PermissionDenied` → exit code 2; other `WalkError` → 1; non-`WalkError` exceptions → 1 and logged with traceback. The consumer writes no ledger events.
+8. Daemon handlers in E01: `wake` → `orchestrator.wake()`, result `{}`; `stop` → sets the stop event; `work.transition{work_item_id, event, reason}` → `workflow.raise_event(id, event, TransitionContext(actor_role=USER, source=USER, run_id=None, payload={"reason": reason}, phase=None))` then `wake()`, result `{"to_state": …}`.
+9. `run_mutation(repo, name, args, in_process)`: when `daemon_running(repo)` → `CommandClient.submit` + `wait`; else acquire the lock, `build_kernel`, run `in_process(handle)`, release (ARCHITECTURE §3.1 offline-safe commands). `walk work transition` uses it; exit codes from the result (0 ok, 2 guard/permission, 1 other, 3 on client `Timeout` with message `daemon not responding`).
+10. `walk run` options map onto `KernelSettings` (`--max-parallel`, `--poll-interval`, `--skip-preflight`) plus `--once`; `walk status` builds `build_status_reader(repo).build()` and prints a table (phase, progress per state, active runs with role/model/state, blocked items, pending approvals, budgets) or `KernelStatus.model_dump_json()` with `--json`; `--watch` re-renders every 2 s until interrupted. `walk status` never requires the daemon and never writes to the DB.
+11. `KernelHandle.aclose()` cancels running run tasks without checkpoint (their rows stay `RUNNING`, recovered by the next instance) and closes the DB; it is idempotent.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given `tmp_game_repo` and overrides with two fake adapters, When `build_kernel`, Then every `KernelHandle` attribute is set, the DB is migrated, no task is running and the fakes' descriptors are routable | `tests/cli/test_composition.py::test_build_kernel_wires_all_services_with_fakes` |
+| 2 | Given no overrides and `claude_agent_sdk` not importable, When `build_kernel`, Then claude descriptors are disabled and `router.adapter_for("gpt-5-codex").provider == "codex"` | `tests/cli/test_composition.py::test_build_kernel_disables_missing_claude_sdk` |
+| 3 | Given a project `.ai/agents/policies.yaml` overriding SENIOR_DEV `checkpoint_every_tool_calls`, When built, Then `agents.load_runtime_policy(SENIOR_DEV)` reflects it | `tests/cli/test_composition.py::test_build_kernel_reads_project_overrides` |
+| 4 | When the composition module is inspected, Then it is the only module under `src/walk/` importing more than one package's `service.py` | `tests/cli/test_composition.py::test_composition_is_only_multi_service_importer` |
+| 5 | Given a held lock, When a second `KernelLock.acquire` runs in a subprocess, Then `KernelLockHeld` with the holder pid; after `release` it succeeds | `tests/persistence/test_lock.py::test_lock_is_exclusive_across_processes` |
+| 6 | Given a lock file written by a process that exited, When `acquire`, Then success | `tests/persistence/test_lock.py::test_stale_lock_file_does_not_block` |
+| 7 | When `register` then `heartbeat`, Then one `kernel_instances` row with updated `heartbeat_at` | `tests/persistence/test_instances.py::test_register_and_heartbeat` |
+| 8 | Given PENDING commands `wake` and `nope`, When `poll_once`, Then `wake` → `DONE` with ok result, `nope` → `FAILED` exit 1, both in `command_results` | `tests/orchestrator/test_commands.py::test_poll_once_dispatches_and_records` |
+| 9 | Given a handler raising `GuardRejected`, Then the result has `ok=false`, `exit_code=2` | `tests/orchestrator/test_commands.py::test_guard_rejection_maps_to_exit_code_2` |
+| 10 | When `register("wake", …)` twice, Then `ConfigError` | `tests/orchestrator/test_commands.py::test_duplicate_handler_rejected` |
+| 11 | Given a consumer running against the same DB, When `CommandClient.submit("wake")` and `wait`, Then the result arrives with ok; with no consumer and `timeout_s=0.5` → `Timeout` | `tests/cli/test_ipc.py::test_client_round_trip_and_timeout` |
+| 12 | Given no daemon, When `run_mutation`, Then `in_process` ran under the lock and the lock is released afterwards | `tests/cli/test_ipc.py::test_run_mutation_in_process_without_daemon` |
+| 13 | Given a READY story and fake adapters, When `run_daemon(settings, once=True)`, Then exit 0, one run `COMPLETED`, `PROJECT_STARTED` and `AGENT_RUN_ENDED` in the ledger, lock released | `tests/cli/test_daemon.py::test_run_once_executes_one_tick` |
+| 14 | Given the lock held by another process, When `walk run --once`, Then exit 1 and message contains `already running` | `tests/cli/test_cmd_run.py::test_run_exits_1_when_lock_held` |
+| 15 | Given a migrated repo without a project row (and, separately, with a project but no ready work), When `walk run --once --json`, Then exit 0 and stdout `{"started": 0}` | `tests/cli/test_cmd_run.py::test_run_once_with_no_ready_work` |
+| 16 | Given the daemon loop running in a task, When a `stop` command is submitted, Then `orchestrator.stop(drain=True)` ran, the loop ended and exit 0 | `tests/cli/test_daemon.py::test_stop_command_ends_daemon` |
+| 17 | Given items, one active run and a budget, When `walk status --json`, Then valid `KernelStatus` JSON matching the DB; table mode lists the run's role and model | `tests/cli/test_cmd_status.py::test_status_json_and_table` |
+| 18 | When `walk status` runs while another process holds the lock, Then exit 0 (read-only, no lock needed) | `tests/cli/test_cmd_status.py::test_status_does_not_need_lock` |
+| 19 | Given a running daemon, When `walk work transition STORY-0001 block --reason x`, Then the transition is executed by the consumer (command row `DONE`) with actor USER; a guard failure exits 2 | `tests/cli/test_cmd_work.py::test_transition_routes_through_daemon` |
+| 20 | Given no daemon, When `walk work transition`, Then it runs in-process and exits 0 | `tests/cli/test_cmd_work.py::test_transition_in_process_without_daemon` |
+| 21 | When `KernelHandle.aclose()` is called with a RUNNING run, Then the task is cancelled, the row stays `RUNNING`, and calling it again is a no-op | `tests/cli/test_composition.py::test_aclose_leaves_runs_recoverable` |
+| 22 | Given a migrated repo with no `projects` row, When `build_kernel`, Then `ConfigError` mentioning `walk bootstrap`; with two rows → `ConfigError` | `tests/cli/test_composition.py::test_build_kernel_requires_single_project` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on a fresh temp repo (after `walk db migrate`): `walk run --once` → `started 0 run(s)`; `walk status --json` → `KernelStatus` JSON with empty `active_runs`; a second terminal running `walk run` while the first holds the lock → exit 1 `kernel already running`.
+- Checkpoint (WBS §7.2): `walk run --once` with no ready work exits 0.
+
+#### Notes
+- ARCHITECTURE §1.2 (`cli` hosts the composition root), §1.3, §3.1, §3.4; ADR-0009 D-3/D-4/D-16/D-17; WBS §3.6, §3.7; INTERFACES §6.
+- `NEW NAME:` `KernelSettings`, `KernelOverrides`, `KernelLock`, `CommandConsumer` (placement), `CommandClient` (already in WBS §6); new here: `KernelHandle` attributes and `aclose`, `build_status_reader`, `DEFAULT_READY_ENV_KEYS`, `KernelLockHeld`, `LOCK_FILE_NAME`, `KernelInstanceRegistry`, `Command`, `CommandResult`, `CommandHandler`, `COMMAND_POLL_INTERVAL_S`, `daemon_running`, `run_mutation`, `run_daemon`, command names `wake`, `stop`, `work.transition`, `KernelOverrides` fields beyond WBS §3.6 (`sleep`, `kernel_instance`, `ready_env_keys`).
+- `KernelOverrides` is a test seam (WBS §3.6); production code paths must not branch on it beyond choosing the injected object.
+- Pitfall (Windows): `msvcrt.locking` locks byte ranges; lock byte 0 of a file opened `a+b` and keep the handle open for the daemon's lifetime. The lock test spawns `sys.executable -c` so it exercises a real second process.
+- Pitfall: the CLI process and the daemon both open the DB; the CLI must never hold a write transaction while waiting for a command result.
+- Commit subject: `feat: add composition root, kernel lock, command channel and run/status cli (E01-S30)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-S31 — Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §6.1, §21, §22, §41, §54, §81, §86, §87, §89, §122, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12), §138 (Model Lock-In)
+**Depends on:** E01-S30, E01-S21, E01-S22
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+One end-to-end test module proves the E01 gate exactly as WBS §4 E01 states it — a READY story runs to `READY_FOR_REVIEW` through 12 tool calls with two periodic WIP-commit checkpoints, a second story survives a scripted provider outage by falling back to the other fake with a handover, and the CLI views reflect all of it — and the package dependency rules and SDK confinement become mechanical parts of the quality gate.
+
+#### Scope
+- In: `tests/e2e/` fixtures and gate tests; import-linter contracts generated by hand from ARCHITECTURE §2.2 and a test that keeps them in sync with the table; ruff `banned-api` rules for SDK/subprocess confinement (ARCHITECTURE §2.3); `lint-imports` added to `scripts/check.sh`/`check.ps1`; gate transcript in this story's Evidence.
+- Out: any new kernel behaviour (defects found here become `E01-B*` stories via E01-R01); real-provider runs (optional integration markers of E01-S21/S22); recovery after a crash end-to-end (E04-S15); `sqlite3` confinement (see Notes).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/e2e/__init__.py` | create | — |
+| `tests/e2e/conftest.py` | create | fixtures `e01_repo`, `e01_kernel`, `e01_scenario`; helpers `E01Scenario`, `run_cli`, `gate_script_for` |
+| `tests/e2e/test_e01_gate.py` | create | — |
+| `tests/test_import_contracts.py` | create | — |
+| `tests/test_scaffold.py` | modify | — (check scripts now run five gate commands) |
+| `pyproject.toml` | modify | — (`[tool.importlinter]` contracts; `[tool.ruff.lint.flake8-tidy-imports.banned-api]` + per-file ignores) |
+| `scripts/check.sh` | modify | — (adds `uv run lint-imports` after mypy) |
+| `scripts/check.ps1` | modify | — (same) |
+| `docs/02-work-breakdown/EPIC-01-kernel-core.md` | modify | — (Evidence section of this story) |
+
+#### Interface contract
+```python
+# tests/e2e/conftest.py
+class E01Scenario(WalkModel):                     # arbitrary_types_allowed
+    repo: Path
+    handle: KernelHandle
+    story_ok: WorkItemId                          # STORY-0001: 12 tool calls, COMPLETED
+    story_fallback: WorkItemId                    # STORY-0002: PROVIDER_OUTAGE after 3 calls on fake-codex, completes on fake-claude
+    started: int                                  # value returned by orchestrator.run_once()
+
+def gate_script_for(agent_input: AgentInput) -> FakeScript: ...
+    """STORY-0001 → 12 calls, COMPLETED output with one AUTOMATED_TEST evidence draft (path src/Fake1.cs) and no_context_change_reason;
+    STORY-0002 without `agent_input.handover` (first run, routed to fake-codex) → 12 calls with fail_after_tool_calls=3, fail_trigger=PROVIDER_OUTAGE;
+    STORY-0002 with a handover (fallback run on fake-claude) → 6 calls, COMPLETED as above. Pure function of the input."""
+
+@pytest.fixture
+def e01_repo(tmp_game_repo: Path) -> Path:
+    """tmp_game_repo + migrated DB + Project(key="DEMO") row + .ai/agents/policies.yaml overriding SENIOR_DEV:
+    model_policy {preferred: [fake-codex/sim], fallback: [fake-claude/sim], cross_model_review: true}, checkpoint_every_tool_calls: 5,
+    max_parallel_runs: 2 — plus STORY-0001/STORY-0002 created and moved to READY by ORCHESTRATOR (contract with goal,
+    acceptance_criteria, constraints, required_evidence [AUTOMATED_TEST])."""
+
+@pytest.fixture
+async def e01_kernel(e01_repo: Path, fake_clock: FakeClock) -> AsyncIterator[KernelHandle]:
+    """build_kernel(KernelSettings(repo_path=e01_repo), overrides=KernelOverrides(adapters={"fake-codex": FakeModelAdapter("fake-codex", [fake_descriptor("fake-codex/sim", "fake-codex")], gate_script_for, clock), "fake-claude": FakeModelAdapter("fake-claude", [fake_descriptor("fake-claude/sim", "fake-claude")], gate_script_for, clock)}, clock=fake_clock, sleep=<no-op>, kernel_instance="gate-1")); aclose() on teardown."""
+
+@pytest.fixture
+async def e01_scenario(e01_repo: Path, e01_kernel: KernelHandle) -> E01Scenario:
+    """Runs `await e01_kernel.orchestrator.run_once()` once and returns the scenario."""
+
+def run_cli(repo: Path, *args: str) -> tuple[int, str]: ...   # typer CliRunner on walk.cli.app with --repo <repo>; returns (exit_code, stdout)
+```
+Import-linter (`pyproject.toml`): `root_package = "walk"`; one `forbidden` contract per package row of ARCHITECTURE §2.2 whose `source_modules` is the package and whose `forbidden_modules` are exactly the `·` cells among existing packages; one `forbidden` contract forbidding `walk.*.service` from every package except `walk.cli.composition` (wildcards, import-linter ≥ 2.0). Ruff `banned-api`: `claude_agent_sdk` (allowed only in `src/walk/model_router/adapters/claude/**`), `typer` (`src/walk/cli/**`), `keyring` (`src/walk/integrations/credentials.py`), `subprocess` and `asyncio.create_subprocess_exec` (`src/walk/integrations/subprocess.py`, `src/walk/model_router/adapters/codex/process.py`), all allowed in `tests/**` and `scripts/**`.
+
+#### Behavior
+Each gate assertion is one test; every test builds its own scenario (no shared state between tests, no ordering dependency).
+1. `run_once()` admits both READY stories in one tick (`max_parallel_agents=2`, SENIOR_DEV `max_parallel_runs=2`, different branches) and returns 2; it returns only after every run, including the fallback continuation, has ended.
+2. STORY-0001: one run on `fake-codex/sim`, 12 `TOOL_INVOKED(phase=post)` events, checkpoints `START, PERIODIC, PERIODIC, END` (seq 1–4), the work branch has `wip(STORY-0001): checkpoint 2` and `wip(STORY-0001): checkpoint 3` commits each carrying the `Walk-Work-Item: STORY-0001` trailer, one `EVD-` evidence of kind `AUTOMATED_TEST`, run `COMPLETED`, story `READY_FOR_REVIEW` via `submit_for_review` with `actor_role=SENIOR_DEV`.
+3. STORY-0002: run A on `fake-codex/sim` ends `HANDED_OVER` after 3 tool calls with a `HANDOFF` checkpoint and `.ai/handovers/HO-0001.md` (10 §22 sections, `reason: FALLBACK`); `MODEL_FALLBACK` payload `trigger=PROVIDER_OUTAGE`, `from=fake-codex/sim`, `to=fake-claude/sim`; run B on `fake-claude/sim` has `parent_run_id = A`, `handover_in_id = HO-0001`, `fallbacks = 1`, the same worktree path and branch as A, ends `COMPLETED`; the story reaches `READY_FOR_REVIEW`; the handover row is closed with `to_run_id = B`.
+4. CLI views (read-only, no daemon): `walk status --json` → valid `KernelStatus` with no active runs, `phase_progress[READY_FOR_REVIEW] == 2`, `model_usage` keys `fake-codex/sim` and `fake-claude/sim`; `walk ledger query --item STORY-0002 --json` contains, in order, `AGENT_RUN_STARTED`, `CHECKPOINT_CREATED`, `HANDOVER_CREATED`, `MODEL_FALLBACK`, `AGENT_RUN_ENDED`, `AGENT_RUN_STARTED`, …, `AGENT_RUN_ENDED`; `walk work show STORY-0001` prints `READY_FOR_REVIEW`, both transitions and the run.
+5. Ledger completeness (Invariant 9): every run has exactly one `AGENT_RUN_STARTED` and one `AGENT_RUN_ENDED`; every event has `project_key == "DEMO"`; event kinds are a subset of the ARCHITECTURE §4.3 table plus `PROJECT_STARTED`; an `UPDATE ledger_events` statement raises `sqlite3.IntegrityError`.
+6. Role ≠ model (Invariant 1): runs A and B of STORY-0002 have the same `role`, `purpose` and `behavior_versions["prompt:IMPLEMENT"]` on `AGENT_RUN_STARTED`, and different `model_id`/`provider`.
+7. Continuity (Invariant 12): run B's first tool call happens with the files written by run A present in the worktree (checked via the fake's recorded events and the WIP commit of the HANDOFF checkpoint), and no `TEXT` content appears in `HO-0001.md`.
+8. Dependency rules: `lint-imports` (console script of the active environment) exits 0; the contract test proves every `·` cell of ARCHITECTURE §2.2 for packages present under `src/walk/` is covered by a contract and no contract forbids a `✔` cell.
+9. The quality gate scripts run, in order, `ruff format --check`, `ruff check`, `mypy src tests`, `lint-imports`, `pytest` (CONVENTIONS §5).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the gate repo with two READY stories, When `run_once()`, Then 2 returned and no run is left non-terminal | `tests/e2e/test_e01_gate.py::test_run_once_admits_both_stories_and_drains` |
+| 2 | Given STORY-0001, Then 12 tool calls, checkpoints START/PERIODIC/PERIODIC/END, two periodic WIP commits with trailer, AUTOMATED_TEST evidence, story `READY_FOR_REVIEW` | `tests/e2e/test_e01_gate.py::test_story_completes_with_periodic_checkpoints` |
+| 3 | Given STORY-0002 with a scripted `PROVIDER_OUTAGE` after 3 calls, Then HANDOFF checkpoint, `HO-0001.md`, `MODEL_FALLBACK` codex→claude, child run completes in the same worktree, story `READY_FOR_REVIEW`, handover closed | `tests/e2e/test_e01_gate.py::test_provider_outage_falls_back_with_handover` |
+| 4 | When `walk status --json`, `walk ledger query --item STORY-0002 --json` and `walk work show STORY-0001` run against the repo, Then their outputs reflect Behavior 4 | `tests/e2e/test_e01_gate.py::test_cli_views_reflect_kernel_state` |
+| 5 | Given the scenario ledger, Then start/end pairs per run, `project_key` everywhere, kinds within the write-point table, and UPDATE rejected | `tests/e2e/test_e01_gate.py::test_ledger_complete_and_immutable` |
+| 6 | Given runs A and B of STORY-0002, Then same role/purpose/prompt version, different model and provider | `tests/e2e/test_e01_gate.py::test_role_is_independent_of_model` |
+| 7 | Given run B, Then run A's files exist at B's first tool call and `HO-0001.md` contains no `TEXT` event content | `tests/e2e/test_e01_gate.py::test_continuation_does_not_depend_on_session` |
+| 8 | When `lint-imports` runs in the active environment, Then exit 0 | `tests/e2e/test_e01_gate.py::test_import_linter_contracts_pass` |
+| 9 | Given ARCHITECTURE.md §2.2 parsed from the repository and `pyproject.toml` contracts, Then every forbidden cell for existing packages is covered and no allowed cell is forbidden | `tests/test_import_contracts.py::test_contracts_match_dependency_table` |
+| 10 | Given `pyproject.toml`, Then banned-api entries exist for `claude_agent_sdk`, `typer`, `keyring`, `subprocess`, `asyncio.create_subprocess_exec` with exactly the per-file allowances above | `tests/test_import_contracts.py::test_sdk_confinement_rules_configured` |
+| 11 | When `scripts/check.sh` and `check.ps1` are read, Then each contains the five gate commands in order | `tests/test_scaffold.py::test_check_scripts_invoke_all_gate_commands` |
+
+#### Evidence required
+- Quality gate output (`scripts/check.sh`) including the `lint-imports` summary (`Contracts: N kept, 0 broken`) and `tests/e2e/test_e01_gate.py` 8 passed.
+- Demo transcript (pasted into Evidence) against the repo left by a scenario run (`pytest --basetemp=<dir> tests/e2e/test_e01_gate.py::test_provider_outage_falls_back_with_handover`): `walk status --json`, `walk ledger query --item STORY-0002`, `walk ledger query --kind MODEL_FALLBACK --json`, `walk work show STORY-0001`, `git -C <repo> log --oneline --all | grep wip`, `head -20 .ai/handovers/HO-0001.md`.
+
+#### Notes
+- Gate text: WBS.md §4 E01 (verbatim scenario). Uses only fakes and a real temporary git repository (WBS §3.6); `FakeClock` keeps timestamps deterministic, the injected no-op `sleep` removes retry waits.
+- The `.ai/agents/policies.yaml` override is the only way the fixture changes kernel behaviour; it must not be needed by production defaults (default SENIOR_DEV policy keeps ADR-0011 D-3 families and `checkpoint_every_tool_calls: 10`).
+- `sqlite3` confinement (ARCHITECTURE §2.3) is **not** encoded: repositories outside `walk.persistence` (e.g. E01-S25 `AgentRunRepository.set_state(conn: sqlite3.Connection)`) type-annotate `sqlite3.Connection`. Report to the architect: either allow `sqlite3` type imports outside persistence or introduce a `walk.persistence.Connection` alias; E01-R01 records it.
+- `NEW NAME:` `tests/e2e/` already registered (WBS §6); new here: `E01Scenario`, `gate_script_for`, `run_cli`, fixtures `e01_repo`, `e01_kernel`, `e01_scenario`. E02-S16 later adds `bootstrapped_repo`, `cli`, `kernel_with_fakes` to the same conftest; its refine step may reuse `run_cli`.
+- Pitfall: two runs write into two worktrees of one repository concurrently; `git` operations on the shared object store are safe, but the gate must not assert on global commit order — assert per branch.
+- Commit subject: `feat: add epic 01 kernel gate test and import contracts (E01-S31)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-R01 — Review E01
+
+**Status:** TODO
+**Type:** docs
+**Requirements:** §6.1, §21–§23, §31, §41, §54, §81, §86, §89, §90, §125, §126, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12)
+**Depends on:** E01-S31
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** LeadDev   **Reviewer role:** QC
+
+#### Goal
+An independent agent instance (a different model than the implementer of the majority of E01 stories) verifies every E01 story against the Definition of Done and invariants 1, 2, 9 and 12, consolidates the epic's `NEW NAME:` items and architecture inconsistencies for the architect, and records defects as `E01-B*` bugfix stories.
+
+#### Scope
+- In: review of the E01-S01…S31 commits; DoD checklist per story; invariant checks 1, 2, 9, 12; ledger write-point audit; deferred-method pattern audit; `NEW NAME:` consolidation into WBS §6; bugfix story creation.
+- Out: fixing defects (bugfix stories `E01-B*`); architecture document changes (architect, from the consolidated list); re-planning later epics (planner, via `E02`+ refine tasks).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/02-work-breakdown/EPIC-01-kernel-core.md` | modify | — (this task's Evidence; appended `E01-B*` stories) |
+| `docs/02-work-breakdown/WBS.md` | modify | — (§5 status rows for E01-R01 and any `E01-B*`; §6 rows for unregistered `NEW NAME:` items) |
+
+#### Interface contract
+Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer protocol" steps 1–5. Checklist per story: DoD "Code", "Tests", "Documentation", "Evidence", "Delivery" boxes; per acceptance-criteria row the named test exists by exact node id and passes (`uv run pytest <nodeid>`). Bugfix stories use `docs/00-governance/STORY-TEMPLATE.md` with `**Type:** bugfix`, `**Depends on:** E01-R01` and a severity line in Notes (`Severity: BLOCKER | MAJOR | MINOR`).
+
+#### Behavior
+1. For every story S01–S31: `git show --stat <sha>` touches only Files-table paths (or the commit body justifies extras); public symbols match the Interface contract (no extra public names); every acceptance test exists by exact node id and passes; coverage ≥ 90 % for touched modules and ≥ 85 % overall (`uv run pytest --cov=walk --cov-report=term-missing`); Evidence section filled; Status and WBS row updated in the same commit; commit subject matches the story's `Commit subject:` line and COMMIT-POLICY.
+2. Invariant 1 (Role ≠ Model): `lint-imports` and `ruff check` clean (SDK confinement); no module under `src/walk/model_router/adapters/` branches on `AgentInput.role` or reads `AgentInput.constitution` except to render the system prompt through the injected builder; the gate test `test_role_is_independent_of_model` passes.
+3. Invariant 2 (Project Knowledge ≠ Model Context): no code outside `src/walk/memory/` writes under `.ai/` except the kernel lock file and `kernel.db` (grep for `.ai` path joins combined with `write_text`, `open(`, `replace(`); adapters never emit reasoning content (E01-S19/S21/S22 tests); `TEXT` events are never persisted (E01-S27 AC 6).
+4. Invariant 9 (auditable): every `LedgerManager.append` call site maps to a row of ARCHITECTURE §4.3 or to a documented exception (E01-S25 `CHECKPOINT_CREATED` in `CheckpointManager`, E01-S28 `RecoveryManager`, E01-S29 `PROJECT_STARTED`); `telemetry/repository.py` contains no UPDATE/DELETE; the immutability triggers exist; `test_ledger_complete_and_immutable` passes.
+5. Invariant 12 (continuity): all six `CheckpointKind` values are produced by some test; every WIP commit carries the `Walk-Work-Item` trailer; the fallback gate test and the E01-S28 recovery tests pass; handover documents contain the ten §22 sections.
+6. Deferred-method pattern (E01-S29 Notes): every `ConfigError("implemented in <ID>")` in `src/` names an ID present in WBS §5; no `NotImplementedError`, bare `pass` or `...` bodies in `src/walk/` outside `Protocol` classes.
+7. Consistency checks that the stories delegated to this review: E01-S27 `expected_output_for` and E01-S18's purpose → status table agree; the composition root is the only multi-`service.py` importer (E01-S30 AC 4).
+8. `NEW NAME:` consolidation: every `NEW NAME:`/`RELOCATE:` item in this epic's Notes appears in WBS §6 (add missing rows with "Where introduced"); the architecture inconsistencies reported in E01 Notes (E01-S22 `SubprocessRunner` vs `model_router` imports, E01-S26 `ToolSpec.requires_network`, E01-S27/S28 protocol deltas and E02-S08 checkpoint duplication, E01-S28 `ModelRouter.fallback` signature, E01-S29 `PROJECT_STARTED` write point, E01-S31 `sqlite3` confinement) are listed in this task's Evidence as one table for the architect.
+9. Each defect → one `E01-Bnn` story, linked from this task's Evidence; `BLOCKER` when it breaks the gate, an invariant or the quality gate on `main`. E02 may start only when no `BLOCKER` is open (WBS §2 rule 2).
+10. Commit `docs: review epic 01 stories s01-s31 (E01-R01)` and push.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given each story commit, When diffed against its Files table, Then no unlisted file without justification | manual checklist recorded in Evidence |
+| 2 | Given each acceptance row of S01–S31, When `uv run pytest <nodeid>`, Then the test exists and passes | manual checklist recorded in Evidence |
+| 3 | Given `main` after E01-S31, When `scripts/check.sh` runs, Then green with coverage ≥ 85 % overall | manual checklist recorded in Evidence |
+| 4 | Given the gate scenario, When run, Then role and model are independent across the fallback (Invariant 1) | `tests/e2e/test_e01_gate.py::test_role_is_independent_of_model` |
+| 5 | Given the gate ledger, When inspected, Then complete and immutable (Invariant 9) | `tests/e2e/test_e01_gate.py::test_ledger_complete_and_immutable` |
+| 6 | Given the fallback run, When inspected, Then continuation does not depend on the provider session (Invariant 12) | `tests/e2e/test_e01_gate.py::test_continuation_does_not_depend_on_session` |
+| 7 | Given ARCHITECTURE §2.2, When compared with the import contracts, Then every forbidden edge is enforced | `tests/test_import_contracts.py::test_contracts_match_dependency_table` |
+| 8 | Given the `.ai/` write audit, the write-point audit and the deferred-method audit, Then findings are recorded (or "none") per Behavior 3, 4, 6 | manual checklist recorded in Evidence |
+| 9 | Given every `NEW NAME:` item in EPIC-01, Then each has a WBS §6 row and the architect table is in Evidence | manual checklist recorded in Evidence |
+
+#### Evidence required
+- Gate output of the full suite on `main` after E01-S31 (`scripts/check.sh` summary lines incl. `lint-imports`).
+- Table in Evidence: story → sha → DoD result → defects (ids).
+- Audit results for Behavior 2–7 (command used + result).
+- Architect table (Behavior 8) and the list of `E01-B*` stories with severities.
+- Demo transcript on a scenario repo: `walk status --json`, `walk ledger query --kind MODEL_FALLBACK`, `walk run --once` on a repo with no ready work (`started 0 run(s)`).
+
+#### Notes
+- Reviewer must be a different agent instance/model than the implementer of ≥ 50 % of E01 stories (IMPLEMENTATION-PROTOCOL "Reviewer protocol", §23).
+- Do not fix in place; create `E01-B*` stories. Planning-level inconsistencies (wrong story ID references, missing Files rows in later epics) are reported to the planner in Evidence, not turned into bugfix stories.
+- Commit subject: `docs: review epic 01 stories s01-s31 (E01-R01)`.
+
+#### Evidence (filled by implementer)
+_pending_
+

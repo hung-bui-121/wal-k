@@ -62,7 +62,7 @@
 | `src/walk/memory/service.py` | modify | `DefaultMemoryManager.read_feature_context`, `DefaultMemoryManager.read_bug_context`, `DefaultMemoryManager.ensure_feature_context`, `DefaultMemoryManager.ensure_bug_context` |
 | `src/walk/memory/protocols.py` | modify | `MemoryManager.ensure_feature_context`, `MemoryManager.ensure_bug_context` |
 | `src/walk/memory/__init__.py` | modify | re-export the six conversion functions |
-| `src/walk/runtime/applier.py` | modify | — (`DefaultOutputApplier` calls `ensure_feature_context`/`ensure_bug_context` after creating FEATURE/BUG items) |
+| `src/walk/runtime/output_applier.py` | modify | — (`DefaultOutputApplier` calls `ensure_feature_context`/`ensure_bug_context` after creating FEATURE/BUG items) |
 | `src/walk/workflow/service.py` | modify | — (`DefaultWorkflowManager.create` sets `context_path` for FEATURE/BUG) |
 | `tests/memory/test_contexts.py` | create | — |
 | `tests/memory/test_service_contexts.py` | create | — |
@@ -558,7 +558,7 @@ Mandatory context checkpoints are enforced by hooks, not by prompts: PARTIAL, us
 | Path | Action | Public symbols |
 |---|---|---|
 | `src/walk/runtime/executor.py` | modify | — (`DefaultAgentExecutor._on_final_output`: PARTIAL path; budget-exhausted path; `ON_AGENT_END` repair turn) |
-| `src/walk/runtime/applier.py` | modify | — (`partial` event with `payload["handover_present"]`) |
+| `src/walk/runtime/output_applier.py` | modify | — (`partial` event with `payload["handover_present"]`) |
 | `src/walk/hooks/builtins.py` | modify | `agent_end_requires_context_update`, `budget_exhausted_checkpoint_handover`, `project_pause_checkpoint_all` |
 | `src/walk/orchestrator/service.py` | modify | — (`pause(run_id)` → `checkpoint(PAUSE, handover=build_handover(reason="PAUSE"))`) |
 | `tests/runtime/test_executor_partial.py` | create | — |
@@ -1042,7 +1042,7 @@ Agents and the kernel can record improvement observations as project-scoped `.ai
 | `src/walk/improvement/__init__.py` | modify | re-exports |
 | `src/walk/memory/sections.py` | modify | `OBSERVATION_SECTIONS` |
 | `src/walk/hooks/builtins.py` | modify | `improvement_observation_write`, `model_fallback_observe_repeated`, `context_stale_observe_repeated` |
-| `src/walk/runtime/applier.py` | modify | — (applies `output.observations`) |
+| `src/walk/runtime/output_applier.py` | modify | — (applies `output.observations`) |
 | `src/walk/cli/cmd_improvement.py` | create | `observations` |
 | `src/walk/cli/app.py` | modify | — |
 | `src/walk/cli/composition.py` | modify | — |
