@@ -60,7 +60,7 @@ Conventions that apply to every story below (from WBS §3): implementation class
 
 ### E01-S01 — Project scaffold, `walk.common`, quality gate, `walk --version`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** chore
 **Requirements:** §4 (objectives 12, 13), §7, §122, §125, §137 (Inv. 1), §2 (production orchestration kernel, not a coding-agent framework)
 **Depends on:** none
@@ -204,7 +204,25 @@ class SequentialIdFactory: def next_sequence(self, prefix: str) -> str  # FEAT-0
 - Commit: `chore: scaffold package, common primitives and quality gate (E01-S01)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+26 files already formatted
+All checks passed!
+Success: no issues found in 23 source files
+Required test coverage of 85% reached. Total coverage: 100.00%
+33 passed in 1.57s
+```
+Demo:
+```
+$ uv run walk --version
+walk 0.1.0
+```
+Level-0 decisions (no contract change):
+- `pyproject.toml` uses `hatchling` as build backend, `mypy_path = "src"`, pydocstyle `google`, and pytest `-m 'not integration'` so integration tests are skipped by default (§ markers).
+- Extra ruff ignores, each justified inline: `CPY001` (no copyright headers), `N818` (exception names fixed by ARCHITECTURE §5.1), `FBT001/FBT002` for `src/walk/cli/**` (typer boolean flags), `S603/S607` for tests (git subprocess in `tmp_repo`), a tooling ignore set for `scripts/**`, and `extend-exclude = ["docs", "*.md"]` (planning sketches are not formatted code).
+- `walk.common.errors` imports `JsonDict` from `walk.common.models` (single definition).
+- `walk` with no arguments prints help and exits 0 via an `invoke_without_command` callback (click 8.2 exits 2 for `no_args_is_help`).
+- Extra tests beyond the AC table: assignment validation, `utcnow` tz, error `detail` copy, no-args help, `main()` entry point.
 
 ---
 

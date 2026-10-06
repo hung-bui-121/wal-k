@@ -55,10 +55,10 @@ list, note it under the story's **Notes** as "Also read: ...".
 
 1. Update `INTERFACES.md` / `DOMAIN-MODEL.md` if a contract changed (same commit).
 2. Fill the story's **Evidence** section: gate summary lines and demo transcript.
-3. Set story **Status** to `DONE (<sha>)` — use `pending` for the sha, then amend after
-   the commit is created, or simply write the short sha of `HEAD` after committing and
-   include it in the following story's commit. The WBS status table is updated in the same
-   commit as the story.
+3. Set story **Status** to `DONE (pending)` in the epic file and in the WBS status table, in
+   the same commit as the story (a commit cannot contain its own SHA). The next commit —
+   usually the next story's — replaces every `DONE (pending)` with `DONE (<short sha>)` of
+   the commit that delivered it (`git log --format=%h --grep "(<ID>)"`).
 
 ## 6. Commit and push (no approval needed)
 

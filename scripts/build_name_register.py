@@ -36,7 +36,7 @@ def main() -> None:
                 mk = MARK.search(line)
                 if not mk:
                     continue
-                text = clean(line[mk.end():])
+                text = clean(line[mk.end() :])
                 if text:
                     rows.append((owner, mk.group(1), text, f.name))
     lines = [

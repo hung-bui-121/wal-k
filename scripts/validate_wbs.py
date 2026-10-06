@@ -33,7 +33,9 @@ HEADINGS = [
 ]
 MANUAL_RE = re.compile(r"manual|gate output|checklist|in Evidence", re.IGNORECASE)
 TEST_RE = re.compile(r"^`tests/[\w/.\-]+\.py::test_\w+`$")
-STATUS_RE = re.compile(r"^(TODO|BLOCKED|IN_PROGRESS|DONE \([0-9a-f]{7,40}\)|DROPPED)\b")
+STATUS_RE = re.compile(
+    r"^(TODO|BLOCKED|IN_PROGRESS|DONE \((?:[0-9a-f]{7,40}|pending)\)|DROPPED)(?:\s|$)"
+)
 
 
 def load_status_table(wbs: str) -> dict[str, dict[str, str]]:
@@ -86,7 +88,9 @@ def main() -> int:
             errors.append(f"{sid}: in WBS status table but no section in any epic file")
     for sid in sections:
         if sid not in table:
-            errors.append(f"{sid}: section exists in {sections[sid][0]} but missing from WBS status table")
+            errors.append(
+                f"{sid}: section exists in {sections[sid][0]} but missing from WBS status table"
+            )
 
     for sid, (fname, body) in sections.items():
         pos = -1
@@ -147,7 +151,9 @@ def main() -> int:
     if errors:
         for e in errors:
             print("ERROR", e)
-        print(f"\n{len(errors)} error(s); {len(sections)} stories checked in {len(epic_files)} epic files")
+        print(
+            f"\n{len(errors)} error(s); {len(sections)} stories checked in {len(epic_files)} epic files"
+        )
         return 1
     if not quiet:
         print(f"OK: {len(sections)} stories, {len(table)} table rows, all checks passed")

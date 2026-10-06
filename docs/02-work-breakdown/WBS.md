@@ -387,7 +387,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 
 | ID | Title | Type | Depends on | Effort | Status |
 |---|---|---|---|---|---|
-| E01-S01 | Project scaffold, `walk.common`, quality gate, `walk --version` | chore | none | HIGH | TODO |
+| E01-S01 | Project scaffold, `walk.common`, quality gate, `walk --version` | chore | none | HIGH | DONE (pending) |
 | E01-S02 | Provider CLI/SDK spike → ADR-0014 | docs | none | MEDIUM | TODO |
 | E01-S03 | SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup` | feat | E01-S01 | HIGH | TODO |
 | E01-S04 | `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore` | feat | E01-S03 | MEDIUM | TODO |
