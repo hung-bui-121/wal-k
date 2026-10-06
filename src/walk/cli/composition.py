@@ -384,6 +384,7 @@ def build_kernel(
         kernel_instance=instance,
         project_key=key,
         ready_env_keys=lambda: set(ready_env_keys),
+        sandbox=sandbox,
     )
     scheduler = Scheduler(
         db,

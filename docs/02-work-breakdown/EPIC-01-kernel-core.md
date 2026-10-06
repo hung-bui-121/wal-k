@@ -5842,7 +5842,7 @@ started 0 run(s)
 
 ### E01-B01 — Release or adopt a finished run's worktree so the item's next run can start
 
-**Status:** DONE (pending)
+**Status:** DONE (6fc17f4)
 **Type:** bugfix
 **Requirements:** §60, §6.1, §137 (Inv. 4)
 **Depends on:** E01-R01
@@ -5948,7 +5948,7 @@ b4ad281 chore: initial commit
 
 ### E01-B02 — Recovery re-creates a missing worktree and ends a failed recovery completely
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §89, §90, §137 (Inv. 9, 12)
 **Depends on:** E01-R01
@@ -5999,7 +5999,50 @@ class RecoveryManager:
 - Commit subject: `bugfix: complete recovery worktree and failure handling (E01-B02)`.
 
 #### Evidence (filled by implementer)
-_pending_
+**Root cause.** `RecoveryManager` had no `SandboxManager`, so ARCHITECTURE §5.3 step 4 ("ensure worktree exists") was never done. `build_handover` and the HANDOFF checkpoint ran git inside a deleted directory. Its per-run `except` only called `set_state(FAILED)`: no `AGENT_RUN_ENDED`, no unassign, no `ON_TASK_FAILED`. The item then stayed IMPLEMENTING with a FAILED owner.
+
+**Fix** (`src/walk/runtime/recovery.py`):
+- `RecoveryManager.__init__` takes the keyword-only `sandbox: SandboxManager`. It is wired in `cli/composition.py` (the kernel's `DefaultSandboxManager`), `tests/orchestrator/conftest.py` and `tests/runtime/test_recovery.py::_recovery`.
+- `_restart`: when no open handover exists, `sandbox.adopt(run, run, item)` runs before `build_handover` and the HANDOFF checkpoint. The continuing run already adopted the parent's worktree through the executor (E01-S28/E01-B01). That was not the gap.
+- `recover()` failure path → `_fail(run_id, "recovery: <detail>")`, in one `UnitOfWork`:
+  - `set_state(FAILED, failure_reason)`;
+  - unassign when `assigned_run_id == run.id`;
+  - `AGENT_RUN_ENDED` (outcome FAILED, payload `{state: "FAILED", failure_reason, mode: "recovery"}`).
+
+  After commit, `ON_TASK_FAILED` fires (payload `{state, failure_reason}`, the same shape as the executor). A `HookFailed` is logged, mirroring the executor's `_fire_safely`. The run is reported in `failed` and the loop continues.
+- INTERFACES §5.3 (recovery path) documents step 4 and the failure path.
+
+**Level-0 decision:** a run that is already `HANDED_OVER` when the error is raised keeps that state and its single `AGENT_RUN_ENDED`. Example: `ON_RECOVERY_RESUME` fails closed after `_continued` committed. Before this story such a run was overwritten to FAILED although its continuation was running. Writing a second `AGENT_RUN_ENDED` would break Behavior 3. The negative-path test `tests/runtime/test_recovery.py::test_recover_failure_after_continuation_keeps_single_end` covers it (it fails on the old code: the state was overwritten to FAILED).
+
+**Reproduce first** (before the fix):
+- AC 1 failed with `report.failed == [(RUN-…1, '[WinError 267] The directory name is invalid')]`: git ran with `cwd` = the deleted worktree.
+- AC 2 failed with the item still assigned to the FAILED run, and no `AGENT_RUN_ENDED` / `ON_TASK_FAILED`.
+
+**Quality gate** (`sh scripts/check.sh`):
+```
+334 files already formatted
+All checks passed!
+Success: no issues found in 332 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.95%
+1011 passed, 2 deselected in 366.70s (0:06:06)
+src/walk/runtime/recovery.py  99% (missing 166-167)
+src/walk/cli/composition.py  100%
+```
+
+**Demo** (AC 2 scenario kept with `pytest --basetemp=…/b02demo tests/runtime/test_recovery.py::test_recover_failure_ends_run_and_unassigns_item`):
+```
+$ walk ledger query --run RUN-00000000000000000000000001 --repo <tmp>
+seq  at                         kind                actor       item        run                             outcome
+1    2026-01-01T00:00:00+00:00  AGENT_ASSIGNED      SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001
+2    2026-01-01T00:00:00+00:00  AGENT_RUN_STARTED   SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+3    …                          MODEL_SELECTED / EFFORT_SET / CHECKPOINT_CREATED(START) / 5 x (TOOL_INVOKED pre+post, COST_RECORDED) …
+28   2026-01-01T00:00:00+00:00  CHECKPOINT_CREATED  SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+30   2026-01-01T00:00:00+00:00  ERROR               SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  FAILED     (kind INTERRUPTED)
+31   2026-01-01T00:00:00+00:00  AGENT_RUN_ENDED     SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  FAILED     (mode recovery)
+32   2026-01-01T00:00:00+00:00  HOOK_EXECUTED       KERNEL      STORY-0001  RUN-00000000000000000000000001  OK         (ON_TASK_FAILED)
+[exit 0]
+```
 
 ---
 

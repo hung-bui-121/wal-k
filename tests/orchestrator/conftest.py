@@ -151,6 +151,7 @@ def make_kernel(make_executor_env: EnvFactory) -> KernelFactory:
             kernel_instance=kernel_instance,
             project_key="DEMO",
             ready_env_keys=lambda: {"git"},
+            sandbox=env.sandbox,
         )
         status = StatusBuilder(
             ProjectRepository(env.db),

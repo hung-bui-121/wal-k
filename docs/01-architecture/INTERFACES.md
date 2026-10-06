@@ -1500,6 +1500,13 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
     the interrupted run ends HANDED_OVER; the new run starts with the handover (reason RECOVERY) and parent_run_id = interrupted run
     E01-S28: after a native resume the interrupted run ends HANDED_OVER too (continued by another run); both paths write
     its AGENT_RUN_ENDED{state: HANDED_OVER, mode}
+    E01-B02 step 4 (ensure worktree): when no open handover exists, SandboxManager.adopt(run, run, item) runs before
+    build_handover and the HANDOFF checkpoint (an existing directory is kept, a deleted one is re-added on run.branch).
+    E01-B02 failure path: any exception while recovering one run → in one UnitOfWork the run goes FAILED
+    (failure_reason "recovery: <detail>"), the item is unassigned when assigned_run_id == run.id, and AGENT_RUN_ENDED
+    {state: FAILED, failure_reason, mode: "recovery"} (outcome FAILED) is written; after commit ON_TASK_FAILED fires
+    (a hook failure is logged). The run is reported in RecoveryReport.failed and the loop continues. A run already
+    HANDED_OVER when the error is raised (its continuation started) keeps that state and its single AGENT_RUN_ENDED.
 ```
 
 ### 5.4 Context-first retrieval (§40, §42) — `ContextManager.build` (ADR-0012)

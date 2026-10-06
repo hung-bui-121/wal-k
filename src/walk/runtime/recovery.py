@@ -19,6 +19,7 @@ from walk.common.clock import Clock
 from walk.common.errors import WalkError
 from walk.common.ids import ProjectKey, RunId, WorkItemId
 from walk.common.models import FrozenModel, JsonDict
+from walk.hooks.errors import HookFailed
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.model_router.errors import NotResumable
@@ -28,6 +29,7 @@ from walk.persistence.uow import UnitOfWork
 from walk.runtime.checkpoints import DefaultCheckpointManager
 from walk.runtime.executor import DefaultAgentExecutor
 from walk.runtime.models import AgentRun, AgentRunState, Checkpoint, CheckpointKind
+from walk.runtime.protocols import SandboxManager
 from walk.runtime.repository import AgentRunRepository
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
@@ -40,6 +42,7 @@ _LOG = logging.getLogger(__name__)
 _Mode = Literal["native", "handover"]
 _NATIVE: Final[_Mode] = "native"
 _HANDOVER: Final[_Mode] = "handover"
+_RECOVERY: Final = "recovery"
 
 
 class RecoveryReport(FrozenModel):
@@ -80,6 +83,7 @@ class RecoveryManager:
         kernel_instance: str,
         project_key: ProjectKey,
         ready_env_keys: Callable[[], set[str]] = set,
+        sandbox: SandboxManager,
     ) -> None:
         """Wire the manager.
 
@@ -90,13 +94,15 @@ class RecoveryManager:
             router: Adapter health and the model of a handover restart.
             agents: Runtime policy and agent instance of the continuing run.
             items: The runs' work items and their assignment.
-            hooks: ``ON_MODEL_FALLBACK`` and ``ON_RECOVERY_RESUME``.
+            hooks: ``ON_MODEL_FALLBACK``, ``ON_RECOVERY_RESUME`` and, for a run whose recovery
+                failed, ``ON_TASK_FAILED``.
             ledger: ``ERROR(kind=INTERRUPTED)``, ``MODEL_FALLBACK``, ``RECOVERY_RESUMED`` and
                 the interrupted run's ``AGENT_RUN_ENDED``.
             clock: Stamps events.
             kernel_instance: This kernel process; its own runs are never orphans.
             project_key: Project of the events.
             ready_env_keys: Environment keys available to tools.
+            sandbox: Re-adds a deleted worktree before a RECOVERY handover is built (§5.3 step 4).
         """
         self._runs = runs
         self._checkpoints = checkpoints
@@ -110,12 +116,14 @@ class RecoveryManager:
         self._kernel_instance = kernel_instance
         self._project_key = project_key
         self._ready_env_keys = ready_env_keys
+        self._sandbox = sandbox
 
     async def recover(self) -> RecoveryReport:
         """Interrupt and continue every orphaned run; one run's failure never stops the rest.
 
-        Idempotent: the continuing runs belong to this kernel instance, so a second call finds
-        no orphan.
+        A run whose recovery fails ends like every failed run: FAILED, ``AGENT_RUN_ENDED``, item
+        unassigned, ``ON_TASK_FAILED``. Idempotent: the continuing runs belong to this kernel
+        instance, so a second call finds no orphan.
         """
         report = RecoveryReport()
         for run in await self._checkpoints.interrupted_runs(self._kernel_instance):
@@ -124,11 +132,46 @@ class RecoveryManager:
             except Exception as exc:  # noqa: BLE001 - recovery isolates failures per run
                 detail = exc.message if isinstance(exc, WalkError) else str(exc)
                 _LOG.exception("run recovery failed", extra={"run_id": run.id})
-                await self._runs.set_state(
-                    run.id, AgentRunState.FAILED, failure_reason=f"recovery: {detail}"
-                )
+                await self._fail(run.id, f"{_RECOVERY}: {detail}")
                 report.failed.append((run.id, detail))
         return report
+
+    async def _fail(self, run_id: RunId, reason: str) -> None:
+        """End a run whose recovery raised (Invariant 9: one start, one end).
+
+        A run already HANDED_OVER (its continuation started, then a later step raised) keeps
+        that end state and its single ``AGENT_RUN_ENDED``.
+        """
+        current = await self._runs.get(run_id)
+        if current is None or current.state is AgentRunState.HANDED_OVER:
+            return
+        async with UnitOfWork(self._runs.db) as uow:
+            failed = await self._runs.set_state(
+                run_id, AgentRunState.FAILED, failure_reason=reason, conn=uow.conn
+            )
+            item = await self._items.get(failed.work_item_id)
+            if item is not None and item.assigned_run_id == failed.id:
+                await self._items.set_assigned_run(item.id, None, conn=uow.conn)
+            ended: JsonDict = {
+                "state": AgentRunState.FAILED.value,
+                "failure_reason": reason,
+                "mode": _RECOVERY,
+            }
+            await self._ledger.append(
+                self._event(LedgerEventKind.AGENT_RUN_ENDED, failed, "FAILED", ended), uow=uow
+            )
+        failure: JsonDict = {"state": AgentRunState.FAILED.value, "failure_reason": reason}
+        try:
+            await self._fire(HookName.ON_TASK_FAILED, failed, failure)
+        except HookFailed as exc:
+            _LOG.warning(
+                "end-of-run hook failed",
+                extra={
+                    "run_id": failed.id,
+                    "hook": HookName.ON_TASK_FAILED.value,
+                    "error": exc.message,
+                },
+            )
 
     async def _recover(self, run: AgentRun, report: RecoveryReport) -> None:
         interrupted = await self._interrupt(run)
@@ -180,6 +223,8 @@ class RecoveryManager:
         """ARCHITECTURE §5.3 step 5 else-branch: handover, routing, new run."""
         handover = await self._checkpoints.latest_open_handover(item.id)
         if handover is None:
+            # §5.3 step 4: the worktree may be gone (`.walk/` is git-ignored scratch).
+            await self._sandbox.adopt(run, run, item)
             handover = await self._checkpoints.build_handover(run, "RECOVERY", None)
             await self._checkpoints.checkpoint(
                 run, CheckpointKind.HANDOFF, handover=handover, workflow_state=item.state
