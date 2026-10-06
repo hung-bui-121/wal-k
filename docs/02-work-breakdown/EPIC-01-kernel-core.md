@@ -1750,7 +1750,7 @@ Level-0 decisions:
 
 ### E01-S13 — Effort resolution: `EffortManager`
 
-**Status:** DONE (pending)
+**Status:** DONE (b5d5637)
 **Type:** feat
 **Requirements:** §17, §18, §19
 **Depends on:** E01-S10, E01-S12
@@ -1879,7 +1879,7 @@ Level-0 decisions:
 
 ### E01-S14 — Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §28, §29, §30, §91 (tool allowlist)
 **Depends on:** E01-S12
@@ -1954,7 +1954,40 @@ PROVIDER_NATIVE: `bash`, `read`, `write`, `edit`, `glob`, `grep` · KERNEL/git: 
 - Commit: `feat: add tool registry with builtin catalogue and skill contracts (E01-S14)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+127 files already formatted
+All checks passed!
+Success: no issues found in 125 source files
+Required test coverage of 85% reached. Total coverage: 99.92%
+465 passed in 23.91s
+```
+Touched modules: `tools/*` 100%, `skills/*` 100%, `common/ids.py` 100%.
+
+Demo (no CLI in this story):
+```
+$ uv run python demo.py     # DefaultToolRegistry(load_tool_specs([]))
+tools: 37
+available(git): 28
+identify('git status --porcelain') -> git-cli
+identify('Unity.exe -batchmode -quit') -> unity-cli
+identify('ls -la') -> None
+for_role -> required tools unavailable: unity.compile
+```
+
+Contract change (small, additive; see commit body):
+- `ToolName` (`walk.common.ids`, DOMAIN-MODEL §1.2) now allows `-` after the first character of each dotted segment: `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$`. Without this, the story's CLI sub-tool names `git-cli`, `graphify-cli` and `unity-cli` are not valid `ToolSpec.name` values. Every name that was valid before is still valid. Covered by `tests/common/test_ids.py::test_tool_name_allows_dotted_and_hyphenated_segments`.
+
+Level-0 decisions:
+- `load_tool_specs(paths)` always loads the packaged `walk/tools/builtin/tools.yaml` first. `paths` holds only project override files, so the builtin location needs no public symbol. A file is `{tools: [<ToolSpec row>, ...]}`. A project row with an existing name replaces that tool in place; new names are appended. These raise `ConfigError`, naming the file: a missing file, invalid YAML, a wrong top level, an invalid row (`row` = 1-based index, in the message and in `detail`), and a duplicate name within one file. `DefaultToolRegistry` also rejects duplicate specs.
+- `ToolSpec` validation: every `command_patterns` entry must compile as a regex, and a `CLI` tool must have an `executable`.
+- Catalogue values the story left open: provider `kernel` for the KERNEL/kernel rows (`review.*`, `qc.*`, `work.plan`, protected kernel actions) and `asset` for `asset.generate`. The CLI sub-tools require the environment key of their binary (`git-cli → git`, `dotnet → dotnet`, `graphify-cli → graphify`, `unity-cli → unity`), using the EnvironmentManifest key names. Provider-native tools and git/jira KERNEL rows require no environment key.
+- `available`: every `requires_env` entry must be ready; an entry `a|b` is ready when any alternative is. `for_role` returns, in catalogue order, the available tools named in `allowed ∪ required`. Names in `allowed` that are not in the catalogue are skipped with a logged warning. Required names that are unknown or unavailable raise `ConfigError` with `detail["missing"]`.
+- `identify` strips leading whitespace and returns the first CLI spec (catalogue order) with a pattern that `re.match`es the command.
+- `Skill.content_sha256` is derived from `body_markdown` (UTF-8 sha256 hex) when omitted. A given value that does not match is rejected. Because assignment is validated, changing `body_markdown` on an existing `Skill` with a stale hash also fails.
+- `SkillRegistry` is protocol only; its service is E02-S05.
+
+Also outside the Files table: `WBS.md` §6 gains the ADR-0019 register row that E01-S13 did not add.
 
 ---
 

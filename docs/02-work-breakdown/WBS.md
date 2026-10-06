@@ -399,8 +399,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S10 | `feature_workflow`/`bug_workflow` tables, remaining guards, DoR, `ready_items`, done dimensions | feat | E01-S09 | HIGH | DONE (1a3924a) |
 | E01-S11 | Phases and release candidates: models, tables, `walk phase list/start/gate` | feat | E01-S09 | MEDIUM | DONE (7b73aef) |
 | E01-S12 | Budgets and cost: `BudgetManager`, `CostManager`, `walk cost` | feat | E01-S05, E01-S07 | HIGH | DONE (4b56802) |
-| E01-S13 | Effort resolution: `EffortManager` | feat | E01-S10, E01-S12 | MEDIUM | DONE (pending) |
-| E01-S14 | Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models | feat | E01-S12 | MEDIUM | TODO |
+| E01-S13 | Effort resolution: `EffortManager` | feat | E01-S10, E01-S12 | MEDIUM | DONE (b5d5637) |
+| E01-S14 | Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models | feat | E01-S12 | MEDIUM | DONE (pending) |
 | E01-S15 | Permission policy core: `PermissionManager.decide/rules_for` | feat | E01-S14 | MEDIUM | TODO |
 | E01-S16 | Memory core: front matter, `MemoryDocument`, atomic `write`, `apply_updates`, handovers, index | feat | E01-S05, E01-S07 | HIGH | TODO |
 | E01-S17 | Constitutions and runtime policies: loaders, merge rules, MVP role defaults | feat | E01-S13, E01-S15 | HIGH | TODO |
@@ -584,6 +584,7 @@ decisions that affect several epics.
 | `DebatePosition.agrees_with_role: AgentRole | None` | E05-S04 | INTERFACES §1.9 refers to an "adapter-structured field" not present in DOMAIN-MODEL |
 | `walk rc create/list/show` command group | E11-S02 | No RC CLI in INTERFACES §6 |
 | `RELOCATE: walk.hooks` to the front of the L2 import order (ADR-0018) | E01-S08 | `workflow`, `budgets`, `effort`, `permissions`, `memory`, `context`, `decisions`, `debate` inject `HookManager`; the old order forbade it |
+| `RELOCATE: walk.budgets` before `walk.effort` in the L2 import order (ADR-0019) | E01-S13 | `EffortManager` takes `dict[BudgetDimension, float]` headroom; the old order forbade `effort → budgets` |
 
 ---
 

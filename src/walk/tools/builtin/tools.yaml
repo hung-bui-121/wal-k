@@ -1,0 +1,112 @@
+# Kernel tool catalogue (§30, §91; E01-S14). Projects override rows by name in
+# .ai/agents/tools.yaml. Columns: name | kind | provider | protected_action | requires_env |
+# command_patterns. Protected tools carry protected_action == name (ADR-0006).
+tools:
+  # Provider-native file and shell tools.
+  - {name: bash, kind: PROVIDER_NATIVE, description: Run a shell command in the worktree}
+  - {name: read, kind: PROVIDER_NATIVE, description: Read a file}
+  - {name: write, kind: PROVIDER_NATIVE, description: Create or overwrite a file}
+  - {name: edit, kind: PROVIDER_NATIVE, description: Edit part of a file}
+  - {name: glob, kind: PROVIDER_NATIVE, description: Find files by glob pattern}
+  - {name: grep, kind: PROVIDER_NATIVE, description: Search file contents}
+
+  # Kernel-executed git operations.
+  - {name: git.commit, kind: KERNEL, provider: git, description: Commit staged work}
+  - {name: git.push, kind: KERNEL, provider: git, description: Push the work branch}
+  - name: git.merge_protected
+    kind: KERNEL
+    provider: git
+    protected_action: git.merge_protected
+    description: Merge into a protected branch
+  - name: git.delete_branch_protected
+    kind: KERNEL
+    provider: git
+    protected_action: git.delete_branch_protected
+    description: Delete a protected branch
+
+  # Kernel-executed work-provider operations.
+  - {name: jira.create_task, kind: KERNEL, provider: jira, description: Create a task}
+  - {name: jira.create_bug, kind: KERNEL, provider: jira, description: Create a bug}
+  - {name: jira.transition, kind: KERNEL, provider: jira, description: Transition an issue}
+  - {name: jira.comment, kind: KERNEL, provider: jira, description: Comment on an issue}
+  - {name: jira.close_feature, kind: KERNEL, provider: jira, description: Close a feature}
+  - {name: jira.reopen, kind: KERNEL, provider: jira, description: Reopen an issue}
+  - name: jira.delete
+    kind: KERNEL
+    provider: jira
+    protected_action: jira.delete
+    description: Delete an issue
+
+  # Kernel decisions and protected project changes.
+  - {name: review.approve, kind: KERNEL, provider: kernel, description: Approve a review}
+  - {name: review.reject, kind: KERNEL, provider: kernel, description: Reject a review}
+  - {name: qc.approve, kind: KERNEL, provider: kernel, description: Accept work in QC}
+  - {name: qc.reject, kind: KERNEL, provider: kernel, description: Reject work in QC}
+  - {name: work.plan, kind: KERNEL, provider: kernel, description: Create planned work items}
+  - name: permissions.alter
+    kind: KERNEL
+    provider: kernel
+    protected_action: permissions.alter
+    description: Change permission rules
+  - name: credentials.change
+    kind: KERNEL
+    provider: kernel
+    protected_action: credentials.change
+    description: Change stored credentials
+  - name: monetization.change
+    kind: KERNEL
+    provider: kernel
+    protected_action: monetization.change
+    description: Change monetization settings
+  - name: repo.delete_data
+    kind: KERNEL
+    provider: kernel
+    protected_action: repo.delete_data
+    description: Delete repository data
+  - name: store.publish
+    kind: KERNEL
+    provider: kernel
+    protected_action: store.publish
+    description: Publish a build to a store
+
+  # Unity batchmode (ADR-0015).
+  - {name: unity.compile, kind: KERNEL, provider: unity, requires_env: [unity], description: Compile scripts}
+  - {name: unity.run_tests, kind: KERNEL, provider: unity, requires_env: [unity], description: Run Unity tests}
+  - {name: unity.build, kind: KERNEL, provider: unity, requires_env: [unity], description: Build a player}
+
+  # Code graph (ADR-0009 D-9).
+  - {name: graph.query, kind: KERNEL, provider: graphify, requires_env: [graphify], description: Query the code graph}
+  - {name: graph.neighbors, kind: KERNEL, provider: graphify, requires_env: [graphify], description: Code graph neighbours}
+
+  # Asset generation (§78-§80); either asset provider suffices.
+  - name: asset.generate
+    kind: KERNEL
+    provider: asset
+    requires_env: ["meshy|openart"]
+    description: Generate an asset
+
+  # CLI sub-tools identified inside bash commands (permission and cost attribution).
+  - name: git-cli
+    kind: CLI
+    executable: git
+    requires_env: [git]
+    command_patterns: ['^git\b']
+    description: git used through the shell
+  - name: dotnet
+    kind: CLI
+    executable: dotnet
+    requires_env: [dotnet]
+    command_patterns: ['^dotnet\b']
+    description: dotnet used through the shell
+  - name: graphify-cli
+    kind: CLI
+    executable: graphify
+    requires_env: [graphify]
+    command_patterns: ['^graphify\b']
+    description: graphify used through the shell
+  - name: unity-cli
+    kind: CLI
+    executable: Unity
+    requires_env: [unity]
+    command_patterns: ['^Unity(\.exe)?\b']
+    description: Unity editor used through the shell

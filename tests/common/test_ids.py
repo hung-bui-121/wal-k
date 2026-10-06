@@ -4,7 +4,14 @@ import time
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from walk.common.ids import ULID_PATTERN, FeatureId, format_seq_id, new_ulid, parse_prefix
+from walk.common.ids import (
+    ULID_PATTERN,
+    FeatureId,
+    ToolName,
+    format_seq_id,
+    new_ulid,
+    parse_prefix,
+)
 
 
 def test_new_ulid_is_26_chars_and_time_ordered() -> None:
@@ -39,3 +46,12 @@ def test_feature_id_pattern_enforces_min_width() -> None:
     assert adapter.validate_python("FEAT-12345") == "FEAT-12345"
     with pytest.raises(ValidationError):
         adapter.validate_python("FEAT-12")
+
+
+def test_tool_name_allows_dotted_and_hyphenated_segments() -> None:
+    adapter: TypeAdapter[str] = TypeAdapter(ToolName)
+    for name in ("bash", "git.commit", "jira.create_bug", "git-cli", "unity-cli"):
+        assert adapter.validate_python(name) == name
+    for bad in ("-git", "Git", "git.", "git..commit", "git.-x", "git cli"):
+        with pytest.raises(ValidationError):
+            adapter.validate_python(bad)

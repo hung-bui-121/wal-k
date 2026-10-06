@@ -40,7 +40,7 @@ CheckpointId = Annotated[str, StringConstraints(pattern=rf"^CKP-{ULID_PATTERN}$"
 LedgerEventId = Annotated[str, StringConstraints(pattern=rf"^LED-{ULID_PATTERN}$")]
 ModelId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_-]+/[A-Za-z0-9._-]+$")]
 SkillName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$")]
-ToolName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")]
+ToolName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$")]
 HookNameStr = Annotated[str, StringConstraints(pattern=r"^on_[a-z_]+$")]
 Sha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{7,64}$")]
 

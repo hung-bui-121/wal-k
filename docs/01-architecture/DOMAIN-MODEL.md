@@ -91,8 +91,8 @@ ModelId = Annotated[
 ]  # "<provider>/<model>", e.g. "claude/claude-opus-5-5", "codex/gpt-5-codex"
 SkillName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$")]
 ToolName = Annotated[
-    str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
-]  # "git.commit", "jira.create_bug", "bash"
+    str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$")
+]  # "git.commit", "jira.create_bug", "bash", "git-cli"
 HookNameStr = Annotated[str, StringConstraints(pattern=r"^on_[a-z_]+$")]
 Sha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{7,64}$")]
 ```
