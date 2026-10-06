@@ -145,6 +145,7 @@ def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
 - Demo: `uv run python -c "from walk.integrations import CredentialStore; print(CredentialStore({'JIRA_EMAIL':'a@b'}, None).presence()['JIRA_EMAIL'])"` → `ReadinessState.READY`.
 
 #### Notes
+- Binding (E01-R01 planner note, confirmed by ADR-0014 sources): the Claude Agent SDK's `env` option is *merged onto* the inherited process environment, so passing `scrubbed_env(...)` as `env` scrubs nothing. For Claude, pass the SDK a custom `transport` (the `query(..., transport=...)` parameter, ADR-0014 SDK table) that launches the CLI subprocess with exactly `scrubbed_env(os.environ)` and does not inherit `os.environ`; keep the transport inside `src/walk/model_router/adapters/claude/` (add it to the Files table there as `create`). Add a test mirroring the Codex one: a sentinel secret variable in the kernel's environment is absent from the environment the Claude transport passes to its subprocess.
 - ADR-0009 D-8; ARCHITECTURE §6 "Secret isolation".
 - `NEW NAME:` `KeyringBackend`, `SystemKeyringBackend`, `CREDENTIAL_NAMES`, `KEYRING_SERVICE`, `AGENT_ENV_ALLOWLIST`, `scrubbed_env`, `KernelOverrides.keyring_backend`.
 - Commit subject: `feat: add credential store and scrubbed agent environment (E02-S01)`.
@@ -848,6 +849,7 @@ Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is r
 | `src/walk/cli/composition.py` | modify | — (builds `BuiltinHookDeps` and calls `register_builtins(hook_manager, deps)` once, after all services exist and before project hooks load; ADR-0016) |
 | `tests/hooks/test_builtins.py` | create | — |
 | `tests/hooks/test_builtins_required.py` | create | — |
+| `src/walk/runtime/checkpoints.py` | modify | — (`ON_AGENT_CHECKPOINT` payload gains `wip_commit_done`) |
 
 #### Interface contract
 ```python
@@ -922,6 +924,7 @@ Deferred attachments (not registered here): `ON_STATE_TRANSITION → WorkProvide
 - Demo: `walk run --once` on a bootstrapped repo then `walk ledger query --kind HOOK_EXECUTED --limit 5` → shows `builtin.memory_index` under `ON_PROJECT_START`.
 
 #### Notes
+- Binding (E01-R01 planner note): E01 checkpoints never send `wip_commit_done`. This story adds it: `CheckpointManager.checkpoint` puts `wip_commit_done: bool` (True when the WIP commit was created or there was nothing to commit) into the `ON_AGENT_CHECKPOINT` payload; `src/walk/runtime/checkpoints.py` is added to the Files table as `modify`. `builtin.wip_commit` stays fail-closed on `False` but treats a missing key as a contract error raised during development tests, never as a silent pass.
 - ARCHITECTURE §4.1 (table), §4.3; ADR-0009 D-7; ADR-0016 (module placement and single registration call site); WBS.md §3.5.
 - `NEW NAME:` `BuiltinHookDeps` (incl. `hooks`), `builtin_hooks`, builtin hook ids (`builtin.*`), payload keys `context_doc_ids`, `wip_commit_done`, `handover`, `handover_id`, `checkpoint_id`, `path`, `remaining_work_present`.
 - Pitfall: `ON_MODEL_FALLBACK → ON_AGENT_HANDOFF` is a nested `fire`; ensure `HookManager.fire` is re-entrant (no shared mutable state).
