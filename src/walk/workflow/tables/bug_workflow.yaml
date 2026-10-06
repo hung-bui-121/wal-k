@@ -1,0 +1,24 @@
+# Bug lifecycle (INTERFACES §3.3, ADR-0010 D-2). Rows are evaluated in file order.
+# Triage=DISCOVERY, Assigned=READY, Fix=IMPLEMENTING, Re-test=QC, Close=COMPLETE, Reopen=REWORK.
+# 'to: PREVIOUS' returns to the state stored when the bug was blocked.
+name: bug_workflow
+version: "1.0"
+kinds: [BUG]
+transitions:
+  - {from: IDEA, event: triage, to: DISCOVERY, guards: [], roles: [KERNEL], hooks: [on_bug_created]}
+  - {from: DISCOVERY, event: triaged, to: READY, guards: [severity_set, owner_role_set], roles: [LEAD_DEV, ORCHESTRATOR, QC], hooks: []}
+  - {from: DISCOVERY, event: wont_fix, to: CANCELLED, guards: [decision_recorded_quality], roles: [PRODUCT_OWNER, LEAD_DEV, USER], hooks: []}
+  - {from: READY, event: start_fix, to: IMPLEMENTING, guards: [dependencies_complete, budget_available], roles: [KERNEL], hooks: [on_task_start]}
+  - {from: IMPLEMENTING, event: submit_for_review, to: READY_FOR_REVIEW, guards: [root_cause_section_present, has_commit, regression_test_evidence], roles: [SENIOR_DEV], hooks: []}
+  - {from: IMPLEMENTING, event: block, to: BLOCKED, guards: [], roles: [SENIOR_DEV], hooks: [on_task_blocked]}
+  - {from: READY_FOR_REVIEW, event: start_review, to: LEAD_DEV_REVIEW, guards: [reviewer_role_differs], roles: [KERNEL], hooks: []}
+  - {from: LEAD_DEV_REVIEW, event: review_approved, to: INTEGRATION, guards: [], roles: [LEAD_DEV], hooks: []}
+  - {from: LEAD_DEV_REVIEW, event: review_rejected, to: REWORK, guards: [], roles: [LEAD_DEV], hooks: []}
+  - {from: INTEGRATION, event: integration_passed, to: QC, guards: [ci_green], roles: [KERNEL], hooks: [on_ready_for_qc]}
+  - {from: INTEGRATION, event: ci_failed, to: REWORK, guards: [], roles: [KERNEL], hooks: []}
+  - {from: QC, event: verified, to: COMPLETE, guards: [reproduction_no_longer_reproduces_evidence], roles: [QC], hooks: [on_task_complete, on_qc_result]}
+  - {from: QC, event: reopen, to: REWORK, guards: [reopen_below_max], roles: [QC], hooks: [on_qc_result], effects: [increment_reopen_count]}
+  - {from: QC, event: reopen, to: BLOCKED, guards: [reopen_at_max], roles: [QC], hooks: [on_task_failed]}
+  - {from: REWORK, event: start_fix, to: IMPLEMENTING, guards: [], roles: [KERNEL], hooks: [on_task_start]}
+  - {from: COMPLETE, event: regression_reopen, to: DISCOVERY, guards: [], roles: [QC], hooks: [on_bug_created]}
+  - {from: BLOCKED, event: unblock, to: PREVIOUS, guards: [], roles: [ORCHESTRATOR, USER], hooks: []}

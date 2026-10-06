@@ -24,7 +24,14 @@ from walk.workflow.models import (
 TABLES_DIR: Final = Path(__file__).resolve().parent / "tables"
 """Packaged transition tables (``<name>.yaml``)."""
 
-_EFFECTS: Final = frozenset({"increment_fix_loops", "increment_reopen_count", "store_resume_state"})
+_EFFECTS: Final = frozenset(
+    {
+        "increment_fix_loops",
+        "increment_reopen_count",
+        "store_resume_state",
+        "force_children_review",
+    }
+)
 _ANY_AGENT: Final = "ANY_AGENT"
 _AGENT_ROLES: Final = tuple(r for r in AgentRole if r not in {AgentRole.USER, AgentRole.KERNEL})
 _EXCEPT: Final = "* except "
@@ -126,8 +133,12 @@ def _from_side(text: str) -> tuple[WorkItemState | Literal["*"], tuple[WorkItemS
     return WorkItemState(text), ()
 
 
-def _to_side(text: str) -> WorkItemState | Literal["PREVIOUS"]:
-    return "PREVIOUS" if text == "PREVIOUS" else WorkItemState(text)
+def _to_side(text: str) -> WorkItemState | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"]:
+    if text == "PREVIOUS":
+        return "PREVIOUS"
+    if text == "CHILDREN_READY_FOR_REVIEW":
+        return "CHILDREN_READY_FOR_REVIEW"
+    return WorkItemState(text)
 
 
 def _roles(names: list[str]) -> tuple[AgentRole, ...]:
@@ -197,11 +208,16 @@ class StateMachine:
     def resolve_target(
         self, transition: Transition, item: WorkItem, ctx: TransitionContext
     ) -> WorkItemState:
-        """Return ``to_state``, or ``payload['resume_state']`` for the pseudo-state PREVIOUS.
+        """Return ``to_state`` or resolve a pseudo-state.
+
+        PREVIOUS resolves to ``payload['resume_state']``; CHILDREN_READY_FOR_REVIEW keeps the
+        item's own state (its children move through the ``force_children_review`` effect).
 
         Raises:
             GuardRejected: ``no resume_state`` when PREVIOUS has no valid stored state.
         """
+        if transition.to_state == "CHILDREN_READY_FOR_REVIEW":
+            return item.state
         if transition.to_state != "PREVIOUS":
             return WorkItemState(transition.to_state)
         resume = ctx.payload.get("resume_state")

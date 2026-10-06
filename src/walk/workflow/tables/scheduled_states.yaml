@@ -1,0 +1,21 @@
+# Routing table rows for FEATURE/STORY/TASK/BUG (INTERFACES §4); phase/debate rows arrive in E05/E07.
+# An item is schedulable when its (kind, state) is listed here. `role` is an AgentRole name or a
+# contract field (contract.owner_role / contract.reviewer_role); `fallback_role` applies when the
+# role is not enabled. Consumed by WorkflowManager.ready_items and the TaskRouter (E01-S29).
+- {kind: FEATURE, state: IDEA, role: ORCHESTRATOR, purpose: PLAN}
+- {kind: FEATURE, state: DISCOVERY, role: DESIGN_LEADER, fallback_role: ORCHESTRATOR, purpose: DESIGN}
+- {kind: FEATURE, state: DESIGN, role: LEAD_DEV, purpose: DESIGN}
+- {kind: FEATURE, state: QC, role: QC, purpose: QC}
+- {kind: STORY, state: READY, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: STORY, state: REWORK, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: STORY, state: READY_FOR_REVIEW, role: contract.reviewer_role, purpose: REVIEW}
+- {kind: STORY, state: QC, role: QC, purpose: QC}
+- {kind: TASK, state: READY, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: TASK, state: REWORK, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: TASK, state: READY_FOR_REVIEW, role: contract.reviewer_role, purpose: REVIEW}
+- {kind: TASK, state: QC, role: QC, purpose: QC}
+- {kind: BUG, state: DISCOVERY, role: LEAD_DEV, purpose: TRIAGE}
+- {kind: BUG, state: READY, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: BUG, state: REWORK, role: contract.owner_role, purpose: IMPLEMENT}
+- {kind: BUG, state: READY_FOR_REVIEW, role: LEAD_DEV, purpose: REVIEW}
+- {kind: BUG, state: QC, role: QC, purpose: QC}

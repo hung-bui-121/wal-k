@@ -2,7 +2,16 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Final, NoReturn
+from typing import Final, Literal, NoReturn
+
+import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from walk.common.clock import Clock
 from walk.common.errors import ConfigError, GuardRejected
@@ -14,6 +23,7 @@ from walk.common.ids import (
     ReleaseCandidateId,
     WorkItemId,
 )
+from walk.common.models import JsonDict
 from walk.common.roles import AgentRole
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
@@ -41,6 +51,7 @@ from walk.workflow.models import (
     WorkItemState,
     WorkItemTransition,
 )
+from walk.workflow.readiness import definition_of_ready_checks
 from walk.workflow.repository import ProjectRepository, WorkflowRepository
 from walk.workflow.state_machine import StateMachine, TableLoader
 
@@ -59,6 +70,8 @@ _ALLOWED_PARENTS: Final[dict[WorkItemKind, frozenset[WorkItemKind | None]]] = {
     WorkItemKind.TASK: frozenset({WorkItemKind.FEATURE}),
 }
 _CONTRACT_KINDS: Final = frozenset({WorkItemKind.STORY, WorkItemKind.TASK})
+_CONTRACT_ROLES: Final = frozenset({"contract.owner_role", "contract.reviewer_role"})
+_SCHEDULED_STATES_FILE: Final = "scheduled_states.yaml"
 
 
 def _deferred(method: str, story: str) -> NoReturn:
@@ -93,7 +106,8 @@ class DefaultWorkflowManager:
             tables_dir: Folder of the ``*_workflow.yaml`` transition tables (`TABLES_DIR`).
 
         Raises:
-            ConfigError: If a table is invalid, or two tables govern the same kind.
+            ConfigError: If a table or ``scheduled_states.yaml`` is missing or invalid, or two
+                tables govern the same kind.
         """
         self._db = db
         self._items = items
@@ -104,6 +118,7 @@ class DefaultWorkflowManager:
         self._clock = clock
         self._tables = _load_tables(tables_dir)
         self._machine = StateMachine(self._tables)
+        self._scheduled = _load_scheduled_states(tables_dir / _SCHEDULED_STATES_FILE)
 
     async def create(
         self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None
@@ -195,9 +210,12 @@ class DefaultWorkflowManager:
     ) -> WorkItemTransition:
         """Apply ``event`` to the item in one transaction, then fire hooks after commit.
 
-        The kernel adds the facts it owns to the payload before the guards run:
-        ``dependency_states`` (contract dependencies) and, for a BLOCKED item, ``resume_state``
-        (the state it was blocked from). ``payload["reason"]`` becomes the transition reason.
+        The kernel adds the facts it owns to the payload before the guards run, replacing any
+        caller value: ``dependency_states`` (contract dependencies), ``definition_of_ready``
+        (its own §58 verdict) and, for a BLOCKED item, ``resume_state`` (the state it was blocked
+        from). ``payload["reason"]`` becomes the transition reason. Effect
+        ``force_children_review`` moves the item's IMPLEMENTING stories/tasks to
+        READY_FOR_REVIEW in the same transaction.
 
         Raises:
             WorkItemNotFound: No item has ``work_item_id``.
@@ -207,8 +225,7 @@ class DefaultWorkflowManager:
                 ``payload["expected_state_version"]`` is stale.
             HookFailed: A fail-closed hook failed after the commit (the transition stays).
         """
-        reason = ctx.payload.get("reason")
-        if reason is not None and not isinstance(reason, str):
+        if not isinstance(ctx.payload.get("reason"), str | None):
             msg = "payload 'reason' must be a string"
             raise ConfigError(msg, detail={"work_item_id": work_item_id, "event": event})
         async with UnitOfWork(self._db) as uow:
@@ -218,51 +235,47 @@ class DefaultWorkflowManager:
                 msg = f"stale state_version for {item.id}: expected {expected}"
                 detail = {"work_item_id": item.id, "expected": expected}
                 raise GuardRejected(msg, detail=detail | {"actual": item.state_version})
-            facts = await self._kernel_facts(item)
+            facts = await self._kernel_facts(item, ctx.payload)
             ctx = ctx.model_copy(update={"payload": ctx.payload | facts})
             row = self._machine.transition_for(item.kind, item.state, event, item, ctx)
             target = self._machine.resolve_target(row, item, ctx)
-            now = self._clock.now()
-            updated = _apply(item, row, target, reason, now)
-            await self._items.upsert(updated, uow)
-            transition = await self._items.add_transition(
-                WorkItemTransition(
-                    seq=0,
-                    work_item_id=item.id,
-                    from_state=item.state,
-                    to_state=target,
-                    event=event,
-                    source=ctx.source,
-                    actor_role=ctx.actor_role,
-                    run_id=ctx.run_id,
-                    reason=reason,
-                    at=now,
-                ),
-                uow,
-            )
-            await self._ledger.append(_transition_event(item, updated, transition), uow=uow)
-            hook_ctx = HookContext(
-                name=HookName.ON_STATE_TRANSITION,
-                at=now,
-                project_key=item.project_key,
-                work_item_id=item.id,
-                run_id=ctx.run_id,
-                phase_id=item.phase_id,
-                role=ctx.actor_role,
-                payload={"from": item.state.value, "to": target.value, "event": event},
-            )
-            uow.after_commit(lambda: self._fire(row.hooks, hook_ctx))
+            transition = await self._commit(item, row, target, event, ctx=ctx, uow=uow)
+            if "force_children_review" in row.effects:
+                await self._force_children_review(item, ctx, uow)
         return transition
 
     async def ready_items(self, phase_id: PhaseId | None) -> list[WorkItem]:
-        """Not available before E01-S10 (raises `ConfigError`)."""
-        del phase_id
-        _deferred("ready_items", "E01-S10")
+        """Return schedulable items, highest priority first, then oldest.
+
+        An item is schedulable when its ``(kind, state)`` is in ``scheduled_states.yaml``, it has
+        no assigned run, every contract dependency is COMPLETE and, when ``phase_id`` is given,
+        it belongs to that phase or to none.
+        """
+        states = sorted({state for _, state in self._scheduled})
+        candidates = [
+            item
+            for item in await self.query(states=states)
+            if (item.kind, item.state) in self._scheduled
+            and item.assigned_run_id is None
+            and (phase_id is None or item.phase_id in {phase_id, None})
+        ]
+        dependency_ids = sorted({dep for item in candidates for dep in _dependencies(item)})
+        dependency_states = await self._items.states_of(dependency_ids)
+        ready = [
+            item
+            for item in candidates
+            if all(
+                dependency_states.get(dep) is WorkItemState.COMPLETE for dep in _dependencies(item)
+            )
+        ]
+        return sorted(ready, key=lambda item: (item.priority.value, item.created_at, item.id))
 
     def check_definition_of_ready(self, item: WorkItem) -> GuardResult:
-        """Not available before E01-S10 (raises `ConfigError`)."""
-        del item
-        _deferred("check_definition_of_ready", "E01-S10")
+        """§58 checks with the dependencies read from the database.
+
+        ``reason`` lists the failing check names, comma-separated.
+        """
+        return self._readiness(item, None)
 
     async def set_done_dimension(
         self,
@@ -271,9 +284,33 @@ class DefaultWorkflowManager:
         done: bool,  # noqa: FBT001 - signature fixed by INTERFACES §1.3
         evidence_id: EvidenceId | None,
     ) -> Feature:
-        """Not available before E01-S10 (raises `ConfigError`)."""
-        del feature_id, dimension, done, evidence_id
-        _deferred("set_done_dimension", "E01-S10")
+        """Mark one done dimension of the feature (§6.5); writes no ledger event.
+
+        ``evidence_id`` names the supporting evidence; ``Feature`` has no field for it yet, so
+        it is not stored.
+
+        Raises:
+            WorkItemNotFound: No feature has ``feature_id``.
+            ConfigError: ``dimension`` is not applicable to the feature.
+        """
+        del evidence_id
+        async with UnitOfWork(self._db) as uow:
+            feature = await self.get(feature_id)
+            if not isinstance(feature, Feature):  # pragma: no cover - FeatureId names a feature
+                msg = f"{feature_id} is not a feature"
+                raise ConfigError(msg, detail={"feature_id": feature_id})
+            if dimension not in feature.applicable_dimensions:
+                msg = f"{dimension.value} is not an applicable dimension of {feature_id}"
+                detail = {"feature_id": feature_id, "dimension": dimension.value}
+                raise ConfigError(msg, detail=detail)
+            updated = feature.model_copy(
+                update={
+                    "done_dimensions": feature.done_dimensions | {dimension: done},
+                    "updated_at": self._clock.now(),
+                }
+            )
+            await self._items.upsert(updated, uow)
+        return updated
 
     async def children_states(self, feature_id: FeatureId) -> dict[WorkItemId, WorkItemState]:
         """Not available before E03-S17 (raises `ConfigError`)."""
@@ -302,16 +339,82 @@ class DefaultWorkflowManager:
         del project_key
         _deferred("gdd_coverage", "E06-S06")
 
-    async def _kernel_facts(self, item: WorkItem) -> dict[str, object]:
-        facts: dict[str, object] = {}
-        contract = getattr(item, "contract", None)
-        if contract is not None and contract.dependencies:
-            states = await self._items.states_of(contract.dependencies)
-            facts["dependency_states"] = {key: state.value for key, state in states.items()}
+    async def _kernel_facts(self, item: WorkItem, payload: JsonDict) -> dict[str, object]:
+        deps = self._items.items_by_id(_dependencies(item))
+        facts: dict[str, object] = {
+            "definition_of_ready": self._readiness(item, payload, deps).model_dump(),
+        }
+        if _dependencies(item):
+            facts["dependency_states"] = {dep.id: dep.state.value for dep in deps}
         if item.state is WorkItemState.BLOCKED:
             blocked = await self._items.last_transition_into(item.id, WorkItemState.BLOCKED)
             facts["resume_state"] = None if blocked is None else blocked.from_state.value
         return facts
+
+    def _readiness(
+        self, item: WorkItem, facts: JsonDict | None, deps: list[WorkItem] | None = None
+    ) -> GuardResult:
+        if deps is None:
+            deps = self._items.items_by_id(_dependencies(item))
+        checks = definition_of_ready_checks(item, deps, facts=facts)
+        failing = [name for name, ok, _ in checks if not ok]
+        return GuardResult(ok=not failing, reason=", ".join(failing))
+
+    async def _commit(
+        self,
+        item: WorkItem,
+        row: Transition,
+        target: WorkItemState,
+        event: str,
+        *,
+        ctx: TransitionContext,
+        uow: UnitOfWork,
+    ) -> WorkItemTransition:
+        """Persist one transition on ``uow`` and schedule its hooks for after the commit."""
+        reason = ctx.payload.get("reason")
+        now = self._clock.now()
+        updated = _apply(item, row, target, reason, now)
+        await self._items.upsert(updated, uow)
+        transition = await self._items.add_transition(
+            WorkItemTransition(
+                seq=0,
+                work_item_id=item.id,
+                from_state=item.state,
+                to_state=target,
+                event=event,
+                source=ctx.source,
+                actor_role=ctx.actor_role,
+                run_id=ctx.run_id,
+                reason=reason,
+                at=now,
+            ),
+            uow,
+        )
+        await self._ledger.append(_transition_event(item, updated, transition), uow=uow)
+        hook_ctx = HookContext(
+            name=HookName.ON_STATE_TRANSITION,
+            at=now,
+            project_key=item.project_key,
+            work_item_id=item.id,
+            run_id=ctx.run_id,
+            phase_id=item.phase_id,
+            role=ctx.actor_role,
+            payload={"from": item.state.value, "to": target.value, "event": event},
+        )
+        uow.after_commit(lambda: self._fire(row.hooks, hook_ctx))
+        return transition
+
+    async def _force_children_review(
+        self, feature: WorkItem, ctx: TransitionContext, uow: UnitOfWork
+    ) -> None:
+        """Raise ``force_review`` on every IMPLEMENTING story/task of ``feature`` (same unit)."""
+        for child in await self._items.children(feature.id):
+            if child.kind in _CONTRACT_KINDS and child.state is WorkItemState.IMPLEMENTING:
+                row = self._machine.transition_for(
+                    child.kind, child.state, "force_review", child, ctx
+                )
+                target = self._machine.resolve_target(row, child, ctx)
+                await self._commit(child, row, target, "force_review", ctx=ctx, uow=uow)
 
     async def _fire(self, hooks: tuple[HookName, ...], ctx: HookContext) -> None:
         for name in (HookName.ON_STATE_TRANSITION, *hooks):
@@ -391,6 +494,42 @@ class DefaultWorkflowManager:
         return (Epic if draft.kind is WorkItemKind.EPIC else Feature).model_validate(common)
 
 
+class _ScheduledState(BaseModel):
+    """One ``scheduled_states.yaml`` row (INTERFACES §4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: WorkItemKind
+    state: WorkItemState
+    role: str
+    fallback_role: AgentRole | None = None
+    purpose: Literal["PLAN", "DESIGN", "IMPLEMENT", "REVIEW", "QC", "TRIAGE"]
+
+    @field_validator("role")
+    @classmethod
+    def _known_role(cls, value: str) -> str:
+        if value not in _CONTRACT_ROLES and value not in AgentRole.__members__:
+            msg = f"unknown role {value!r}"
+            raise ValueError(msg)
+        return value
+
+
+def _load_scheduled_states(path: Path) -> frozenset[tuple[WorkItemKind, WorkItemState]]:
+    """Return the schedulable ``(kind, state)`` pairs of ``scheduled_states.yaml``."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        rows = TypeAdapter(list[_ScheduledState]).validate_python(data)
+    except (OSError, yaml.YAMLError, ValidationError) as exc:
+        msg = f"invalid {path.name}: {exc}"
+        raise ConfigError(msg, detail={"path": str(path)}) from exc
+    return frozenset((row.kind, row.state) for row in rows)
+
+
+def _dependencies(item: WorkItem) -> list[WorkItemId]:
+    contract = getattr(item, "contract", None)
+    return [] if contract is None else list(contract.dependencies)
+
+
 def _load_tables(tables_dir: Path) -> dict[WorkItemKind, TransitionTable]:
     """Load every ``*_workflow.yaml`` table and index it by the kinds it governs."""
     if not tables_dir.is_dir():
@@ -431,7 +570,8 @@ def _apply(
                 msg = f"effect increment_reopen_count needs a bug, got {item.kind.value}"
                 raise ConfigError(msg, detail={"work_item_id": item.id})
             update["reopen_count"] = item.reopen_count + 1
-        # store_resume_state needs no field: the transition row into BLOCKED keeps the state.
+        # store_resume_state needs no field (the transition row into BLOCKED keeps the state);
+        # force_children_review is applied by DefaultWorkflowManager on the children.
     return item.model_validate(item.model_dump() | update)
 
 

@@ -429,8 +429,9 @@ class Transition(FrozenModel):
         default=(), description="States a '*' row does not apply to ('* except A,B')."
     )
     event: str = Field(description="Event name.")
-    to_state: WorkItemState | Literal["PREVIOUS"] = Field(
-        description="Target state; 'PREVIOUS' = the payload resume_state (unblock)."
+    to_state: WorkItemState | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"] = Field(
+        description="Target state; 'PREVIOUS' = the payload resume_state (unblock); "
+        "'CHILDREN_READY_FOR_REVIEW' = unchanged, effect force_children_review moves the children."
     )
     guards: tuple[str, ...] = Field(description="guard names (registered callables)")
     allowed_roles: tuple[AgentRole, ...] = Field(description="Roles that may raise the event.")

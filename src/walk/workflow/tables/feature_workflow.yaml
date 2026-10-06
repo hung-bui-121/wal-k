@@ -1,0 +1,30 @@
+# Feature lifecycle (INTERFACES §3.1, ADR-0010). Rows are evaluated in file order.
+# Roles: KERNEL, USER, ANY_AGENT (every agent role); effects run in the transition's transaction.
+# 'to: PREVIOUS' returns to the state stored when the item was blocked.
+# 'to: CHILDREN_READY_FOR_REVIEW' keeps the feature's state; effect force_children_review moves
+# its IMPLEMENTING stories/tasks to READY_FOR_REVIEW.
+name: feature_workflow
+version: "1.0"
+kinds: [FEATURE]
+transitions:
+  - {from: IDEA, event: start_discovery, to: DISCOVERY, guards: [in_phase_scope], roles: [ORCHESTRATOR, USER], hooks: []}
+  - {from: DISCOVERY, event: discovery_done, to: DESIGN, guards: [has_gdd_refs_or_user_feature], roles: [ORCHESTRATOR, DESIGN_LEADER, PRODUCT_OWNER], hooks: []}
+  - {from: DISCOVERY, event: block, to: BLOCKED, guards: [], roles: [ANY_AGENT], hooks: [on_task_blocked]}
+  - {from: DESIGN, event: design_approved, to: READY, guards: [technical_design_section_present, required_approved_artifacts_present], roles: [LEAD_DEV, DESIGN_LEADER], hooks: []}
+  - {from: DESIGN, event: block, to: BLOCKED, guards: [], roles: [ANY_AGENT], hooks: [on_task_blocked]}
+  - {from: READY, event: start_implementation, to: IMPLEMENTING, guards: [definition_of_ready, children_created], roles: [KERNEL], hooks: [on_task_start]}
+  - {from: IMPLEMENTING, event: all_children_integrated, to: INTEGRATION, guards: [all_stories_integrated], roles: [KERNEL], hooks: []}
+  - {from: IMPLEMENTING, event: block, to: BLOCKED, guards: [], roles: [ANY_AGENT], hooks: [on_task_blocked]}
+  - {from: INTEGRATION, event: integration_passed, to: QC, guards: [ci_green_on_integration_branch, required_evidence_present], roles: [KERNEL], hooks: [on_ready_for_qc]}
+  - {from: INTEGRATION, event: ci_failed, to: REWORK, guards: [], roles: [KERNEL], hooks: [on_build_failure]}
+  - {from: QC, event: qc_passed, to: COMPLETE, guards: [output_status_is_approved, all_applicable_dimensions_done, no_open_blocker_bugs], roles: [QC], hooks: [on_task_complete]}
+  - {from: QC, event: qc_rejected, to: REWORK, guards: [fix_loops_below_max], roles: [QC], hooks: [on_qc_result, on_bug_created], effects: [increment_fix_loops]}
+  - {from: QC, event: qc_rejected, to: BLOCKED, guards: [fix_loops_at_max], roles: [QC], hooks: [on_task_failed]}
+  - {from: REWORK, event: rework_planned, to: IMPLEMENTING, guards: [rework_children_created], roles: [ORCHESTRATOR, LEAD_DEV], hooks: [on_task_start]}
+  - {from: BLOCKED, event: unblock, to: PREVIOUS, guards: [blocker_resolved], roles: [ORCHESTRATOR, SCRUM_MASTER, USER], hooks: []}
+  - {from: COMPLETE, event: phase_review, to: PHASE_REVIEW, guards: [phase_in_evidence_review], roles: [KERNEL], hooks: []}
+  - {from: PHASE_REVIEW, event: to_gate, to: USER_GATE, guards: [], roles: [KERNEL], hooks: []}
+  - {from: USER_GATE, event: gate_go, to: COMPLETE, guards: [], roles: [USER], hooks: []}
+  - {from: USER_GATE, event: gate_rework, to: REWORK, guards: [], roles: [USER], hooks: [on_phase_gate_decision]}
+  - {from: "* except COMPLETE, CANCELLED", event: cancel, to: CANCELLED, guards: [], roles: [USER], hooks: [on_task_cancelled]}
+  - {from: "*", event: force_review, to: CHILDREN_READY_FOR_REVIEW, guards: [has_children_implementing], roles: [USER], hooks: [], effects: [force_children_review]}

@@ -96,7 +96,9 @@ async def _story(workflow: DefaultWorkflowManager, *, deps: list[str] | None = N
             title="S",
             description="",
             parent_id="FEAT-0001",
-            contract=StoryContract(goal="g", acceptance_criteria=["a"], dependencies=deps or []),
+            contract=StoryContract(
+                goal="g", acceptance_criteria=["a"], complexity="SMALL", dependencies=deps or []
+            ),
         ),
         actor=AgentRole.PRODUCT_OWNER,
         phase_id=None,
@@ -294,14 +296,15 @@ async def test_dependencies_are_supplied_by_the_kernel(
 ) -> None:
     first = await _story(workflow)
     second = await _story(workflow, deps=[first])
+    with pytest.raises(GuardRejected, match="dependencies_resolved"):
+        await _to_ready(workflow, second)
+    set_state = "UPDATE work_items SET state = ?, json = json_set(json, '$.state', ?) WHERE id = ?"
+    db.connect().execute(set_state, ("COMPLETE", "COMPLETE", first))
     await _to_ready(workflow, second)
-    with pytest.raises(GuardRejected, match=f"dependency {first} is IDEA"):
+    db.connect().execute(set_state, ("QC", "QC", first))
+    with pytest.raises(GuardRejected, match=f"dependency {first} is QC"):
         await workflow.raise_event(second, "start_implementation", _ctx(**START_FACTS))
-    db.connect().execute(
-        "UPDATE work_items SET state = 'COMPLETE', "
-        "json = json_set(json, '$.state', 'COMPLETE') WHERE id = ?",
-        (first,),
-    )
+    db.connect().execute(set_state, ("COMPLETE", "COMPLETE", first))
     await workflow.raise_event(second, "start_implementation", _ctx(**START_FACTS))
 
 
@@ -398,7 +401,8 @@ async def test_custom_table_effects_and_wildcard(
     )
     _write_table(folder, "bug_workflow", "BUG", [reopen])
     _write_table(folder, "story_workflow", "STORY", [reopen])
-    (folder / "scheduled_states.yaml").write_text("not: a table\n", encoding="utf-8")
+    scheduled = (TABLES_DIR / "scheduled_states.yaml").read_text(encoding="utf-8")
+    (folder / "scheduled_states.yaml").write_text(scheduled, encoding="utf-8")
     workflow = _manager_for(db, ledger, hooks, fake_clock, folder)
     await workflow.create(
         WorkItemDraft(kind=WorkItemKind.FEATURE, title="F", description=""),

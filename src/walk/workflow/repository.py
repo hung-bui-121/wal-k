@@ -124,6 +124,15 @@ class WorkflowRepository(Repository[WorkItem]):
         row = self._db.connect().execute(sql, (work_item_id, state.value)).fetchone()
         return None if row is None else _transition(row)
 
+    def items_by_id(self, ids: Sequence[WorkItemId]) -> list[WorkItem]:
+        """Return the existing items among ``ids`` (synchronous: Definition of Ready reads it)."""
+        if not ids:
+            return []
+        marks = ", ".join("?" for _ in ids)
+        sql = f"SELECT json FROM work_items WHERE id IN ({marks}) ORDER BY id"  # noqa: S608 - placeholders only
+        rows = self._db.connect().execute(sql, list(ids)).fetchall()
+        return [self._load(row[0]) for row in rows]
+
     def _load(self, raw: str) -> WorkItem:
         return _WORK_ITEM.validate_json(raw)
 

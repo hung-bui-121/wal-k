@@ -1152,7 +1152,7 @@ Level-0 decisions:
 
 ### E01-S09 — `StateMachine`, YAML tables, guard registry, `raise_event`, `story_workflow`, `walk work transition`
 
-**Status:** DONE (pending)
+**Status:** DONE (459669b)
 **Type:** feat
 **Requirements:** §53, §54, §61, §81, §105 (tables as versioned data), §137 (Inv. 4, 9)
 **Depends on:** E01-S07, E01-S08
@@ -1339,7 +1339,7 @@ Level-0 decisions:
 
 ### E01-S10 — `feature_workflow`/`bug_workflow` tables, remaining guards, DoR, `ready_items`, done dimensions
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.5, §53, §58, §61, §64, §131, §137 (Inv. 6)
 **Depends on:** E01-S09
@@ -1368,7 +1368,7 @@ Every INTERFACES §3.1–§3.3 transition and guard exists as data plus callable
 | `tests/workflow/test_service_ready.py` | create | — |
 
 #### Interface contract
-Tables encode INTERFACES §3.1 (feature, 20 rows incl. `force_review` whose target is the pseudo-state `CHILDREN_READY_FOR_REVIEW` handled as effect `force_children_review`) and §3.3 (bug, 17 rows). New guards: `in_phase_scope`, `has_gdd_refs_or_user_feature`, `technical_design_section_present`, `required_approved_artifacts_present`, `children_created`, `all_stories_integrated`, `ci_green_on_integration_branch`, `all_applicable_dimensions_done`, `no_open_blocker_bugs`, `rework_children_created`, `phase_in_evidence_review`, `has_children_implementing`, `severity_set`, `owner_role_set`, `decision_recorded_quality`, `root_cause_section_present`, `regression_test_evidence`, `reproduction_no_longer_reproduces_evidence`, `reopen_below_max`, `reopen_at_max`. New effects: `increment_reopen_count`, `force_children_review`.
+Tables encode INTERFACES §3.1 (feature, 21 rows incl. `force_review` whose target is the pseudo-state `CHILDREN_READY_FOR_REVIEW` handled as effect `force_children_review`) and §3.3 (bug, 17 rows). New guards: `in_phase_scope`, `has_gdd_refs_or_user_feature`, `technical_design_section_present`, `required_approved_artifacts_present`, `children_created`, `all_stories_integrated`, `ci_green_on_integration_branch`, `all_applicable_dimensions_done`, `no_open_blocker_bugs`, `rework_children_created`, `phase_in_evidence_review`, `has_children_implementing`, `severity_set`, `owner_role_set`, `decision_recorded_quality`, `root_cause_section_present`, `regression_test_evidence`, `reproduction_no_longer_reproduces_evidence`, `reopen_below_max`, `reopen_at_max`. New effects: `increment_reopen_count`, `force_children_review`.
 ```yaml
 # scheduled_states.yaml — INTERFACES §4 rows for kinds FEATURE/STORY/TASK/BUG (phase/debate rows are E05/E07)
 - {kind: FEATURE, state: IDEA, role: ORCHESTRATOR, purpose: PLAN}
@@ -1418,7 +1418,7 @@ async def set_done_dimension(
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | When `feature_workflow.yaml` loads, Then 20 rows and every INTERFACES §3.1 `(from, event)` pair present | `tests/workflow/test_tables.py::test_feature_workflow_matches_interfaces` |
+| 1 | When `feature_workflow.yaml` loads, Then 21 rows and every INTERFACES §3.1 `(from, event)` pair present | `tests/workflow/test_tables.py::test_feature_workflow_matches_interfaces` |
 | 2 | When `bug_workflow.yaml` loads, Then 17 rows and every INTERFACES §3.3 pair present | `tests/workflow/test_tables.py::test_bug_workflow_matches_interfaces` |
 | 3 | When `scheduled_states.yaml` loads, Then every INTERFACES §4 FEATURE/STORY/TASK/BUG row present | `tests/workflow/test_tables.py::test_scheduled_states_match_routing_table` |
 | 4 | For each new guard, Given payload true/false, Then expected result (parametrised) | `tests/workflow/test_guards.py::test_feature_and_bug_guards_evaluate_payload_keys` |
@@ -1441,7 +1441,42 @@ async def set_done_dimension(
 - Commit: `feat: add feature and bug workflow tables, readiness and done dimensions (E01-S10)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+90 files already formatted
+All checks passed!
+Success: no issues found in 87 source files
+Required test coverage of 85% reached. Total coverage: 99.88%
+336 passed in 15.11s
+```
+Touched modules: `workflow/guards.py`, `readiness.py`, `service.py`, `state_machine.py`, `repository.py`, `models.py` each 100%.
+
+Demo (scratch repo from the E01-S08 demo; `BUG-0001` starts in IDEA, so it is triaged first):
+```
+$ walk work transition BUG-0001 triage --repo ./demo
+BUG-0001: IDEA -> DISCOVERY
+$ walk work transition BUG-0001 triaged --repo ./demo
+error: 'triaged' rejected for BUG-0001: severity_set: payload missing; owner_role_set: payload missing      (exit 2)
+$ walk work transition BUG-0001 triaged --payload '{"severity_set": true, "owner_role_set": true}' --repo ./demo
+BUG-0001: DISCOVERY -> READY
+$ walk work transition STORY-0001 ready --repo ./demo
+error: 'ready' rejected for STORY-0001: definition_of_ready: constraints_known      (exit 2)
+```
+
+Doc corrections and contract alignments in this commit:
+- AC 1 and the contract said the feature table has 20 rows. INTERFACES §3.1 has 21 (from `start_discovery` to `force_review`). The table encodes all 21, and the test checks every `(from, event)` pair and target state parsed from INTERFACES. The AC text now says 21.
+- INTERFACES §1.3 `Transition`: `to_state` admits the pseudo-state `CHILDREN_READY_FOR_REVIEW`, and `effects` lists `force_children_review`. For this pseudo-state, `resolve_target` returns the feature's unchanged state. In the same transaction the effect raises `force_review` on every IMPLEMENTING child story/task. Each child gets its own transition row, ledger event and post-commit hooks.
+- `definition_of_ready_checks(item, deps, *, facts=None)`: the keyword `facts` is added. The contract refers to "payload flags" for `design_approved`/`assets_available`, but its signature had no payload.
+
+Outside the Files table (kept consistent with the stricter §58 checks): `workflow/models.py`, `workflow/state_machine.py`, `workflow/repository.py` (sync `items_by_id`; `check_definition_of_ready` is synchronous per INTERFACES), and the E01-S08/S09 tests. Those tests' story contracts now carry `complexity="SMALL"`/constraints so that `ready` passes `constraints_known`. The dependency test now proves both DoR (`ready`) and `dependencies_complete`. The S08 deferred-method test drops the three methods implemented here.
+
+Level-0 decisions:
+- `definition_of_ready_checks`: `requirement_complete` (goal not blank), `acceptance_criteria`, `dependencies_resolved` (detail `"<id> is <state>; <id> not found"`), `design_approved` (required by a constraint starting `design:`, satisfied by `facts["design_approved"] is True`), `assets_available` (`asset:` / `facts["assets_available"]`) and `constraints_known`. Each tuple's detail is empty when the check passes. An item without a contract returns only `("requirement_complete", False, "no contract")`; E03-S17 adds the FEATURE checks. `NEW NAME:` constraint prefix `design:`, by analogy with the contract's `asset:`.
+- The `definition_of_ready` guard reads the kernel verdict `payload["definition_of_ready"]`. `raise_event` always computes that verdict with the dependencies read from the DB and the caller payload as `facts`, and it overrides any caller-supplied value, so the verdict cannot be forged from the CLI. Without the verdict (direct `StateMachine` use), the guard runs the checks with no dependency items, so dependencies fail closed. `check_definition_of_ready(item)` uses no facts and returns `reason` = comma-separated failing check names.
+- `ready_items`: candidates have a `(kind, state)` in `scheduled_states.yaml` (17 rows; the `# same for TASK/REWORK` comments of the contract sketch are expanded into explicit rows), `assigned_run_id is None`, every contract dependency COMPLETE (one query) and, when `phase_id` is given, `phase_id ∈ {phase_id, None}`. They are sorted by `(priority, created_at, id)`. `scheduled_states.yaml` is loaded and validated (kind, state, role = AgentRole or `contract.owner_role`/`contract.reviewer_role`, `fallback_role`, purpose ∈ PLAN/DESIGN/IMPLEMENT/REVIEW/QC/TRIAGE) when the manager is constructed; a missing or invalid file raises `ConfigError`.
+- `set_done_dimension` updates `done_dimensions` and `updated_at` and writes no ledger event (Behavior 4). `evidence_id` is accepted but not stored, because `Feature` has no field for it. A dimension that does not apply raises `ConfigError`.
+- New guard inputs follow WBS §3.4. `has_gdd_refs_or_user_feature` uses `gdd_refs` or the label `user-feature` (E03-S09 offered label-or-key; the label is kept, so E03-S09 can drop its `user_feature` payload key). `technical_design_section_present` looks for the `Architecture` section and `root_cause_section_present` for `Root Cause` in `feature_context_sections`. `required_approved_artifacts_present` only requires that the `approved_artifact_ids` fact was gathered (no artifact requirement exists in E01). `no_open_blocker_bugs` reads `open_blocker_bug_count == 0`. `max_reopen` defaults to 3. Reopen guards fail on non-bugs. `in_phase_scope` is the story's placeholder rule.
+- Feature `qc_rejected` → REWORK increments the feature's own `fix_loops` (circuit breaker, E03-S16); children are untouched (Behavior 6). Bug `reopen` → REWORK increments `reopen_count`.
 
 ---
 

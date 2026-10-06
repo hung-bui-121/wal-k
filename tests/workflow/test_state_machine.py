@@ -37,7 +37,7 @@ def _story(state: WorkItemState, **fields: object) -> Story:
             "project_key": "DEMO",
             "title": "S",
             "state": state,
-            "contract": StoryContract(goal="g", acceptance_criteria=["a"]),
+            "contract": StoryContract(goal="g", acceptance_criteria=["a"], complexity="SMALL"),
             **fields,
         }
     )

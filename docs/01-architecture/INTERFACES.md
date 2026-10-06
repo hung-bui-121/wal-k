@@ -161,11 +161,12 @@ class Transition(FrozenModel):
     from_state: WorkItemState | Literal["*"]  # "*" = any state not in excluded_states
     excluded_states: tuple[WorkItemState, ...] = ()  # YAML "* except A,B"
     event: str
-    to_state: WorkItemState | Literal["PREVIOUS"]  # PREVIOUS = payload resume_state (unblock)
+    to_state: WorkItemState | Literal["PREVIOUS", "CHILDREN_READY_FOR_REVIEW"]  # PREVIOUS = payload resume_state
+    # (unblock); CHILDREN_READY_FOR_REVIEW = state unchanged, effect force_children_review moves the children
     guards: tuple[str, ...]  # guard names (registered callables)
     allowed_roles: tuple[AgentRole, ...]  # USER may raise any event; guards still apply (§6)
     hooks: tuple[HookName, ...]  # fired after commit, in order
-    effects: tuple[str, ...] = ()  # increment_fix_loops | increment_reopen_count | store_resume_state
+    effects: tuple[str, ...] = ()  # increment_fix_loops | increment_reopen_count | store_resume_state | force_children_review
 
     def applies_to(self, state: WorkItemState) -> bool: ...
 

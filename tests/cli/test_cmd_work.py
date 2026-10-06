@@ -64,7 +64,11 @@ def repo(tmp_path: Path, fake_clock: FakeClock) -> Path:
                 title="Pick up item",
                 description="",
                 parent_id="FEAT-0001",
-                contract=StoryContract(goal="Pick up", acceptance_criteria=["item in bag"]),
+                contract=StoryContract(
+                    goal="Pick up",
+                    acceptance_criteria=["item in bag"],
+                    constraints=["no new input bindings"],
+                ),
             ),
             actor=AgentRole.PRODUCT_OWNER,
             phase_id=None,
