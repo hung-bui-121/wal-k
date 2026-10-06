@@ -269,7 +269,7 @@ class ModelRouter(Protocol):
         profile: TaskProfile,
         effort: Effort,
         *,
-        exclude: list[ModelId] = (),
+        exclude: Sequence[ModelId] = (),  # Sequence: a tuple default (E01-S19)
         task_override: ModelId | None = None,
     ) -> RoutingDecision:
         """INTERFACES §5.3 steps 1–4: ordered candidates (override, preferred, fallback) minus restricted/disabled/excluded;

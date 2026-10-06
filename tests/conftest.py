@@ -9,6 +9,11 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_id_factory import SequentialIdFactory
+from tests.fakes.fake_model_adapter import FakeModelAdapter, FakeScript, fake_descriptor
+from walk.agents import AgentOutput, AgentOutputStatus
+from walk.common.enums import Effort
+from walk.model_router import OUTPUT_RELATIVE_PATH, RunSession
+from walk.permissions import PermissionDecision, PermissionEffect, ToolCallRequest
 from walk.persistence import Database, MigrationRunner, UnitOfWork
 from walk.workflow import Project, ProjectRepository
 
@@ -88,3 +93,46 @@ async def project(db: Database) -> Project:
     async with UnitOfWork(db) as uow:
         await ProjectRepository(db).insert(demo, uow)
     return demo
+
+
+def _default_script() -> FakeScript:
+    output = AgentOutput(
+        status=AgentOutputStatus.COMPLETED, result="done", no_context_change_reason="fake run"
+    )
+    return FakeScript(tool_calls=3, output=output)
+
+
+@pytest.fixture
+def fake_codex_adapter(fake_clock: FakeClock) -> FakeModelAdapter:
+    """Fake adapter ``fake-codex`` serving ``fake-codex/sim``; 3 tool calls, then COMPLETED."""
+    descriptor = fake_descriptor("fake-codex/sim", "fake-codex")
+    return FakeModelAdapter("fake-codex", [descriptor], _default_script(), fake_clock)
+
+
+@pytest.fixture
+def fake_claude_adapter(fake_clock: FakeClock) -> FakeModelAdapter:
+    """Fake adapter ``fake-claude`` serving ``fake-claude/sim``; 3 tool calls, then COMPLETED."""
+    descriptor = fake_descriptor("fake-claude/sim", "fake-claude")
+    return FakeModelAdapter("fake-claude", [descriptor], _default_script(), fake_clock)
+
+
+@pytest.fixture
+def run_session(tmp_repo: Path) -> RunSession:
+    """A `RunSession` on ``tmp_repo`` whose authorizer allows every tool call."""
+
+    async def allow(request: ToolCallRequest) -> PermissionDecision:
+        del request
+        return PermissionDecision(effect=PermissionEffect.ALLOW, matched_rule=None, reason="test")
+
+    return RunSession(
+        run_id="RUN-01J00000000000000000000000",
+        worktree_path=str(tmp_repo),
+        allowed_tools=[],
+        permission_authorizer=allow,
+        effort=Effort.MEDIUM,
+        model_id="fake-codex/sim",
+        max_turns=50,
+        timeout_s=600,
+        env_allowlist={},
+        output_path=str(tmp_repo / OUTPUT_RELATIVE_PATH),
+    )

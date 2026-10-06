@@ -2444,7 +2444,7 @@ Level-0 decisions:
 
 ### E01-S18 — Agent execution contract: `AgentInput/AgentOutput/Handover`, templates, `instantiate`
 
-**Status:** DONE (pending)
+**Status:** DONE (3041e3d)
 **Type:** feat
 **Requirements:** §6.1, §9, §22, §29, §40 (section order), §126, §128, §137 (Inv. 1, 2)
 **Depends on:** E01-S14, E01-S16, E01-S17, E01-S24
@@ -2715,7 +2715,7 @@ Level-0 decisions:
 
 ### E01-S19 — `ModelAdapter` protocol, `RunSession`, `AgentEvent`, `FakeModelAdapter`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §16 (descriptor data), §17, §21 (triggers), §22, §126, §128, §137 (Inv. 1, 2), §138 (Model Lock-In)
 **Depends on:** E01-S18
@@ -2855,7 +2855,39 @@ class FakeModelAdapter:
 - Commit subject: `feat: add model adapter boundary and scripted fake adapter (E01-S19)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+220 files already formatted
+All checks passed!
+Success: no issues found in 218 source files
+Required test coverage of 85% reached. Total coverage: 99.95%
+691 passed in 52.29s
+```
+Touched modules: `model_router/*` 100%.
+
+The commit subject is the prescribed one, `feat: add model adapter boundary and scripted fake adapter (E01-S19)`, which has 69 characters.
+
+Contract changes (small; see commit body):
+- `ModelRouter.select(..., exclude: Sequence[ModelId] = ())`. INTERFACES §1.4 wrote `list[ModelId] = ()`, which mypy --strict rejects (a tuple default for a list). §1.4 is updated in this commit.
+- **For owner attention:** `ModelRouter.fallback` is not declared yet. Its INTERFACES signature takes `FallbackRequest`, which E01-S28 creates ("modify `ModelRouter.fallback` (signature takes `FallbackRequest`)"). The protocol gains it in E01-S28. E01-S20's `DefaultModelRouter` still has to provide the "implemented in E01-S28" stub its story asks for.
+- `FallbackRequest` and `MAX_FALLBACKS_PER_RUN` (DOMAIN-MODEL §4.10) are left for E01-S28's Files table.
+
+Level-0 decisions:
+- `ModelDescriptor.capabilities` scores outside `0..5` raise `capability scores must be within 0..5: {…}`. Every model gained field descriptions; types and defaults are verbatim.
+- `parse_agent_output`:
+  - A single surrounding ``` fence (with or without `json`) is removed when the text starts and ends with one.
+  - Errors are `OutputInvalid("agent output invalid:\n<lines>", detail={"errors": [lines]})`.
+  - Each line is `<loc>: <msg>`, joined with `.`. Model-level rule violations use the loc `(output)`, as do non-JSON and non-object input.
+- `read_output_file` reads UTF-8 and returns `None` only for a missing file. Other I/O errors propagate.
+- `RunSession.permission_authorizer` is a typed `Callable` field (pydantic checks it is callable).
+- `FakeModelAdapter`:
+  - `resume` validates eagerly: an unknown ref, or a non-resumable one, raises `NotResumable` at call time, before iteration. It then emits `STARTED(session=ref, text=instruction)`, which is how the instruction is "recorded in `runs`". The continued run uses the resume session's `run_id`.
+  - Invalid-output counting is per run state across `run`/`resume`.
+  - Cancel is a flag checked at each tool-call boundary and before the final output, so one `USAGE` may still follow the event that triggered `cancel`.
+  - `map_effort` degrades to the nearest lower supported level, or to the lowest supported level when none is lower, and raises `ConfigError` for a model it does not serve.
+  - `usage` of an unknown run is all zeros. A non-ALLOW decision (`DENY`, or an unresolved `REQUIRE_APPROVAL`) yields `{"ok": false, "reason": …}`.
+  - Fake files hold `// fake edit <i>\n`.
+- `run_session` (root conftest) uses the existing `tmp_repo` fixture, `RUN-01J00000000000000000000000`, model `fake-codex/sim`, `max_turns=50` and `timeout_s=600`.
 
 ---
 
