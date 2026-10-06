@@ -16,10 +16,11 @@ import socket
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from pydantic import ConfigDict, Field, SkipValidation
 
+import walk
 import walk.agents
 import walk.model_router
 import walk.skills
@@ -52,6 +53,7 @@ from walk.integrations import (
     DefaultIntegrationManager,
     GitCliProvider,
     GitProvider,
+    IntegrationManager,
     ManifestStore,
     SubprocessRunner,
 )
@@ -73,6 +75,8 @@ from walk.model_router.adapters.codex.projector import CodexSkillProjector
 from walk.orchestrator import (
     DEFAULT_MAX_PARALLEL_AGENTS,
     DEFAULT_POLL_INTERVAL_S,
+    BootstrapOptions,
+    Bootstrapper,
     DefaultOrchestrator,
     DefaultTaskRouter,
     Scheduler,
@@ -525,14 +529,67 @@ def open_integrations(
     )
 
 
+def open_bootstrapper(
+    repo: Path,
+    options: BootstrapOptions,
+    *,
+    runner: SubprocessRunner | None = None,
+    keyring_backend: KeyringBackend | None = None,
+    clock: Clock | None = None,
+) -> Bootstrapper:
+    """Wire the Default* services for one bootstrap (the only place that constructs `Bootstrapper`).
+
+    Called by `cmd_bootstrap` after its checks (confirmation, project key, Jira credentials)
+    passed; opening the database creates `.ai/` and `.ai/kernel.db` (migrated by the run).
+
+    Args:
+        repo: Game repository root.
+        options: The validated bootstrap options (key, provider, Unity path).
+        runner: Runs the preflight probes and git (the asyncio runner by default).
+        keyring_backend: OS keyring behind the `CredentialStore` (the system keyring by default).
+        clock: Time source (the system clock by default).
+
+    Raises:
+        ConfigError: The database cannot be opened or the packaged tool catalogue is invalid.
+    """
+    time = clock or SystemClock()
+    run = runner or AsyncioSubprocessRunner()
+    db = open_database(repo)
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), IdSequenceStore(db), time)
+    key = options.project_key
+    git = GitCliProvider(repo, run, ledger, IdempotencyStore(db, time), time, project_key=key)
+    credentials = CredentialStore(os.environ, keyring_backend or SystemKeyringBackend())
+    tools = DefaultToolRegistry(load_tool_specs([]))
+    return Bootstrapper(
+        # The bootstrapper calls only `preflight`; DefaultIntegrationManager gains the protocol's
+        # provider attributes in E03-S03, and strict mypy then reports this cast as redundant.
+        integrations=cast(
+            "IntegrationManager",
+            _integrations(repo, run, credentials, tools, time, unity_path=options.unity_path),
+        ),
+        memory=open_memory(db, repo, project_key=key, clock=time),
+        git=git,
+        database=db,
+        migrations=MigrationRunner(db, "project"),
+        projects=ProjectRepository(db),
+        clock=time,
+        kit_version=walk.__version__,
+    )
+
+
 def _integrations(
     repo: Path,
     runner: SubprocessRunner,
     credentials: CredentialStore,
     tools: DefaultToolRegistry,
     clock: Clock,
+    *,
+    unity_path: str | None = None,
 ) -> DefaultIntegrationManager:
-    """The preflight manager; skills join with E02-S05/S07, the Unity path with E03-S10."""
+    """The preflight manager; ``unity_path`` comes from `walk bootstrap --unity-path`.
+
+    Skills join with E02-S05/S07; the configured Unity path of other commands with E03-S10.
+    """
     return DefaultIntegrationManager(
         runner=runner,
         credentials=credentials,
@@ -540,7 +597,7 @@ def _integrations(
         tools=tools,
         clock=clock,
         machine_id=socket.gethostname(),
-        unity_path=None,
+        unity_path=unity_path,
         project_path=str(repo),
         required_skills=[],
         available_skills=[],

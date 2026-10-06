@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from walk import __version__
+from walk.cli.cmd_bootstrap import bootstrap
 from walk.cli.cmd_cost import cost_app
 from walk.cli.cmd_db import db_app
 from walk.cli.cmd_doctor import doctor
@@ -30,6 +31,7 @@ app.add_typer(memory_app)
 app.add_typer(phase_app)
 app.add_typer(skills_app)
 app.add_typer(work_app)
+app.command("bootstrap")(bootstrap)
 app.command("doctor")(doctor)
 app.command("run")(run)
 app.command("status")(status)

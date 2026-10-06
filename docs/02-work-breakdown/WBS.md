@@ -430,7 +430,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-B06 | Architecture tests for module-level import cells and per-file process confinement | bugfix | E01-R01 | LOW | DONE (13ec3c1) |
 | E02-S01 | `CredentialStore` and agent environment allowlist | feat | E01-S23, E01-S25 | MEDIUM | DONE (d3c559e) |
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | feat | E02-S01, E01-S14 | HIGH | DONE (bc1fcfe) |
-| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | TODO |
+| E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | DONE (pending) |
 | E02-S04 | `kernel-versions.yaml` and behavior-version pins | feat | E02-S03 | MEDIUM | TODO |
 | E02-S05 | `SkillRegistry` loading and builtin skills | feat | E01-S14 | MEDIUM | DONE (65ef1d3) |
 | E02-S06 | Skill projections for Claude and Codex, lock file, `walk skills list/sync` | feat | E02-S05, E01-S21, E01-S22, E01-S25 | HIGH | DONE (11d1d66) |
@@ -447,7 +447,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-R01 | Review E02 | docs | E02-S16 | MEDIUM | TODO |
 | E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | bugfix | E02-S02 | MEDIUM | DONE (1960027) |
 | E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | bugfix | E02-S01 | LOW | DONE (e5e5a7d) |
-| E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | bugfix | E02-S01, E02-B02 | LOW | DONE (pending) |
+| E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | bugfix | E02-S01, E02-B02 | LOW | DONE (aba2c85) |
 | E03-S01 | `GitCliProvider` remote operations: push, PR, merge, `squash_wip` | feat | E01-S23, E02-S14 | HIGH | TODO |
 | E03-S02 | `LocalWorkProvider` and work-provider contract test suite | feat | E01-S23, E01-S04 | HIGH | TODO |
 | E03-S03 | `IntegrationManager`: ingest, reconcile, idempotency, `WorkPoller` | feat | E03-S02, E01-S09 | HIGH | TODO |

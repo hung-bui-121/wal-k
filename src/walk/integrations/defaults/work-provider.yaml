@@ -1,0 +1,35 @@
+# Work provider of this project (ADR-0005): `local` or `jira`.
+kind: local
+# Jira mapping (ADR-0005 D-3), read when kind is jira. The defaults are shown; uncomment to change.
+# jira:
+#   project_key: GAME                 # Jira project holding the kernel's work items
+#   issue_types:
+#     epic: Epic
+#     feature: Story                  # label walk-feature, parent = the Epic
+#     story: Sub-task                 # under the Feature; Story/Task with a "parent" link also works
+#     task: Sub-task
+#     bug: Bug                        # label walk-bug, "relates to" link to the Feature
+#   labels:
+#     feature: walk-feature
+#     bug: walk-bug
+#     kernel_id: "walk:<ID>"          # lookup and reconciliation
+#     owner_role: "walk-role:<ROLE>"
+#   assignee_accounts: {}             # optional {ROLE: accountId}
+#   phase_fix_version: "<PHASE-id> <name>"
+#   priority: {P0: Highest, P1: High, P2: Medium, P3: Low}
+#   status_map:
+#     IDEA: Backlog
+#     DISCOVERY: Discovery
+#     DESIGN: Design
+#     READY: Ready
+#     BLOCKED: Blocked
+#     IMPLEMENTING: In Progress
+#     READY_FOR_REVIEW: Ready for Review
+#     LEAD_DEV_REVIEW: In Review
+#     INTEGRATION: Integration
+#     QC: QC
+#     REWORK: Rework
+#     PHASE_REVIEW: Phase Review
+#     USER_GATE: User Gate
+#     COMPLETE: Done
+#     CANCELLED: Cancelled

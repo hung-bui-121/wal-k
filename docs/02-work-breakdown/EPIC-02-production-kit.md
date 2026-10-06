@@ -390,7 +390,7 @@ Level-0 decisions:
 
 ### E02-S03 — `walk bootstrap`: Production Kit generation and `.ai/` initialisation
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §24, §25, §123, §124, §34, §35, §36
 **Depends on:** E02-S02, E01-S16, E01-S17
@@ -536,7 +536,109 @@ CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY
 - Commit subject: `feat: add bootstrap command generating the production kit (E02-S03)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12.11):
+```
+370 files already formatted
+All checks passed!
+Success: no issues found in 369 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.85%
+1178 passed, 5 deselected in 429.97s (0:07:09)
+```
+Touched modules: `orchestrator/bootstrap.py` 100 %, `cli/cmd_bootstrap.py` 100 %, `memory/skeletons.py` 100 %. All 13 acceptance tests pass, plus negative-path tests:
+- a missing GDD file;
+- an invalid `production-kit.yaml`;
+- a failed atomic write (no temp file left behind);
+- the same-key project row kept unchanged;
+- the CLI's exit 4 on preflight, exit 1 on other kernel errors (a secret-shaped `--name` refused by `MemoryManager.write`), and the TTY prompt in both answers.
+
+Demo on a temporary git repository under the system temp dir, outside this repository. It has one commit and `GDD/combat.md` with `# Combat`, `## Shotgun`, `# Exploration`. Real preflight probes ran; Codex is not installed on this host and no provider CLI was executed.
+```
+$ walk --repo <tmp>/game bootstrap --provider local --key DEMO --name Demo --yes
+created:
+  .walk/
+  .ai/features/
+  .ai/bugs/
+  .ai/decisions/
+  .ai/handovers/
+  .ai/agents/roles/
+  .ai/agents/skills/
+  .ai/agents/roles/lead_dev.md
+  .ai/agents/roles/orchestrator.md
+  .ai/agents/roles/qc.md
+  .ai/agents/roles/senior_dev.md
+  .ai/agents/policies.yaml
+  .ai/agents/models.yaml
+  .ai/agents/permissions.yaml
+  .ai/agents/hooks.yaml
+  .ai/agents/projections.lock.yaml
+  .ai/project/work-provider.yaml
+  .ai/project/project.md
+  .ai/project/constitution.md
+  .ai/project/kernel-versions.yaml
+  .ai/.gitignore
+  .gitignore
+  .ai/project/production-kit.yaml
+exit=0
+$ walk --repo <tmp>/game bootstrap --provider local --key DEMO --name Demo --yes
+nothing to do
+exit=0
+$ find .ai .walk | sort
+.ai
+.ai/.gitignore
+.ai/agents
+.ai/agents/hooks.yaml
+.ai/agents/models.yaml
+.ai/agents/permissions.yaml
+.ai/agents/policies.yaml
+.ai/agents/projections.lock.yaml
+.ai/agents/roles
+.ai/agents/roles/lead_dev.md
+.ai/agents/roles/orchestrator.md
+.ai/agents/roles/qc.md
+.ai/agents/roles/senior_dev.md
+.ai/agents/skills
+.ai/bugs
+.ai/decisions
+.ai/features
+.ai/handovers
+.ai/kernel.db
+.ai/project
+.ai/project/constitution.md
+.ai/project/environment.yaml
+.ai/project/kernel-versions.yaml
+.ai/project/production-kit.yaml
+.ai/project/project.md
+.ai/project/work-provider.yaml
+.walk
+$ cat .gitignore
+.walk/
+graphify-out/
+$ sed -n '/^## Goals/,/^## Platforms/p' .ai/project/project.md
+## Goals
+
+- Combat
+- Exploration
+
+## Platforms
+```
+Smoke check on the same repository: `walk doctor` exits 0 (`work_provider ready local`; skills `missing 5` per provider until `walk skills sync`), and `walk status` prints `project: DEMO`.
+
+Level-0 decisions:
+- **Step (a) and the kit folders.** Step (a) makes `.ai/` (already opened by the database) and `.walk/` (reported). The empty §8 `[MVP]` and kit folders are made at the start of step (d), after the preflight. These are `features/`, `bugs/`, `decisions/`, `handovers/`, `agents/roles/` and `agents/skills/`. This is why a failed preflight (AC 3) or a foreign database (AC 13) leaves no `.ai/agents/`. `.ai/` and `.ai/project/` are not reported, because they hold reported files and the database or preflight opens them anyway.
+- **What `created_paths` / `unchanged_paths` list.** Repo-relative POSIX paths: the kit files, the empty folders (with a trailing `/`), and the root `.gitignore` when lines were appended. They do not list the database or `environment.yaml`. The preflight rewrites `environment.yaml` on every run by design (E02-S02), so a second run has `created_paths == []` while that file is refreshed.
+- **Order of the project check.** Behavior 10 runs right after the migrations, before the preflight. A foreign database therefore aborts before `environment.yaml` is written. A row with the same key is left untouched; a new row is inserted with `created_at = clock.now()`.
+- **Role, policy and model defaults** are copied byte for byte through an atomic temp-file rename. They are not memory documents: their front matter is the Constitution schema, and the file names are snake_case. So `MemoryManager.write` cannot address them. AC 1 checks that `ConstitutionLoader`, `PolicyLoader` and `load_models_config` accept the copies as project overrides. Package data is read with `importlib.resources`.
+- **GDD.** `--gdd` paths must be files inside the repository (else `ConfigError`, exit 1). Without `--gdd`, every `*.md` under `GDD/` is used, recursively and sorted. The bootstrapper passes H1/H2 heading lines outside fenced code to `project_skeleton`. `Goals` gets one bullet per top-level heading: the H1 headings, or the H2 headings when no H1 exists. A GDD without headings gives `- (no headings found in the GDD)`; no GDD at all gives `- (no GDD provided)` (Behavior 5).
+- **Skeleton details.** Both documents carry `extra.project_key`; the constitution title is `<name> constitution`. Sections other than `Goals` start empty. The constitution's four sections are a private constant in `walk.memory.skeletons`: `sections.py` is not in the Files table, and the type has no section schema there.
+- **Production Kit fields.** `project_constraints_path = .ai/project/project.md#technical-constraints` (the field describes a section of `project.md`). `tool_config_path = .ai/agents/permissions.yaml` (a single path; `models.yaml` sits beside it). `initial_memory_paths = [project.md, kernel-versions.yaml]`, as the field description says. `kit_version = walk.__version__`. An existing `production-kit.yaml` is loaded and returned unchanged, and an invalid one raises `ConfigError`.
+- **`work-provider.yaml`** is the package template (`kind: local` plus the commented ADR-0005 D-3 mapping, including the default `status_map`), with the `kind` line set to the provider.
+- **No HEAD.** `GitError` from `head` or `current_branch` gives `NO_COMMIT_SHA` and `Project`'s default branch (`main`).
+- **CLI.** An invalid key exits 1 with `invalid project key '<key>': expected 2-10 uppercase letters or digits`. The prompt is `typer.confirm("Create Production Kit in <repo>?", default=False)`, which prints `[y/N]`; a "no" exits 1 (`bootstrap aborted`). The Jira credential check uses the `JIRA_*` entries of `CREDENTIAL_NAMES` and exits 4 with `jira credentials missing: ...`. `--json` prints the `BootstrapResult`.
+- **Typing gap, worked around in the composition root.** `DefaultIntegrationManager` does not yet satisfy the `IntegrationManager` protocol structurally: the `work`/`git`/... attributes are deferred to E03-S03 (E02-S02 Evidence). `open_bootstrapper` therefore passes it with `cast("IntegrationManager", ...)` and a comment. The bootstrapper calls only `preflight`. Strict mypy (`warn_redundant_casts`) will flag the cast once E03-S03 adds the attributes. The ADR-0020 constructor signature is unchanged.
+- **Composition.** The private `_integrations` gains a keyword `unity_path` (`--unity-path` reaches the Unity probe). `open_bootstrapper` builds the ledger, `GitCliProvider`, `CredentialStore`, the memory manager (`open_memory`), `MigrationRunner` and `ProjectRepository` on the one database. The database connection lives for the one-shot command.
+
+Also read: `walk/memory/{service,paths,sections,frontmatter}.py`, `walk/skills/lockfile.py`, `walk/workflow/repository.py`, `walk/integrations/{service,preflight}.py`, `walk/agents/constitution_loader.py`, `tests/integrations/test_preflight.py` (probe script reused), `tests/test_import_contracts.py`.
 
 ---
 
@@ -2335,7 +2437,7 @@ For the owner / architect: the existing glob `UNITY_*` (E02-S01, kept unchanged 
 
 ### E02-B03 — ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment
 
-**Status:** DONE (pending)
+**Status:** DONE (aba2c85)
 **Type:** bugfix
 **Requirements:** §91, §139
 **Depends on:** E02-S01, E02-B02

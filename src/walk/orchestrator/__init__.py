@@ -1,5 +1,6 @@
 """Orchestration: routing, scheduling and the kernel loop (§10.1, §56, §87; INTERFACES §1.1)."""
 
+from walk.orchestrator.bootstrap import BootstrapOptions, Bootstrapper, BootstrapResult
 from walk.orchestrator.commands import CommandConsumer, CommandHandler
 from walk.orchestrator.errors import NoScheduledRole
 from walk.orchestrator.models import (
@@ -23,6 +24,9 @@ __all__ = [
     "ADMISSION_EVENTS",
     "DEFAULT_MAX_PARALLEL_AGENTS",
     "DEFAULT_POLL_INTERVAL_S",
+    "BootstrapOptions",
+    "BootstrapResult",
+    "Bootstrapper",
     "Command",
     "CommandConsumer",
     "CommandHandler",
