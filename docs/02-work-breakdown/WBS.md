@@ -408,10 +408,10 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S19 | `ModelAdapter` protocol, `RunSession`, `AgentEvent`, `FakeModelAdapter` | feat | E01-S18 | MEDIUM | DONE (627600b) |
 | E01-S20 | Model router: `CapabilityRegistry`, `models.yaml`, `select`, `classify_error`, costing | feat | E01-S19, E01-S12 | HIGH | DONE (5dc2131) |
 | E01-S21 | `ClaudeAdapter` (claude-agent-sdk) | feat | E01-S19, E01-S02 | HIGH | DONE (e24d5e4) |
-| E01-S22 | `CodexAdapter` (`codex exec --json`) | feat | E01-S19, E01-S02 | HIGH | DONE (pending) |
+| E01-S22 | `CodexAdapter` (`codex exec --json`) | feat | E01-S19, E01-S02 | HIGH | DONE (5bce0a2) |
 | E01-S23 | Integration protocols and `GitCliProvider` local operations | feat | E01-S04, E01-S05 | HIGH | DONE (ce79967) |
 | E01-S24 | Context manager skeleton: mandatory items, token budget, `ContextBundle` | feat | E01-S08, E01-S16 | MEDIUM | DONE (4d0ccd9) |
-| E01-S25 | Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor` | feat | E01-S18, E01-S20, E01-S23 | HIGH | TODO |
+| E01-S25 | Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor` | feat | E01-S18, E01-S20, E01-S23 | HIGH | DONE (pending) |
 | E01-S26 | `ToolInvoker`: permission enforcement point, Claude `can_use_tool` bridge, Codex sandbox config | feat | E01-S15, E01-S25, E01-S07, E01-S12 | HIGH | TODO |
 | E01-S27 | `AgentExecutor` event loop, output validation/repair, `OutputApplier` core | feat | E01-S26, E01-S20, E01-S24, E01-S06 | HIGH | TODO |
 | E01-S28 | Fallback, handover and recovery | feat | E01-S27 | HIGH | TODO |

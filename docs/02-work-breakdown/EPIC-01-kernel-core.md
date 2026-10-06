@@ -3256,7 +3256,7 @@ Level-0 decisions:
 
 ### E01-S22 — `CodexAdapter` (`codex exec --json`)
 
-**Status:** DONE (pending)
+**Status:** DONE (5bce0a2)
 **Type:** feat
 **Requirements:** §6.1, §17, §21, §22, §91 (sandbox, secret isolation), §128, §137 (Inv. 1, 2, 11), §139 (model adapter API, sandbox technology)
 **Depends on:** E01-S19, E01-S02
@@ -3834,7 +3834,7 @@ Level-0 decisions:
 
 ### E01-S25 — Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §22, §41, §54, §60, §89, §90, §91 (repository boundary), §137 (Inv. 10, 12, 13)
 **Depends on:** E01-S18, E01-S20, E01-S23
@@ -3866,6 +3866,13 @@ Agent runs, checkpoints and handovers persist in SQLite; every run gets an isola
 | `tests/runtime/test_sandbox.py` | create | — |
 | `tests/runtime/test_checkpoints.py` | create | — |
 | `tests/runtime/test_boundary.py` | create | — |
+| `tests/runtime/conftest.py` | create | — (shared fixtures; added during implementation) |
+| `src/walk/integrations/git/guard_hooks.py` | modify | `render_guard_hook` (scope to run worktrees, Notes) |
+| `tests/integrations/git/test_guard_hooks.py` | modify | — |
+| `src/walk/integrations/protocols.py` | modify | `GitProvider.delete_branch` (added during implementation, see Evidence) |
+| `src/walk/integrations/git/provider.py` | modify | `GitCliProvider.delete_branch` |
+| `tests/integrations/git/test_provider.py` | modify | — |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `checkpoint` kwargs, §2.3 `delete_branch`) |
 
 #### Interface contract
 Models: DOMAIN-MODEL §3 runtime enums (except the relocated `AgentOutputStatus`), §4.11 verbatim; `AppliedEffects` from INTERFACES §1.13 (WBS §3.2). Protocols: INTERFACES.md §1.13 verbatim. Deltas:
@@ -3943,7 +3950,76 @@ class DefaultBoundaryAuditor:
 - Commit subject: `feat: add agent run persistence, worktree sandbox, checkpoints and boundary audit (E01-S25)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+277 files already formatted
+All checks passed!
+Success: no issues found in 275 source files
+Required test coverage of 85% reached. Total coverage: 99.96%
+834 passed, 2 deselected in 75.55s
+```
+Touched modules: `runtime/*` 100%, `integrations/git/*` 100%.
+
+Demo (a script drives `DefaultSandboxManager` and `DefaultCheckpointManager` on a fresh repository; the guard hooks protect `main` and `release/*`):
+```
+worktree .walk/worktrees/RUN-01J00000000000000000000000 on feat/story-0001-player-jump-double-jump
+checkpoint 1 PERIODIC wip dc06184
+$ git -C <tmp repo> log --oneline feat/story-0001-player-jump-double-jump | head -3
+dc06184 wip(STORY-0001): checkpoint 1
+3374187 chore: initial commit
+$ git commit on main in the primary checkout: [main ed7b57f] docs: dev
+```
+
+The commit subject is shortened to `feat: add run store, sandbox, checkpoints and boundary audit (E01-S25)`, because the prescribed subject has 91 characters and the hook allows 72.
+
+Contract changes (small and additive, see the commit body; INTERFACES.md updated):
+- **`GitProvider.delete_branch(name, *, protected_branches)`** (INTERFACES §2.3) and `GitCliProvider.delete_branch`. AC 8 needs `remove(keep_branch=False)` to delete a branch, but no `GitProvider` operation could. A name matching a protected glob raises `PermissionDenied` (the protected path stays `git.delete_branch_protected` through the ToolInvoker); otherwise the provider runs `git branch -D`.
+- **`CheckpointManager.checkpoint(..., workflow_state=None, budget_consumed=None, context_manifest=None)`** in the protocol (INTERFACES §1.13), not only in the default class. E01-S27's executor must be able to pass them through the protocol type.
+- **For owner attention: `workflow_state`.** It is required except for **START and PAUSE**, which read the work item's current state. The Notes only exempted START, but E01-S26 takes `checkpoint(run, PAUSE)` through the protocol from the ToolInvoker, which has no workflow access. Without this exemption E01-S26 AC 4 could not pass. All other kinds raise `ConfigError` when the state is missing, as the Notes require.
+- `DefaultSandboxManager(..., *, default_branch="main")` and `DefaultCheckpointManager(..., *, default_branch="main")`. The first is the base of new work branches ("based on `Project.default_branch`"); the second is the `build_handover` diff base. The constructors had no access to the project; the composition root passes `Project.default_branch`.
+- `AgentRunRepository(db, *, clock=None)`: the clock stamps `ended_at`.
+
+Level-0 decisions:
+- **For owner attention: AC 7 (two runs, one branch).**
+  - git refuses to check out one branch in two worktrees. The later binding rule (INTERFACES §1.13 `adopt`, E01-S28) is also "one branch, one worktree".
+  - `test_create_reuses_branch_across_runs` therefore creates the second run's worktree after the first run's worktree was removed. It asserts one branch and the second worktree on it, carrying the first run's commit.
+  - A concurrent second `create` on the same branch raises `GitError` (`test_concurrent_create_on_one_branch_is_refused`). Forcing it (`git worktree add --force`) would let two worktrees move one branch ref.
+- **Guard-hook fix (binding Note).**
+  - `render_guard_hook` adds `walk_in_run_worktree || exit 0`. The function compares `git rev-parse --show-toplevel` with `<git rev-parse --path-format=absolute --git-common-dir without /.git>/.walk/worktrees/`.
+  - It needs git ≥ 2.31. When `rev-parse` fails, the hook keeps guarding (fail closed). An empty protected list renders no scope block (nothing to guard).
+  - Repository git config is untouched.
+  - The main-checkout assertion of E01-S23's `test_guard_hooks_block_protected_branches` is replaced by the inverted assertion in `test_guard_hooks_only_enforce_inside_run_worktrees`, as the Note requires.
+- **`AgentRunRepository`.**
+  - The projection columns follow DOMAIN-MODEL §6.2: `provider_session_id` = `provider_session.session_id`, and the time columns are ISO text.
+  - `set_state` updates `state`, `ended_at` and `json` with one `UPDATE`, on `conn` or in its own unit of work. `failure_reason` is only changed when given.
+  - End states that stamp `ended_at`: `HANDED_OVER`, `COMPLETED`, `FAILED*`, `BLOCKED_*`, `CANCELLED`. Every other state clears `ended_at`.
+  - `by_state([])` returns `[]`. Both `by_state` and `for_item` order by `started_at, id`.
+- `CheckpointRepository.insert(checkpoint, conn)` uses the caller's connection. `latest` takes the highest `seq`; `latest_for_item` takes the newest `at`, and the latest insert wins a tie.
+- `HandoverRepository`:
+  - `ai_path` is the `.ai/`-relative document path `handovers/<id>.md`, derived from the id because `Handover` does not carry it.
+  - `latest_open` orders by `created_at DESC, id DESC`. `close` of an unknown id raises `ConfigError("unknown handover …")`.
+- `CheckpointNotFound` is defined for E01-S28 (`resume_native`/recovery). No S25 operation looks a checkpoint up by id, so only its hierarchy is tested.
+- **`checkpoint`.**
+  - Order: `next_seq` → WIP commit (`git.commit:<run>:<seq>`) → `head` + `status` → handover document → one unit of work. That unit writes the `handovers` row, sets `run.handover_out_id` (the run row is upserted from the caller's `run`), inserts the `checkpoints` row and writes `CHECKPOINT_CREATED`. After the commit, `ON_AGENT_CHECKPOINT` fires with payload `{checkpoint_id, seq, kind, handover_id}`.
+  - The handover document is written before that transaction, with its key `handover:<run>:<seq>` (result = path) stored right after the write. A replay after a failed transaction therefore reuses the WIP commit and does not rewrite the document: `HANDOVER_CREATED` stays at one (AC 12 test).
+  - `CHECKPOINT_CREATED` has `actor_role=run.role`, `model_id`, `effort`, `outcome="OK"`. Its payload is `{seq, kind, head_sha, wip_commit_sha, handover_id}`.
+  - The checkpoint id is `CKP-<ULID>`, and `context_manifest` defaults to an empty `ContextBundleRef`.
+- **`build_handover`.**
+  - It allocates the `HO-<n>` id itself: `Handover.id` is validated, so "allocate when empty" cannot occur in `checkpoint`.
+  - `reason` must be a `Handover.reason` literal (`ConfigError` otherwise).
+  - The diff base is `merge_base(default_branch, HEAD)`. `completed_work` is the non-empty lines of `result` with bullet markers removed, followed by the finding summaries.
+  - With a PARTIAL output (which must embed a handover), `hypotheses`, `risks`, `remaining_work` and `next_action` come from that embedded handover. AC 13's "first next action" holds because the test's embedded `next_action` is the first next action, and a separate test covers the `next_actions` path.
+  - `branch` is `run.branch` or `""`.
+- **For owner attention: work item read.** `checkpoint` (START/PAUSE) and `build_handover` read the work item with a read-only `SELECT json FROM work_items`. ARCHITECTURE §2.2 lets `runtime` import only `workflow`'s models/protocols, and the contract constructor has no `WorkflowManager`; an unknown item raises `ConfigError`.
+- **`DefaultSandboxManager`.**
+  - `branch_name_for` builds `feat/<id lower>-<slug>`. The slug is the title lower-cased, with runs of non-alphanumerics turned into `-`, trimmed, cut to 30 characters and trimmed again; an empty slug gives `feat/<id lower>`.
+  - `remove` force-removes `run.worktree_path` (or `<repo>/.walk/worktrees/<run_id>`). It deletes the branch only when `keep_branch=False`, `run.branch` is set and no protected glob matches (`fnmatch`, where `*` also matches `/` as in the hooks).
+  - `post_create` is a public list of `(run, item, path)` coroutines, the extension point for E02-S06; it is empty here.
+- **`DefaultBoundaryAuditor`.**
+  - A glob matches when `fnmatch` matches the full relative path, or `PurePosixPath.match` matches (right-anchored, so `AGENTS.md` also catches `docs/AGENTS.md`), or a leading `**/` matches zero folders (`**/*.env` catches `secrets.env`).
+  - The evidence exception covers `.ai/{features,bugs,phases}/…/evidence/…`.
+  - Violations are returned as given, in input order.
+- **For owner attention: agents import.** `walk.agents.handover.to_document` is imported by `runtime.checkpoints`, which the memory protocol prescribes. It is outside the "models/protocols/errors only" legend of ARCHITECTURE §2.2, so E01-S31's import-linter contract needs to allow it.
 
 ---
 

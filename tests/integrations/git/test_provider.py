@@ -6,7 +6,7 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_subprocess import FakeSubprocessRunner
-from walk.common.errors import ConfigError
+from walk.common.errors import ConfigError, PermissionDenied
 from walk.integrations import (
     FORBIDDEN_COMMIT_PATHSPECS,
     WORK_ITEM_TRAILER,
@@ -284,14 +284,24 @@ async def test_guard_hooks_block_protected_branches(
         await git.commit_all(
             str(wt), "feat: b", trailer_work_item="TASK-0001", idempotency_key="k2"
         )
-    (tmp_game_repo / "C.txt").write_bytes(b"c\n")
-    with pytest.raises(GitError) as main_info:
-        await git.commit_all(
-            str(tmp_game_repo), "feat: c", trailer_work_item="TASK-0001", idempotency_key="k3"
-        )
 
     assert "protected" in release_info.value.detail["stderr_tail"]
-    assert "protected" in main_info.value.detail["stderr_tail"]
+    # The primary checkout is not guarded (E01-S25): see test_guard_hooks.py.
+
+
+async def test_delete_branch_refuses_protected(git: GitCliProvider, tmp_game_repo: Path) -> None:
+    await git.ensure_branch("feat/gone", "main", idempotency_key="git.branch:gone")
+    await git.ensure_branch("release/2", "main", idempotency_key="git.branch:release")
+
+    await git.delete_branch("feat/gone", protected_branches=["main", "release/*"])
+
+    assert _git(tmp_game_repo, "branch", "--list", "feat/gone") == ""
+    for protected in ("main", "release/2"):
+        with pytest.raises(PermissionDenied, match="protected"):
+            await git.delete_branch(protected, protected_branches=["main", "release/*"])
+    assert _git(tmp_game_repo, "branch", "--list", "release/2")
+    with pytest.raises(GitError):
+        await git.delete_branch("feat/never-existed", protected_branches=[])
 
 
 async def test_install_guard_hooks_overwrites_own_hooks(

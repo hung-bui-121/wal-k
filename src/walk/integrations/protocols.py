@@ -127,6 +127,14 @@ class GitProvider(Protocol):
         """Remove the worktree at ``path`` and prune stale entries."""
         ...
 
+    async def delete_branch(self, name: str, *, protected_branches: list[str]) -> None:
+        """Delete local branch ``name`` (kernel cleanup of run branches, E01-S25).
+
+        Raises PermissionDenied if ``name`` matches a protected glob; deleting a protected
+        branch is the protected action ``git.delete_branch_protected`` (ToolInvoker).
+        """
+        ...
+
     async def status(self, path: str) -> list[str]:
         """Dirty files (porcelain)."""
         ...

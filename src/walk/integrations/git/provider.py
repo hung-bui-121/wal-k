@@ -4,13 +4,14 @@ Remote operations (`push`, `open_pr`, `merge`, `squash_wip`) arrive in E03-S01. 
 never reads credentials and never contacts a remote.
 """
 
+import fnmatch
 import logging
 import re
 from pathlib import Path
 from typing import Literal, NoReturn
 
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError
+from walk.common.errors import ConfigError, PermissionDenied
 from walk.common.ids import ProjectKey, Sha, WorkItemId
 from walk.common.roles import AgentRole
 from walk.integrations.errors import GitError
@@ -121,6 +122,20 @@ class GitCliProvider:
         args = ["worktree", "remove", *(["--force"] if force else []), path]
         await self._git(root, *args)
         await self._git(root, "worktree", "prune")
+
+    async def delete_branch(self, name: str, *, protected_branches: list[str]) -> None:
+        """``git branch -D <name>`` in the main checkout.
+
+        Raises:
+            PermissionDenied: ``name`` matches a protected glob (``*`` also matches ``/``, as
+                in the guard hooks); nothing is run.
+            GitError: The branch does not exist or is checked out in a worktree.
+        """
+        matched = [glob for glob in protected_branches if fnmatch.fnmatchcase(name, glob)]
+        if matched:
+            msg = f"branch {name} is protected; deletion refused"
+            raise PermissionDenied(msg, detail={"branch": name, "protected": matched})
+        await self._git(str(self._repo_root), "branch", "-D", name)
 
     async def status(self, path: str) -> list[str]:
         """Dirty files of ``path`` (porcelain v1; untracked files listed individually)."""

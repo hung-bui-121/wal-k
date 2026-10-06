@@ -650,10 +650,19 @@ class CheckpointManager(Protocol):
     """§41, §54, §89; ADR-0002. Hosted by walk.runtime."""
 
     async def checkpoint(
-        self, run: AgentRun, kind: CheckpointKind, *, handover: Handover | None = None
+        self,
+        run: AgentRun,
+        kind: CheckpointKind,
+        *,
+        handover: Handover | None = None,
+        workflow_state: WorkItemState | None = None,
+        budget_consumed: dict[BudgetDimension, float] | None = None,
+        context_manifest: ContextBundleRef | None = None,
     ) -> Checkpoint:
         """1) WIP commit on run.branch (`wip(<work_item>): checkpoint <seq>`; skipped if clean) via GitProvider (idempotent key);
-        2) insert checkpoints row; 3) if handover given → MemoryManager.write_handover; 4) fire ON_AGENT_CHECKPOINT; ledger CHECKPOINT_CREATED."""
+        2) insert checkpoints row; 3) if handover given → MemoryManager.write_handover; 4) fire ON_AGENT_CHECKPOINT; ledger CHECKPOINT_CREATED.
+        E01-S25: `workflow_state` is required except for START and PAUSE (read from the work item); `budget_consumed` and
+        `context_manifest` default to empty."""
 
     async def latest(self, run_id: RunId) -> Checkpoint | None: ...
     async def latest_for_item(self, work_item_id: WorkItemId) -> Checkpoint | None: ...
@@ -1020,6 +1029,10 @@ class GitProvider(Protocol):
     async def ensure_branch(self, name: str, base: str, *, idempotency_key: str) -> str: ...
     async def add_worktree(self, path: str, branch: str) -> str: ...
     async def remove_worktree(self, path: str, *, force: bool = False) -> None: ...
+    async def delete_branch(self, name: str, *, protected_branches: list[str]) -> None:
+        """Local branch cleanup (SandboxManager.remove, E01-S25); PermissionDenied if `name` matches a protected glob —
+        deleting a protected branch is the protected action `git.delete_branch_protected` (ToolInvoker)."""
+
     async def status(self, path: str) -> list[str]:
         """Dirty files (porcelain)."""
 

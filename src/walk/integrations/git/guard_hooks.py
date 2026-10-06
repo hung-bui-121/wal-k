@@ -16,6 +16,21 @@ _KINDS: tuple[str, ...] = ("pre-commit", "pre-push")
 _SAFE_GLOB = re.compile(r"^[A-Za-z0-9*?][A-Za-z0-9._/*?-]*$")
 _INDENT = "    "
 
+# git shares one hooks folder between all worktrees of a repository, so the hooks must leave the
+# developer's own checkouts alone and only guard run worktrees under <repo>/.walk/worktrees/
+# (E01-S25). If git cannot answer (rev-parse fails) the hook keeps guarding: fail closed.
+_RUN_WORKTREE_SCOPE = """\
+walk_in_run_worktree() {
+    top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+    common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+    case "$top/" in
+        "${common%/.git}/.walk/worktrees/"*) return 0 ;;
+    esac
+    return 1
+}
+walk_in_run_worktree || exit 0
+"""
+
 _PRE_COMMIT_BODY = """\
 branch=$(git symbolic-ref --short -q HEAD) || exit 0
 walk_guard_check "$branch" "commit"
@@ -37,7 +52,10 @@ def render_guard_hook(kind: _HookKind, protected_branches: list[str]) -> str:
 
     ``pre-commit`` refuses a commit when the current branch matches a glob; ``pre-push``
     refuses a push whose target branch matches. Both exit 1 with a message on stderr. In a
-    glob, ``*`` also matches ``/`` (``case`` pattern semantics).
+    glob, ``*`` also matches ``/`` (``case`` pattern semantics). Both only act inside a run
+    worktree (top level under ``<repo>/.walk/worktrees/``) and exit 0 everywhere else, because
+    git shares the hooks folder with the developer's own checkouts (needs git ≥ 2.31 for
+    ``rev-parse --path-format``; when git cannot answer, the hook keeps guarding).
 
     Raises:
         ConfigError: Unknown hook kind, or a protected branch glob with characters other than
@@ -60,7 +78,8 @@ def render_guard_hook(kind: _HookKind, protected_branches: list[str]) -> str:
         "}",
     ]
     body = _PRE_COMMIT_BODY if kind == "pre-commit" else _PRE_PUSH_BODY
-    return "\n".join(lines) + "\n" + body
+    scope = _RUN_WORKTREE_SCOPE if protected_branches else ""  # nothing to guard otherwise
+    return "\n".join(lines) + "\n" + scope + body
 
 
 def _check_body(protected_branches: list[str]) -> list[str]:
