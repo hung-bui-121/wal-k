@@ -299,7 +299,7 @@ BLOCKED on 2026-10-06 (owner action required, not a planning gap):
 
 ### E01-S03 — SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup`
 
-**Status:** DONE (pending)
+**Status:** DONE (2edcc6c)
 **Type:** feat
 **Requirements:** §54, §81, §89, §137 (Inv. 9)
 **Depends on:** E01-S01
@@ -448,7 +448,7 @@ Level-0 decisions:
 
 ### E01-S04 — `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §54, §90, §137 (Inv. 9)
 **Depends on:** E01-S03
@@ -589,7 +589,24 @@ class IdempotencyStore:
 - Commit: `feat: add unit of work, repository base, id sequences and idempotency store (E01-S04)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+44 files already formatted
+All checks passed!
+Success: no issues found in 41 source files
+Required test coverage of 85% reached. Total coverage: 99.49%
+96 passed in 3.03s
+```
+Touched modules: `uow.py`, `repository.py`, `ids.py`, `idempotency.py` each 100%.
+
+Level-0 decisions (no contract change):
+- `id_sequences.next` stores the **next number to hand out**, as the column name says. Allocation is `INSERT … VALUES (?, 2) ON CONFLICT(prefix) DO UPDATE SET next = next + 1 RETURNING next - 1`. The first ID is still `-0001`.
+- `IdSequenceStore.bind()` returns a private bound subclass (`_BoundIdSequenceStore`), so the public constructor stays `IdSequenceStore(db)`. A view whose unit of work has ended raises `ConfigError` (from `UnitOfWork.conn`).
+- `UnitOfWork.conn` and `after_commit()` raise `ConfigError` outside an active unit of work. `BEGIN IMMEDIATE` that times out on the write lock raises `TransientError`. A failed `COMMIT` (for example a deferred foreign key) rolls back and re-raises the sqlite error, and no callbacks run. Statement errors from the body are not translated. Callbacks run after the unit of work is inactive, so a callback may open a new one. A failing callback propagates and skips the rest.
+- Nesting is detected with `conn.in_transaction`. Two coroutines that open units of work concurrently on one `Database` connection get `ConfigError("nested transaction")` instead of being serialized.
+- `__aenter__` is annotated `-> Self`, the typed form of `-> "UnitOfWork"` (ruff PYI034).
+- `Repository` uses PEP 695 syntax (`class Repository[T: WalkModel]`), the 3.12 equivalent of the `TypeVar`/`Generic[T]` sketch; `Repository[Widget]` usage is unchanged. The key column value is `getattr(obj, _key)`. Projection values are converted to SQLite types: `Enum` → value, `bool` → int, `datetime` → ISO 8601. `_table`, `_key` and projection column names must be plain identifiers (`ConfigError` otherwise). `where`/`order_by` are kernel-written SQL fragments, and values go through `params`. `insert` of a duplicate key raises `sqlite3.IntegrityError` untranslated.
+- `IdempotencyStore.run` on a key stored with `result_ref=None` raises `ConfigError`, because there is no result to replay.
 
 ---
 
