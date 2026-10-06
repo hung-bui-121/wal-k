@@ -1,0 +1,54 @@
+{# version: 1.0 #}
+# Task: {{ purpose }} {{ item.id }} — {{ item.title }}
+
+Produce the technical design for the work item: approach, affected systems, risks and the files to change. Record it as a context update of the feature or bug document.
+
+## How to work
+
+Work in this order (§40):
+
+1. Read the relevant context: the feature or bug document and the project context.
+2. Read the relevant decisions.
+3. Read the approved artifacts.
+4. Check the workflow state and the handover, if there is one.
+5. Use the code graph, when it is available, to find the code that matters.
+6. Open only the source files the task needs.
+7. Execute the task.
+
+Context items marked "VERIFY AGAINST SOURCE BEFORE RELYING ON THIS" may be stale. Check them
+against the source before you rely on them.
+
+## Deliverables
+
+{% for deliverable in expected_output.deliverables %}
+- {{ deliverable }}
+{% else %}
+- The result described in the task.
+{% endfor %}
+
+## Output contract
+
+As your last step, write `.walk/output.json`: one JSON object that matches
+`{{ expected_output.output_schema_ref }}`.
+
+- `status` is required and must be one of: {{ expected_output.status_options | join(", ") }}.
+- `result` summarises what you did, in Markdown.
+- Put what you learned about the project in `context_updates`. If you have nothing to add and
+  the status is not FAILED, set `no_context_change_reason` instead.
+{% if "PARTIAL" in expected_output.status_options %}
+- A PARTIAL status requires a `handover` that says what is done and what to do next.
+{% endif %}
+{% if "BLOCKED" in expected_output.status_options or "NEEDS_INPUT" in expected_output.status_options %}
+- A {{ expected_output.status_options | select("in", ["BLOCKED", "NEEDS_INPUT"]) | join(" or ") }} status requires at least one entry in
+  `escalations`.
+{% endif %}
+{% if expected_output.required_evidence %}
+- Declare this evidence in `evidence`: {{ expected_output.required_evidence | join(", ") }}.
+{% endif %}
+{% if handover %}
+
+## Handover
+
+You continue the work of an earlier run (handover {{ handover.id }}). Do not redo the completed
+work; continue from its Next Action: {{ handover.next_action }}
+{% endif %}

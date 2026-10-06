@@ -10,16 +10,15 @@ from walk.agents import (
     ConstitutionLoader,
     DefaultAgentManager,
     PolicyLoader,
+    TemplateRenderer,
 )
 from walk.budgets import BudgetDimension
-from walk.common.enums import Effort
-from walk.common.errors import ConfigError
 from walk.common.roles import AgentRole
 from walk.hooks import DefaultHookManager, HookExecutionRepository
 from walk.permissions import ApprovalRepository, DefaultPermissionManager
 from walk.persistence import Database, IdSequenceStore
 from walk.telemetry import DefaultLedgerManager, LedgerRepository
-from walk.workflow import Feature
+from walk.tools import DefaultToolRegistry, load_tool_specs
 
 DEFAULTS = Path(walk.agents.__file__).resolve().parent / "defaults"
 POLICIES = DEFAULTS / "policies.yaml"
@@ -84,7 +83,13 @@ def test_unknown_role_and_list_roles(db: Database, fake_clock: FakeClock) -> Non
     permissions = DefaultPermissionManager(
         [], [], ApprovalRepository(db), ledger, hooks, ids, fake_clock, project_key="DEMO"
     )
-    manager = DefaultAgentManager(constitutions, PolicyLoader(POLICIES, None), permissions)
+    manager = DefaultAgentManager(
+        constitutions,
+        PolicyLoader(POLICIES, None),
+        permissions,
+        DefaultToolRegistry(load_tool_specs([])),
+        TemplateRenderer(DEFAULTS.parent / "templates"),
+    )
     protocol: AgentManager = manager
     assert protocol.list_roles() == [
         AgentRole.ORCHESTRATOR,
@@ -94,22 +99,3 @@ def test_unknown_role_and_list_roles(db: Database, fake_clock: FakeClock) -> Non
     ]
     assert manager.load_constitution(AgentRole.QC).role is AgentRole.QC
     assert manager.load_runtime_policy(AgentRole.QC).role is AgentRole.QC
-
-
-async def test_execution_contract_methods_arrive_in_e01_s18(
-    db: Database, fake_clock: FakeClock
-) -> None:
-    ids = IdSequenceStore(db)
-    ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, fake_clock)
-    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, fake_clock)
-    permissions = DefaultPermissionManager(
-        [], [], ApprovalRepository(db), ledger, hooks, ids, fake_clock, project_key="DEMO"
-    )
-    manager = DefaultAgentManager(
-        ConstitutionLoader(DEFAULTS, None), PolicyLoader(POLICIES, None), permissions
-    )
-    feature = Feature(id="FEAT-0001", project_key="DEMO", title="Movement")
-    with pytest.raises(ConfigError, match="E01-S18"):
-        await manager.instantiate(DEV, feature, "codex/default", Effort.LOW, [], set())
-    with pytest.raises(ConfigError, match="E01-S18"):
-        manager.render_instructions(None, feature, "IMPLEMENT")  # type: ignore[arg-type]  # never reached

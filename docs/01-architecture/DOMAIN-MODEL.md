@@ -623,6 +623,8 @@ class CheckpointKind(StrEnum):
     END = "END"
 
 
+# Implemented in walk.agents.models (RELOCATE, E01-S18): AgentOutput.status needs it and agents
+# may not import runtime (ARCHITECTURE §2.2); walk.runtime.models re-exports it for readers.
 class AgentOutputStatus(StrEnum):
     """§126 Output.Status."""
 

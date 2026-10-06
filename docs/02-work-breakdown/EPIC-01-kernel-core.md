@@ -2444,7 +2444,7 @@ Level-0 decisions:
 
 ### E01-S18 — Agent execution contract: `AgentInput/AgentOutput/Handover`, templates, `instantiate`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.1, §9, §22, §29, §40 (section order), §126, §128, §137 (Inv. 1, 2)
 **Depends on:** E01-S14, E01-S16, E01-S17, E01-S24
@@ -2626,7 +2626,90 @@ Template skeleton (every purpose, identical structure, differing only in the pur
 - Commit subject: `feat: add agent execution contract, handover documents and prompt templates (E01-S18)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+209 files already formatted
+All checks passed!
+Success: no issues found in 207 source files
+Required test coverage of 85% reached. Total coverage: 99.95%
+672 passed in 48.67s
+```
+Touched modules: `agents/*` 100%, `debate/*` 100%.
+
+Demo: a script calls `instantiate(SENIOR_DEV, STORY-0001, "codex/default", MEDIUM, [], {"git"})` with the kernel defaults, then `render_instructions(agent, story, "IMPLEMENT")`. It prints the tools, the permission count, then the first 20 lines of the prompt:
+```
+tools: ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'git.commit']
+permissions: 16
+---
+# Task: IMPLEMENT STORY-0001 — Run with shift
+
+Implement the work item so that every acceptance criterion of its contract holds, with automated tests for the change. Commit-ready changes stay inside the worktree.
+
+## How to work
+
+Work in this order (§40):
+
+1. Read the relevant context: the feature or bug document and the project context.
+2. Read the relevant decisions.
+3. Read the approved artifacts.
+4. Check the workflow state and the handover, if there is one.
+5. Use the code graph, when it is available, to find the code that matters.
+6. Open only the source files the task needs.
+7. Execute the task.
+
+Context items marked "VERIFY AGAINST SOURCE BEFORE RELYING ON THIS" may be stale. Check them
+against the source before you rely on them.
+
+## Deliverables
+```
+
+The commit subject is shortened to `feat: add agent execution contract and prompt templates (E01-S18)`, because the prescribed subject has 85 characters and the hook allows 72.
+
+Contract changes (small, additive; see commit body):
+- **For owner attention:** `src/walk/debate/__init__.py` and `models.py` (`DebateState`, `DebatePosition`, `Debate`, DOMAIN-MODEL §3/§4.8 verbatim plus field descriptions) are created here, outside the Files table. `AgentInput.debate` and `AgentOutput.debate_position` (DOMAIN-MODEL §4.2 verbatim) need them, and the E05 refine task already expects "`src/walk/debate/models.py` + `__init__.py` exist (created by E01-S18)". This adds models only; the debate service stays in Epic 05.
+- `AgentOutputStatus` now lives in `walk.agents.models` (RELOCATE, story Notes). DOMAIN-MODEL §3 gains a placement note in the same style as `EffortPolicy`. The `walk.runtime.models` re-export arrives with the runtime package (E01-S25).
+- `TemplateRenderer.render(purpose, **context)` adds `purpose` to the template context itself. Callers cannot also pass a `purpose` keyword (Python rejects it), which is why `render_instructions` passes `item`, `agent`, `expected_output` and `handover`.
+
+Outside the Files table:
+- `tests/agents/conftest.py` holds the `Handover`/`AgentInput` builders shared by four test files.
+- `tests/agents/test_policy_loader.py` passes the extended constructor, and its E01-S17 placeholder test (`instantiate` raising "implemented in E01-S18") is replaced by this story's tests.
+
+Level-0 decisions:
+- Not included here: `TriageVerdict`, `AgentOutput.triage` and `AgentOutput.reopen_bugs`. DOMAIN-MODEL §4.2 already lists them, but they belong to E03-S15's Files table and were left for that story.
+- `AgentOutput` validation messages: `handover is required when status is PARTIAL`, `escalations must not be empty when status is <S>`, `no_context_change_reason is required when context_updates is empty`. An empty-string reason counts as missing.
+- Handover document:
+  - Front matter:
+    - `id` is the handover id and `title` is `Handover <HO> for <item>`.
+    - `extra` holds `work_item_id, role, from_run_id, from_model_id, to_run_id, reason, worktree_head, branch`, plus `created_at`. `created_at` is kept in `extra` because `MemoryManager.write` restamps `front_matter.created_at`, and without it the conversion would lose data.
+    - `related.work_items = [item]` and `related.decisions = decisions`.
+  - Sections:
+    - List fields are `- ` bullets, with continuation lines indented by two spaces, or `(none)` when empty.
+    - `Findings` holds the human bullets `- **summary** — detail (evidence: …)` plus a fenced JSON block of the full `Finding` list.
+    - `Decisions` holds id bullets, then `Proposed decisions:` and a fenced JSON block.
+  - Round-trip limitation: text fields (`Task`, `Current State`, `Next Action`) round-trip unless they start or end with blank lines or contain a line starting with `## `, both of which change the section structure. The rendered-file round trip (`render_document` → `parse_document` → `from_document`) is tested.
+  - `from_document` errors are `ConfigError` with `detail["key"]` naming the problem: `type`, a missing key or section, `reason`, a missing or invalid JSON block, or the first pydantic error location.
+- `render_constitution`:
+  - Starts with `# <identity>`, followed by one section per ADR-0013 D-3 heading. Each section lists the front-matter facts as bullets (e.g. `- decision_scope: TECH`, `- <condition> → level N (CATEGORY)`; empty lists become `- none`), followed by the same-named body prose.
+  - Other body sections (e.g. `Working Guidance`) follow in body order, then `## Project Constitution` when given.
+- `render_input_sections`:
+  - Role and effort are plain text. Every other value is fenced JSON (`model_dump(mode="json")`, `sort_keys`, indent 2).
+  - `Workflow State` is `{state, phase, run_id, branch, worktree_path}`.
+  - A debate is appended to `Task` as `### Debate`.
+  - `Relevant Context` starts with `head_commit:`, then one `### <kind> <id>` block per item in bundle order. Stale items carry the VERIFY marker line before their content. Headings inside item content are demoted by two levels outside code fences, so that documents cannot create `##` sections in the message.
+  - `instructions_markdown` is not repeated here; it is the separate task prompt.
+- Templates:
+  - jinja2 with `StrictUndefined`, `autoescape=False`, `keep_trailing_newline`, `trim_blocks` and `lstrip_blocks`.
+  - The first line `{# version: x.y #}` is required by `version_of`.
+  - A project template (`.ai/agents/templates/<PURPOSE>.md.j2`) shadows the kernel one through the loader search order.
+  - The output-contract lines for PARTIAL and BLOCKED/NEEDS_INPUT, and the required-evidence line, render only when they apply.
+  - No template names a provider.
+- `instantiate`:
+  - Required tools are the contract constraints `tool:<name>`, passed as `required` to `ToolRegistry.for_role`.
+  - Skills are the policy defaults followed by the contract skills, de-duplicated in order. With a `SkillRegistry`, `for_role(role, skills)` validates them.
+  - Feature and epic items have no contract, so they get no required tools and only the policy skills.
+- `render_instructions`:
+  - Status options and default deliverables come from a per-purpose table. IMPLEMENT allows COMPLETED, PARTIAL, BLOCKED and FAILED; REVIEW and QC allow APPROVED, REJECTED and NEEDS_INPUT; the other purposes allow COMPLETED, NEEDS_INPUT and FAILED.
+  - `required_evidence` comes from the contract.
 
 ---
 
@@ -3361,7 +3444,7 @@ Level-0 decisions:
 
 ### E01-S24 — Context manager skeleton: mandatory items, token budget, `ContextBundle`
 
-**Status:** DONE (pending)
+**Status:** DONE (4d0ccd9)
 **Type:** feat
 **Requirements:** §6.8, §40, §42 (flagging only), §43 (optional graph), §137 (Inv. 2), §138 (Hallucinated Project State, Excessive Context Cost)
 **Depends on:** E01-S08, E01-S16
