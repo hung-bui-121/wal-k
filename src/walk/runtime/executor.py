@@ -12,6 +12,7 @@ own unit of work; no transaction is held across an await on the adapter stream.
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -60,7 +61,7 @@ from walk.runtime.models import AgentRun, AgentRunState, Checkpoint, CheckpointK
 from walk.runtime.output_applier import DefaultOutputApplier
 from walk.runtime.protocols import BoundaryAuditor, SandboxManager
 from walk.runtime.repository import AgentRunRepository
-from walk.runtime.sandbox import branch_name_for
+from walk.runtime.sandbox import branch_name_for, scrubbed_env
 from walk.runtime.tool_invoker import DefaultToolInvoker
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
@@ -186,7 +187,7 @@ class DefaultAgentExecutor:
         kernel_instance: str,
         ready_env_keys: Callable[[], set[str]] = set,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        env_allowlist: Callable[[], dict[str, str]] = dict,
+        env_allowlist: Callable[[], dict[str, str]] | None = None,
         on_run_finished: Callable[[AgentRun], Awaitable[None]] | None = None,
         allowed_paths: tuple[str, ...] = DEFAULT_ALLOWED_PATHS,
         forbidden_paths: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS,
@@ -220,7 +221,8 @@ class DefaultAgentExecutor:
             ready_env_keys: Environment keys available to tools (native resume instances).
             sleep: Awaited between retries (`RETRY_DELAYS_S`); the composition root adds
                 jitter, tests inject a recorder.
-            env_allowlist: Environment of the run's subprocesses (scrubbed by E02-S01).
+            env_allowlist: Environment of the run's subprocesses; by default
+                ``scrubbed_env(os.environ)`` taken when the run starts (E02-S01).
             on_run_finished: Awaited after a run reached an end state (wakes the scheduler);
                 the composition root may bind it after construction.
             allowed_paths: Boundary audit allow globs.
@@ -252,7 +254,7 @@ class DefaultAgentExecutor:
         self._kernel_instance = kernel_instance
         self._ready_env_keys = ready_env_keys
         self._sleep = sleep
-        self._env_allowlist = env_allowlist
+        self._env_allowlist = env_allowlist or _agent_env
         self.on_run_finished = on_run_finished
         self._allowed_paths = list(allowed_paths)
         self._forbidden_paths = list(forbidden_paths)
@@ -1368,3 +1370,8 @@ def _reports_tool_calls_after_the_fact(adapter: ModelAdapter) -> bool:
     the post-hoc authorizer that never waits for approval (E01-S27 Notes).
     """
     return callable(getattr(adapter, "configure_sandbox", None))
+
+
+def _agent_env() -> dict[str, str]:
+    """The kernel environment reduced to `AGENT_ENV_ALLOWLIST` (ARCHITECTURE §6)."""
+    return scrubbed_env(os.environ)

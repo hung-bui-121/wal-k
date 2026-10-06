@@ -1,9 +1,13 @@
-"""Isolated git worktrees for agent runs (§60; ADR-0009 D-5, ADR-0006 D-1 enforcement point 4)."""
+"""Isolated git worktrees and scrubbed environments for agent runs.
+
+§60, §139; ADR-0009 D-5/D-8, ADR-0006 D-1 enforcement point 4.
+"""
 
 import fnmatch
 import logging
 import re
-from collections.abc import Awaitable, Callable
+import sys
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -16,10 +20,41 @@ _LOG = logging.getLogger(__name__)
 
 WORKTREES_DIR: Final = ".walk/worktrees"
 
+AGENT_ENV_ALLOWLIST: tuple[str, ...] = (
+    "PATH",
+    "HOME",
+    "TMP",
+    "TEMP",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "UNITY_*",
+)
+"""Environment keys an agent subprocess may see; a trailing ``*`` matches a key prefix."""
+
 _SLUG_MAX: Final = 30
 _NON_SLUG: Final = re.compile(r"[^a-z0-9]+")
 
 _PostCreate = Callable[[AgentRun, WorkItem, str], Awaitable[None]]
+
+
+def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
+    """Keys equal to an allowlist entry or matching a trailing-`*` glob; values copied verbatim.
+
+    Keys compare case-sensitively on POSIX and case-insensitively on Windows, where
+    environment variable names are case-insensitive.
+    """
+    fold = sys.platform == "win32"
+    exact = {_fold(e, fold=fold) for e in AGENT_ENV_ALLOWLIST if not e.endswith("*")}
+    prefixes = tuple(_fold(e[:-1], fold=fold) for e in AGENT_ENV_ALLOWLIST if e.endswith("*"))
+    return {
+        key: value
+        for key, value in os_env.items()
+        if (folded := _fold(key, fold=fold)) in exact or folded.startswith(prefixes)
+    }
+
+
+def _fold(key: str, *, fold: bool) -> str:
+    return key.upper() if fold else key
 
 
 def branch_name_for(item: WorkItem) -> str:

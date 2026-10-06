@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -16,6 +17,7 @@ from walk.model_router import OUTPUT_RELATIVE_PATH, AgentEvent, RunSession
 from walk.permissions import PermissionDecision, PermissionEffect, ToolCallRequest
 from walk.persistence import UnitOfWork
 from walk.runtime import RUN_TIMEOUT_S, build_run_session, expected_output_for
+from walk.runtime.sandbox import scrubbed_env
 from walk.telemetry import EvidenceKind, LedgerEventKind
 from walk.tools import ToolKind
 from walk.workflow import (
@@ -93,7 +95,7 @@ async def test_build_run_session_fields(
     assert session.effort is Effort.MEDIUM
     assert session.timeout_s == RUN_TIMEOUT_S
     assert session.max_turns == 50
-    assert session.env_allowlist == {}
+    assert session.env_allowlist == scrubbed_env(os.environ)
     request = ToolCallRequest(
         run_id="RUN-01J0000000000000000000ZZZZ",
         role=AgentRole.QC,

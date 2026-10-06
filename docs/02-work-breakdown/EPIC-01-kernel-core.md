@@ -6332,7 +6332,7 @@ ea4a1de wip(STORY-0002): checkpoint 2      (run A HANDOFF = worktree_head)
 
 ### E01-B06 — Architecture tests for module-level import cells and per-file process confinement
 
-**Status:** DONE (pending)
+**Status:** DONE (13ec3c1)
 **Type:** bugfix
 **Requirements:** §122, §137 (Inv. 1)
 **Depends on:** E01-R01

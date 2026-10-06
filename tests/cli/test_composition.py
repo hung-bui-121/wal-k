@@ -10,6 +10,7 @@ import pytest
 
 import walk
 from tests.cli.conftest import CODEX_MODEL, OverridesFactory, add_story, migrate
+from tests.fakes.fake_keyring import FakeKeyringBackend
 from walk.agents import AgentInput, ConstitutionLoader, ExpectedOutput, ModelPolicy
 from walk.cli.composition import (
     DEFAULT_READY_ENV_KEYS,
@@ -53,6 +54,7 @@ SERVICES = (
     "scheduler",
     "orchestrator",
     "status_builder",
+    "credentials",
 )
 SRC = Path(walk.__file__).resolve().parent
 AGENT_DEFAULTS = SRC / "agents" / "defaults"
@@ -124,6 +126,23 @@ async def test_build_kernel_wires_all_services_with_fakes(
         )
         assert decision.model_id == CODEX_MODEL
         assert handle.router.registry().models["codex/gpt-5-codex"].enabled is False
+    finally:
+        await handle.aclose()
+
+
+async def test_build_kernel_resolves_credentials_through_keyring_override(
+    kernel_repo: Path, fake_overrides: OverridesFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("JIRA_API_TOKEN", raising=False)
+    backend = FakeKeyringBackend({"JIRA_API_TOKEN": "from-fake-keyring"})
+    overrides = fake_overrides(keyring_backend=backend)
+
+    handle = build_kernel(KernelSettings(repo_path=kernel_repo), overrides=overrides)
+    try:
+        secret = handle.credentials.get("JIRA_API_TOKEN")
+        assert secret is not None
+        assert secret.get_secret_value() == "from-fake-keyring"
+        assert backend.calls == [("walk", "JIRA_API_TOKEN")]
     finally:
         await handle.aclose()
 

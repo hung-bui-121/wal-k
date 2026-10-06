@@ -9,6 +9,7 @@ offline CLI commands use.
 import asyncio
 import importlib.util
 import logging
+import os
 import random
 import shutil
 import uuid
@@ -44,10 +45,12 @@ from walk.effort import DefaultEffortManager, EffortRequest, StaticCostEstimator
 from walk.hooks import DefaultHookManager, HookExecutionRepository
 from walk.integrations import (
     AsyncioSubprocessRunner,
+    CredentialStore,
     GitCliProvider,
     GitProvider,
     SubprocessRunner,
 )
+from walk.integrations.credentials import KeyringBackend, SystemKeyringBackend
 from walk.memory import DefaultMemoryManager, MemoryIndexRepository, split_document
 from walk.model_router import (
     DefaultModelRouter,
@@ -167,6 +170,9 @@ class KernelOverrides(WalkModel):
     ready_env_keys: set[str] | None = Field(
         default=None, description="Environment keys available to tools."
     )
+    keyring_backend: SkipValidation[KeyringBackend | None] = Field(
+        default=None, description="Replaces the OS keyring behind the CredentialStore."
+    )
 
 
 class KernelHandle:
@@ -201,6 +207,7 @@ class KernelHandle:
         scheduler: Scheduler,
         orchestrator: DefaultOrchestrator,
         status_builder: StatusBuilder,
+        credentials: CredentialStore,
     ) -> None:
         """Hold the wired services (built by `build_kernel` only)."""
         self.settings = settings
@@ -229,6 +236,7 @@ class KernelHandle:
         self.scheduler = scheduler
         self.orchestrator = orchestrator
         self.status_builder = status_builder
+        self.credentials = credentials
         self._closed = False
 
     async def aclose(self) -> None:
@@ -266,6 +274,7 @@ def build_kernel(
     key = project.key
     instance = o.kernel_instance or str(uuid.uuid4())
     ready_env_keys = o.ready_env_keys if o.ready_env_keys is not None else _ready_env_keys()
+    credentials = CredentialStore(os.environ, o.keyring_backend or SystemKeyringBackend())
     ids = IdSequenceStore(db)
     ulids: IdFactory = o.id_factory or ids
     idempotency = IdempotencyStore(db, clock)
@@ -368,7 +377,6 @@ def build_kernel(
         kernel_instance=instance,
         ready_env_keys=lambda: set(ready_env_keys),
         sleep=sleep,
-        env_allowlist=dict,
         prompt_version=renderer.version_of,
     )
     recovery = RecoveryManager(
@@ -458,6 +466,7 @@ def build_kernel(
         scheduler=scheduler,
         orchestrator=orchestrator,
         status_builder=status_builder,
+        credentials=credentials,
     )
 
 

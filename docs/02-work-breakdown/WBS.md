@@ -424,8 +424,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-B03 | A fallback or recovery continuation measures `has_commit` from the lineage start | bugfix | E01-R01 | LOW | DONE (db8d4ec) |
 | E01-B04 | `AGENT_RUN_ENDED` carries `handover_in_id` so `failed_handoffs` counts real runs | bugfix | E01-R01 | LOW | DONE (12fcc3f) |
 | E01-B05 | The handover document matches its row and its HANDOFF checkpoint | bugfix | E01-R01 | LOW | DONE (f581938) |
-| E01-B06 | Architecture tests for module-level import cells and per-file process confinement | bugfix | E01-R01 | LOW | DONE (pending) |
-| E02-S01 | `CredentialStore` and agent environment allowlist | feat | E01-S23, E01-S25 | MEDIUM | TODO |
+| E01-B06 | Architecture tests for module-level import cells and per-file process confinement | bugfix | E01-R01 | LOW | DONE (13ec3c1) |
+| E02-S01 | `CredentialStore` and agent environment allowlist | feat | E01-S23, E01-S25 | MEDIUM | DONE (pending) |
 | E02-S02 | Environment preflight and `EnvironmentManifest`, `walk doctor` (basic) | feat | E02-S01, E01-S14 | HIGH | TODO |
 | E02-S03 | `walk bootstrap`: Production Kit generation and `.ai/` initialisation | feat | E02-S02, E01-S16, E01-S17 | HIGH | TODO |
 | E02-S04 | `kernel-versions.yaml` and behavior-version pins | feat | E02-S03 | MEDIUM | TODO |

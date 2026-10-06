@@ -4,7 +4,7 @@ import importlib
 import json
 import sys
 import types
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -534,9 +534,12 @@ async def test_sdk_client_without_sdk_reports_and_raises(monkeypatch: pytest.Mon
 class _StubSdkClient:
     """Stand-in `claude_agent_sdk.ClaudeSDKClient`; records what `SdkClaudeClient` does."""
 
-    def __init__(self, record: dict[str, Any], *, options: types.SimpleNamespace) -> None:
+    def __init__(
+        self, record: dict[str, Any], *, options: types.SimpleNamespace, transport: object
+    ) -> None:
         self.record = record
         self.options = options
+        self.transport = transport
         record["client"] = self
         record["calls"] = []
 
@@ -571,6 +574,17 @@ def _stub_deny(message: str, *, interrupt: bool = False) -> types.SimpleNamespac
     return types.SimpleNamespace(message=message, interrupt=interrupt)
 
 
+def _stub_transport(record: dict[str, Any]) -> Callable[[Any, Mapping[str, str]], object]:
+    """A transport factory that records its arguments instead of preparing a CLI process."""
+
+    def build(sdk_options: Any, env: Mapping[str, str]) -> object:
+        transport = types.SimpleNamespace(options=sdk_options, env=dict(env))
+        record["transport"] = transport
+        return transport
+
+    return build
+
+
 def _stub_sdk(tmp_path: Path, record: dict[str, Any]) -> types.ModuleType:
     """A stand-in `claude_agent_sdk` with the attributes `SdkClaudeClient` uses."""
     module = types.ModuleType("claude_agent_sdk")
@@ -587,7 +601,7 @@ async def test_sdk_client_maps_options_and_permission_results(
 ) -> None:
     record: dict[str, Any] = {}
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", _stub_sdk(tmp_path, record))
-    client = SdkClaudeClient()
+    client = SdkClaudeClient(transport_factory=_stub_transport(record))
     record["sdk_client"] = client
     options = ClaudeQueryOptions(
         cwd=str(tmp_path),
@@ -624,6 +638,9 @@ async def test_sdk_client_maps_options_and_permission_results(
     assert sdk_options.env == {"PATH": "x"}
     assert sdk_options.output_format == {"type": "json_schema", "schema": {"type": "object"}}
     assert sdk_options.setting_sources == []
+    assert record["client"].transport is record["transport"]
+    assert record["transport"].options is sdk_options
+    assert record["transport"].env == {"PATH": "x"}
     assert record["allow"].updated_input is None
     assert record["deny"].message == "no shell"
     assert record["deny"].interrupt is False
@@ -637,7 +654,7 @@ async def test_sdk_client_interrupts_active_session(
 ) -> None:
     record: dict[str, Any] = {}
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", _stub_sdk(tmp_path, record))
-    client = SdkClaudeClient()
+    client = SdkClaudeClient(transport_factory=_stub_transport(record))
     record["sdk_client"] = client
     options = ClaudeQueryOptions(
         cwd=".",

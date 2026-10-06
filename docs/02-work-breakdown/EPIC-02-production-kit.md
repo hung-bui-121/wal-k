@@ -40,7 +40,7 @@ Parallel sets (WBS.md §8): `{S05→S06→S07} ∥ {S08→S09} ∥ {S10→S11→
 
 ### E02-S01 — `CredentialStore` and agent environment allowlist
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §91, §26, §139
 **Depends on:** E01-S23, E01-S25
@@ -62,9 +62,13 @@ Secrets are resolved only through `CredentialStore` (environment → OS keyring 
 | `src/walk/runtime/sandbox.py` | modify | `AGENT_ENV_ALLOWLIST`, `scrubbed_env` |
 | `src/walk/runtime/executor.py` | modify | — (passes `scrubbed_env(os.environ)` into `RunSession.env_allowlist`) |
 | `src/walk/cli/composition.py` | modify | — (constructs `CredentialStore`, adds `KernelOverrides.keyring_backend`) |
+| `src/walk/model_router/adapters/claude/transport.py` | create | `scrubbed_transport` (binding Note: the CLI process gets exactly the scrubbed mapping) |
+| `src/walk/model_router/adapters/claude/client.py` | modify | — (`SdkClaudeClient(transport_factory=...)`; every query runs on `scrubbed_transport`) |
 | `tests/fakes/fake_keyring.py` | create | `FakeKeyringBackend` |
 | `tests/integrations/test_credentials.py` | create | — |
 | `tests/runtime/test_sandbox_env.py` | create | — |
+| `tests/model_router/adapters/claude/test_transport.py` | create | — |
+| `tests/model_router/adapters/claude/test_adapter.py` | modify | — (SDK stub accepts the `transport` argument) |
 
 #### Interface contract
 ```python
@@ -147,11 +151,52 @@ def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
 #### Notes
 - Binding (E01-R01 planner note, confirmed by ADR-0014 sources): the Claude Agent SDK's `env` option is *merged onto* the inherited process environment, so passing `scrubbed_env(...)` as `env` scrubs nothing. For Claude, pass the SDK a custom `transport` (the `query(..., transport=...)` parameter, ADR-0014 SDK table) that launches the CLI subprocess with exactly `scrubbed_env(os.environ)` and does not inherit `os.environ`; keep the transport inside `src/walk/model_router/adapters/claude/` (add it to the Files table there as `create`). Add a test mirroring the Codex one: a sentinel secret variable in the kernel's environment is absent from the environment the Claude transport passes to its subprocess.
 - ADR-0009 D-8; ARCHITECTURE §6 "Secret isolation".
-- `NEW NAME:` `KeyringBackend`, `SystemKeyringBackend`, `CREDENTIAL_NAMES`, `KEYRING_SERVICE`, `AGENT_ENV_ALLOWLIST`, `scrubbed_env`, `KernelOverrides.keyring_backend`.
+- `NEW NAME:` `KeyringBackend`, `SystemKeyringBackend`, `CREDENTIAL_NAMES`, `KEYRING_SERVICE`, `AGENT_ENV_ALLOWLIST`, `scrubbed_env`, `KernelOverrides.keyring_backend`; from the binding Note: `walk.model_router.adapters.claude.transport` (`scrubbed_transport`, `TRANSPORT_MODULE`), `SdkClaudeClient(transport_factory=...)` with `TransportFactory`, `KernelHandle.credentials`.
 - Commit subject: `feat: add credential store and scrubbed agent environment (E02-S01)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`):
+```
+340 files already formatted
+All checks passed!
+Success: no issues found in 338 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.89%
+1037 passed, 3 deselected in 392.96s
+```
+Touched modules: `integrations/credentials.py` 100 %, `integrations/__init__.py` 100 %, `runtime/sandbox.py` 100 %, `runtime/executor.py` 99 % (lines 691, 710, 1127-1128 were already uncovered before this story), `model_router/adapters/claude/transport.py` 100 %, `model_router/adapters/claude/client.py` 100 %, `cli/composition.py` 100 %.
+
+Demo:
+```
+$ uv run python -c "from walk.integrations import CredentialStore; print(CredentialStore({'JIRA_EMAIL':'a@b'}, None).presence()['JIRA_EMAIL'])"
+ready
+$ uv run python -c "...; print(repr(CredentialStore({'JIRA_EMAIL':'a@b'}, None).presence()['JIRA_EMAIL']))"
+<ReadinessState.READY: 'ready'>
+```
+(`ReadinessState` is a `StrEnum`, so `print` shows the value `ready`; the member is `ReadinessState.READY`.)
+
+Claude transport, checked against the real `claude-agent-sdk 0.2.163` in a throw-away environment (`uv run --with claude-agent-sdk`, scratch script, not committed; no login, no model call). `ANTHROPIC_API_KEY=sentinel-secret` was set in the kernel process. The transport's `_build_command` was replaced by a Python one-liner that prints the names of its environment variables:
+```
+command flags ok: True True          (--permission-prompt-tool stdio is in the real CLI command)
+child env keys: ['HOME', 'PATH', 'SYSTEMROOT', 'TEMP', 'TMP', 'USERPROFILE']
+secret leaked: False
+```
+
+Level-0 decisions:
+- **Claude transport** (binding Note). `scrubbed_transport(options, env, *, module=None)` in `model_router/adapters/claude/transport.py` subclasses the SDK's `SubprocessCLITransport` lazily, because the SDK is an optional extra. It overrides only `connect`, which spawns the CLI with exactly `env`. The command line, framing and `close` stay the SDK's.
+  - The SDK protocol markers that the default transport adds (`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_AGENT_SDK_VERSION`, `CLAUDE_CODE_SDK_READS_SESSION_STATE`, `PWD`) are not added. The CLI gets exactly the scrubbed mapping, as the Note requires. The SDK's `Query` handles a CLI without session-state events.
+  - The SDK's optional `claude -v` version probe is skipped. It would run with the inherited environment, and it only logs a warning.
+  - As the SDK does for its own transport, a set `can_use_tool` makes the transport's options carry `permission_prompt_tool_name="stdio"`. `ClaudeSDKClient` does not apply the options to a custom transport.
+  - `SdkClaudeClient` gets the keyword `transport_factory` (default `scrubbed_transport`), so tests inject a recorder. `ClaudeQueryOptions.env` now documents that nothing is inherited.
+  - Risk: the subclass relies on SDK private members (`_find_cli`, `_reject_windows_batch_cli`, `_build_command`, `_process`, `_cli_path`, `_cwd`, `_stdout_stream`, `_stdin_stream`, `_ready`) and on the module globals `anyio`, `PIPE`, `TextReceiveStream`, `TextSendStream`. `claude-agent-sdk` is not pinned. `tests/model_router/adapters/claude/test_transport.py::test_real_sdk_transport_has_the_overridden_members` (`@pytest.mark.integration`) guards this on SDK upgrades.
+- **AC 8** runs the real `DefaultAgentExecutor` (runtime `make_executor_env` harness) with a real `CodexAdapter` over `FakeCodexProcessLauncher` instead of `FakeSubprocessRunner`. The Codex adapter launches through `CodexProcessLauncher` (E01-S22), so that launcher is the spawn point to capture. `ANTHROPIC_API_KEY`/`JIRA_API_TOKEN` set in `os.environ` are absent from the launch env, and `UNITY_EDITOR_PATH` is kept.
+- `DefaultAgentExecutor(env_allowlist=None)` now defaults to `scrubbed_env(os.environ)`, evaluated when each run starts. The composition root no longer passes `dict`. `tests/runtime/test_inputs.py::test_build_run_session_fields` had pinned the old empty environment and now asserts `scrubbed_env(os.environ)`.
+- `CredentialStore` keeps a reference to the env mapping (it reads `os.environ` live), and an empty keyring value counts as absent. A keyring failure is logged with `credential` and `error_type` only, never the message. `present()` also raises `ConfigError` for unknown names.
+- `KernelHandle.credentials` holds the store, for `walk doctor` (E02-S02) and the Jira provider (E03-S04).
+
+For the owner / architect:
+- With the scrubbed environment, `ANTHROPIC_API_KEY` resolved by `CredentialStore` never reaches the Claude CLI. Claude runs authenticate only through the CLI's own login (`claude login`), as Codex does. ARCHITECTURE §6 "Secret isolation" still says "Claude SDK runs inside the kernel process". The SDK actually spawns the Claude Code CLI as a subprocess, which this story now scrubs.
+- On Windows the CLI child may need variables that are not in `AGENT_ENV_ALLOWLIST` (for example `APPDATA`, `LOCALAPPDATA`, `PATHEXT`, `COMSPEC`). The allowlist is fixed by this story. The `@pytest.mark.integration` round-trip tests of E01-S21/S22 settle this on the owner's machine.
 
 ---
 

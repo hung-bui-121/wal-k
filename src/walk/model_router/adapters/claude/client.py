@@ -8,7 +8,7 @@ talks to the `ClaudeClient` protocol and treats SDK messages as opaque `SdkMessa
 import importlib
 import shutil
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Final, Protocol
@@ -18,10 +18,13 @@ from pydantic import Field
 from walk.common.errors import ConfigError
 from walk.common.ids import ModelId
 from walk.common.models import FrozenModel, JsonDict
+from walk.model_router.adapters.claude.transport import scrubbed_transport
 
 SdkMessage = object  # opaque SDK message; translate_message inspects type name + attributes
 CommandProbe = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
 """Runs a short command; returns (exit code, stdout, stderr). Wired by the composition root."""
+TransportFactory = Callable[[Any, Mapping[str, str]], object]
+"""Builds the SDK transport of one query from its SDK options and the exact CLI environment."""
 
 _SDK_MODULE: Final = "claude_agent_sdk"
 _CLI_NAME: Final = "claude.exe" if sys.platform == "win32" else "claude"
@@ -50,7 +53,9 @@ class ClaudeQueryOptions(FrozenModel):
     max_turns: int = Field(description="Turn limit of the query.")
     system_prompt: str = Field(description="Kernel system prompt (constitution and contract).")
     effort: str = Field(description="low | medium | high | xhigh | max")
-    env: dict[str, str] = Field(description="Environment of the Claude Code process.")
+    env: dict[str, str] = Field(
+        description="Complete environment of the Claude Code process (nothing is inherited)."
+    )
     resume: str | None = Field(default=None, description="Session id to resume.")
     output_schema: JsonDict | None = Field(
         default=None, description="AgentOutput JSON schema for SDK structured output."
@@ -81,15 +86,24 @@ class ClaudeClient(Protocol):
 class SdkClaudeClient:
     """`ClaudeClient` backed by `claude_agent_sdk.ClaudeSDKClient`."""
 
-    def __init__(self, *, probe: CommandProbe | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        probe: CommandProbe | None = None,
+        transport_factory: TransportFactory = scrubbed_transport,
+    ) -> None:
         """Start with no active sessions.
 
         Args:
             probe: Runs ``claude --version`` for `available`; without it the CLI is only
                 located.
+            transport_factory: Transport of every query; the default launches the CLI with
+                exactly ``ClaudeQueryOptions.env`` (the SDK's own transport would merge it
+                onto the kernel's environment, E02-S01).
         """
         self._active: dict[str, Any] = {}
         self._probe = probe
+        self._transport_factory = transport_factory
 
     async def query(
         self,
@@ -111,7 +125,9 @@ class SdkClaudeClient:
                 return sdk.PermissionResultAllow(updated_input=result.get("updatedInput"))
             return sdk.PermissionResultDeny(message=str(result.get("message", "")), interrupt=False)
 
-        client = sdk.ClaudeSDKClient(options=_sdk_options(sdk, options, callback))
+        sdk_options = _sdk_options(sdk, options, callback)
+        transport = self._transport_factory(sdk_options, options.env)
+        client = sdk.ClaudeSDKClient(options=sdk_options, transport=transport)
         session_id: str | None = None
         await client.connect()
         try:
