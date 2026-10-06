@@ -5280,7 +5280,7 @@ Level-0 decisions:
 
 ### E01-S31 — Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts
 
-**Status:** DONE (pending)
+**Status:** DONE (45a54cf)
 **Type:** feat
 **Requirements:** §6.1, §21, §22, §41, §54, §81, §86, §87, §89, §122, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12), §138 (Model Lock-In)
 **Depends on:** E01-S30, E01-S21, E01-S22
@@ -5589,7 +5589,7 @@ Observations for E01-R01 (behaviour seen in the gate, not changed here):
 
 ### E01-R01 — Review E01
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** docs
 **Requirements:** §6.1, §21–§23, §31, §41, §54, §81, §86, §89, §90, §125, §126, §135 (Stage 1 exit), §137 (Inv. 1, 2, 9, 12)
 **Depends on:** E01-S31
@@ -5650,5 +5650,514 @@ Reviewer protocol: `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` "Reviewer pro
 - Commit subject: `docs: review epic 01 stories s01-s31 (E01-R01)`.
 
 #### Evidence (filled by implementer)
+Reviewer: a separate agent instance from the E01 implementers (reviewer protocol, §23). Reviewed range `54f3361..45a54cf` (E01-S01…S31) on `main`. No production code was changed by this review, and no tests were added.
+
+**Quality gate on `main` at `45a54cf`** (`sh scripts/check.sh`, before the review edits):
+```
+333 files already formatted
+All checks passed!
+Success: no issues found in 331 source files
+Contracts: 20 kept, 0 broken.      (18 package rows + "nothing imports cli" + "only the composition root wires service.py")
+Required test coverage of 85% reached. Total coverage: 99.97%
+1003 passed, 2 deselected in 334.47s
+```
+The only module under 100 % is `persistence/migrations.py` at 97 % (3 lines). Every touched module is at or above 90 %.
+
+**Defects found: six bugfix stories** (appended below this task, and added to WBS §5 as TODO):
+
+| ID | Title | Severity | Blocks E02 |
+|---|---|---|---|
+| E01-B01 | Release or adopt a finished run's worktree so the item's next run can start | BLOCKER (Risk HIGH) | **yes** |
+| E01-B02 | Recovery re-creates a missing worktree and ends a failed recovery completely | MAJOR (Risk MEDIUM) | no |
+| E01-B03 | A fallback or recovery continuation measures `has_commit` from the lineage start | MAJOR (Risk MEDIUM) | no |
+| E01-B04 | `AGENT_RUN_ENDED` carries `handover_in_id` so `failed_handoffs` counts real runs | MAJOR (Risk MEDIUM) | no |
+| E01-B05 | The handover document matches its row and its HANDOFF checkpoint | MINOR (Risk LOW) | no |
+| E01-B06 | Architecture tests for module-level import cells and per-file process confinement | MINOR (Risk LOW) | no |
+
+E01-B01 is the only BLOCKER. When a run COMPLETES, it keeps its worktree checked out on the item's branch. The item's next run without a parent (REVIEW, REWORK, or a retry after FAILED) calls `SandboxManager.create`. `git worktree add` then refuses the branch, and the run ends `FAILED` (`prepare: git command failed`). By then the scheduler has already raised the admission event and stored the schedule key, so the item is stuck with no run. This was reproduced with a scratch test that was not committed (first run COMPLETED, item READY_FOR_REVIEW, second `start` → FAILED `prepare: git command failed`). The REVIEW run for the story never starts, so Invariant 4 (verification by a different role) can never happen. E02-S06/S14 also build on `SandboxManager`. WBS §2 rule 2 therefore holds E02 until E01-B01 is DONE.
+
+**Checklist per story** (Behavior 1). Method:
+- A script diffs `git show --name-only <sha>` against each story's Files table and checks the subject against the story's `Commit subject:` line.
+- Every AC node id is checked against `pytest --collect-only` (446 AC node ids, 1005 collected tests).
+- An AST scan checks that every public top-level name in `src/walk` is named in EPIC-01, the architecture docs or the NAME-REGISTER.
+- An AST scan checks that every pydantic field has `description=`.
+
+Rules applied:
+- "Extras" means files outside the Files table other than EPIC-01/WBS (the status update). Every extra is justified in the commit body or in the story Evidence unless noted.
+- "Subj" means the subject was shortened from the story's `Commit subject:` line because that line is longer than the hook's 72 characters (planner note P4).
+
+| Story | Sha | DoD | Notes | Defects |
+|---|---|---|---|---|
+| E01-S01 | 54f3361 | OK | extras: IMPLEMENTATION-PROTOCOL (DONE (pending) rule, in body), validate_wbs.py (in body). `uv.lock` (generated) and `build_name_register.py` are not mentioned (process note only) | — |
+| E01-S02 | 4a82edc | OK | subject lower-cases `ADR-0014` (cosmetic). Extras in body | — |
+| E01-S03 | 2edcc6c | OK | Subj, no commit body. `migrations/__init__.py` deliberately not created (shadows `migrations.py`; Evidence) | — |
+| E01-S04 | 1513909 | OK | Subj, no commit body | — |
+| E01-S05 | 68e1158 | OK | INTERFACES/DOMAIN-MODEL updated in the same commit | — |
+| E01-S06 | ece9b6f | OK | Subj. Extras in body | E01-B04 (metric side) |
+| E01-S07 | eb4f3e8 | OK | — | — |
+| E01-S08 | dff4ff5 | OK | ADR-0018 plus extras in body | — |
+| E01-S09 | 459669b | OK | Subj. Extras in body | — |
+| E01-S10 | 1a3924a | OK | Subj. Extras in body | — |
+| E01-S11 | 7b73aef | OK | Subj. Extras in body | — |
+| E01-S12 | 4b56802 | OK | extras in body | — |
+| E01-S13 | b5d5637 | OK | ADR-0019 in body | — |
+| E01-S14 | 35f190d | OK | Subj. `ToolName` pattern fix in body | — |
+| E01-S15 | 0a4983a | OK | — | — |
+| E01-S16 | f19104b | OK | extras in body | — |
+| E01-S17 | e6a19fc | OK | Subj. `split_document` in body | — |
+| E01-S18 | 3041e3d | OK | Subj. `walk.debate` models in body | — |
+| E01-S19 | 627600b | OK | — | — |
+| E01-S20 | 5dc2131 | OK | — | — |
+| E01-S21 | e24d5e4 | OK | — | — |
+| E01-S22 | 5bce0a2 | OK | `tests/fixtures/__init__.py` in body | — |
+| E01-S23 | ce79967 | OK | Subj. `IdempotencyStore.db` in body | — |
+| E01-S24 | 4d0ccd9 | OK | Subj. `transitions` ordering change in body | — |
+| E01-S25 | 65bdf50 | OK | Subj | E01-B01, E01-B05 |
+| E01-S26 | edbb0ed | OK | Subj | — |
+| E01-S27 | 406b6d9 | OK | Subj. AC 18 `test_resume_native_deferred` was removed by S28 as superseded (deferred-method pattern, S28 Notes) | E01-B01, E01-B04 |
+| E01-S28 | 15a4cc9 | OK | Subj. Superseded tests listed in body | E01-B02, E01-B03, E01-B05 |
+| E01-S29 | 7120b93 | OK | extras in body | — |
+| E01-S30 | 5ea17d3 | OK | Subj. Extras in body | — |
+| E01-S31 | 45a54cf | OK | extras in body and Evidence | E01-B06 |
+
+Every story had its Evidence filled. Status and the WBS row changed in the delivering commit. All 446 AC node ids exist and pass, except the superseded S27 AC 18 noted above.
+
+Public names missing from every doc (Level-0, accepted):
+- typer annotation aliases `RepoOption`/`JsonOption` (cli);
+- `cmd_work.list_items` (the `walk work list` command, named to avoid shadowing `list`);
+- the type alias `orchestrator.status.PendingApprovals`.
+
+Pydantic fields without `description=`: only private YAML-row models (`_RawRow`, `_ScheduledState`, `_Row`, `_ToolFile`, `_PolicyFile`). Allowed for private helpers.
+
+Determinism: tests contain short polling sleeps (cli/daemon, orchestrator, executor), the 1 ms ULID ordering gap (S01 AC 1) and a real subprocess timeout (`tests/integrations/test_subprocess.py`). None asserts on wall-clock values. Accepted.
+
+**Invariant audits** (Behavior 2–5):
+- **Inv. 1 (Role ≠ Model).**
+  - `lint-imports` and `ruff check` are clean.
+  - `grep -rnE "(if|elif|match|case|==|!=).*role" src/walk/model_router/adapters` finds only codex `if role is None` (unknown resume thread → `NotResumable`). Adapters pass `role` through to `ToolCallRequest` and never branch on its value.
+  - The system prompt comes only from the injected builder (`claude/adapter.py:158`).
+  - `test_role_is_independent_of_model` passes (R01 AC 4).
+- **Inv. 2 (Project Knowledge ≠ Model Context).** `grep -rnE "write_text|write_bytes|open\(|replace\(|rename\(|mkdir|unlink|shutil\." src/walk`, outside `memory/` and `persistence/`, finds:
+  - `telemetry/service.py`: EvidenceManager copies files under `.ai/<features|bugs|phases>/<id>/evidence/` (atomic `.partial` + replace). E01-S06 Behavior 4 specifies this, so it is not a code defect, but it contradicts CONVENTIONS §2 "no other module writes under `.ai/`" (architect table A6).
+  - `codex/adapter.py` writes the prompt and schema to `<worktree>/.walk/`, which is excluded from WIP commits (`:(exclude).walk/**`).
+  - `git/provider.py` writes guard hooks into `.git/hooks`.
+  - `telemetry/logging.py` writes to `.walk/logs/`.
+  - `cli` opens `.ai/kernel.db` and `kernel.lock` (allowed).
+  - Adapters drop reasoning: the E01-S19/S21/S22 tests pass. `TEXT` events are never persisted: the E01-S27 AC 6 test and the gate's `test_continuation_does_not_depend_on_session` (R01 AC 6) pass.
+- **Inv. 9 (auditable).** Every `LedgerManager.append` call site was mapped (`grep -rn "LedgerEventKind\.[A-Z_]*" -o src/walk`):
+  - All of them match ARCHITECTURE §4.3 or a documented exception: `CHECKPOINT_CREATED` in `CheckpointManager` (S25), `RecoveryManager` (S28), and `PROJECT_STARTED` in `DefaultOrchestrator.start` (now in §4.3).
+  - Three are specified by their stories but missing from §4.3: `EFFORT_CHANGED` in `effort.EffortManager` (S13 rule 4d), `HANDOVER_CREATED` in `memory.MemoryManager.write_handover` (S16 rule 4), and `PHASE_GATE_DECISION` in `workflow.lifecycle` (S11 rule 5, moved to `orchestrator.PhaseGate` in E07-S05). See architect table A7.
+  - `telemetry/repository.py` has no UPDATE/DELETE.
+  - `0001_init.sql` has the `ledger_events_no_update`/`_no_delete` triggers, plus immutability triggers on transitions, checkpoints, cost_records and evidence.
+  - `test_ledger_complete_and_immutable` passes (R01 AC 5).
+  - One-start-one-end gap: a run whose recovery raises is set FAILED without `AGENT_RUN_ENDED` after its `AGENT_RUN_STARTED` → **E01-B02**.
+- **Inv. 12 (continuity).**
+  - All six `CheckpointKind` values are produced by tests: START, PERIODIC, AGENT_REQUESTED (`test_executor.py:194`), HANDOFF, PAUSE, END.
+  - Every WIP commit carries `Walk-Work-Item` (`commit_all(trailer_work_item=…)`, S25 AC 9, gate AC 2).
+  - The fallback gate test and the 7 recovery tests pass. `HO-0001.md` has the 10 §22 sections (gate AC 3).
+  - Gaps: a verify-only continuation is guard-rejected (**E01-B03**, reproduced: `RUN FAILED guard_rejected: … has_commit is false`). Recovery cannot continue when the worktree was deleted (**E01-B02**).
+
+**Deferred-method audit** (Behavior 6):
+- `grep -rn "implemented in E\|Not available before\|available from E\|until E0" src/walk` finds IDs E02-S02, E02-S03, E02-S05, E02-S09, E02-S10, E02-S11, E03-S01, E03-S05, E03-S17, E04-S03, E06-S06, E06-S07. Each is present in WBS §5.
+- An AST scan found no `NotImplementedError` and no `pass`/`...`-only function bodies outside `Protocol` classes.
+
+**Consistency checks** (Behavior 7):
+- `runtime/inputs.py::_STATUS_OPTIONS` (E01-S27) and `agents/service.py` (E01-S18 rule 8) agree for all nine purposes: IMPLEMENT → COMPLETED/PARTIAL/BLOCKED/FAILED; REVIEW/QC → APPROVED/REJECTED/NEEDS_INPUT; others → COMPLETED/NEEDS_INPUT/FAILED. The table is duplicated and no test pins the two copies together (planner note P6).
+- The composition root is the only module that wires `service.py` implementations of several packages (contract "only the composition root wires service.py" KEPT). `cli/cmd_ledger.py` wires only `DefaultLedgerManager`. `orchestrator/scheduler.py` and `service.py` type their parameters with the concrete `DefaultAgentExecutor`/`DefaultCheckpointManager`, as the E01-S29 contract specifies (architect table A8).
+
+**Implementer-flagged items, decided:**
+
+| Item | Decision | Rationale |
+|---|---|---|
+| import-linter checks package cells only; `Default*` reachable via `__init__` re-exports | defect → E01-B06 | R01 AC 7 requires every forbidden edge to be enforced. An AST scan run in this review found no current module-cell violation (the scanner was checked by disabling the named-cell exceptions, which gives 13 hits), so the severity is MINOR |
+| ruff TID251 allowances are per file, not per banned module | defect → E01-B06 | Same gap: `cli/**` and `adapters/claude/**` could spawn processes without a lint error. None does today (`grep -rn "import subprocess" src/walk` → only `codex/process.py`) |
+| `sqlite3` confinement not enforced | accepted, architect A5 | Four repositories outside `persistence` (`memory`, `runtime`, `telemetry`, `workflow`) import `sqlite3` only for annotations (`Connection`, `Row`). No `sqlite3.connect` exists outside `persistence`, so the §2.3 intent ("they do not open connections") holds |
+| HANDED_OVER run ends with `AGENT_RUN_ENDED` outcome FAILED | accepted | Specified by E01-S28 Behavior 3 and INTERFACES §5.3 step 10. `payload.state` distinguishes it, and the `failed_handoffs` metric keys on outcome FAILED. The real defect next to it is the missing `handover_in_id` → E01-B04 |
+| `HO-0001.md` keeps `to_run_id: null`; recorded head ≠ commit | defect → E01-B05 | The `.ai/` document is the durable record (ADR-0002 D-5), yet it never learns its successor and names a pre-commit head that differs from its own `freshness.commit` and the HANDOFF checkpoint's `head_sha`. E04-S06 Behavior 1 plans `worktree_head` = post-commit head; nothing plans the `to_run_id` rewrite |
+| WIP subjects numbered per run (`checkpoint 2` twice on one branch) | accepted | E01-S25 Behavior 5 specifies `checkpoint {seq}` with a per-run seq and the per-run idempotency key `git.commit:{run}:{seq}`. Nothing keys off the subject, and E03-S01 `squash_wip` selects commits by `rev-list base..branch` |
+| `model_usage` reports `turns`/`tool_calls` 0 | accepted (deferred by design) | E01-S29 Behavior 8 fixes these at 0. E09-S04 fills them from `v_model_usage` |
+| Worktree kept after a completed run | defect → E01-B01 (BLOCKER) | See above |
+| Recovery does not re-create a deleted worktree | defect → E01-B02 | ARCHITECTURE §5.3 step 4 requires "ensure worktree exists". `.walk/` is git-ignored scratch, which `git clean -fdx` deletes |
+| `runtime/executor.py` ≈1,281 lines | accepted, planner P5 | No size rule in CONVENTIONS. E01-B01…B05 all touch it; splitting it first would make five fixes rebase onto a moving file |
+| Claude adapter passes the whole kernel environment | accepted (E02-S01 scope), planner P2 | E02-S01 owns `scrubbed_env` and Claude wiring (rule 7). Today the executor passes `env_allowlist=dict`, i.e. `{}` |
+| Native resume only within one process | accepted, architect A9 | ADR-0004 D-6: the handover is the continuity mechanism, and native resume is an optimisation. Side effect: after a restart, each interrupted real-provider run first creates one FAILED `not_resumable` child run before the handover run |
+| Contract changes made during implementation | accepted, reflected | Protocol-level deltas are in INTERFACES.md: `GitProvider.delete_branch`/`discard_changes` (§2.3), `CheckpointManager.checkpoint` PAUSE without `workflow_state` (§1.13), `PermissionManager.decide_approval(expired=)` (§1.10), `AgentExecutor.start(routing, effort_resolution)`, `OutputApplier.apply(start_head)`, `SandboxManager.adopt`, `ModelRouter.fallback(FallbackRequest)`. Constructor keywords (`project_key` on S13/S15/S16/S27 services, `prompt_version`, `sleep`, `SdkClaudeClient(probe=)`) and the CLI-internal `walk.cli.daemon.transition_in_kernel` are implementation wiring, not protocol contracts. INTERFACES documents protocols, not constructors, and they are recorded in the story Evidence / NAME-REGISTER |
+
+**Architect table** (Behavior 8; status as of `45a54cf`):
+
+| # | Source | Inconsistency | Status / proposal |
+|---|---|---|---|
+| A1 | E01-S22 | WBS §6 routes subprocesses through `integrations.SubprocessRunner`, but §2.2 forbids `model_router → integrations`. Codex has its own `CodexProcessLauncher`; since S31, Claude takes an injected `probe` | open: allow `model_router → integrations` (subprocess only) or move `SubprocessRunner` to `common` |
+| A2 | E01-S26 | ADR-0006 D-5 keys Codex network access on `ToolSpec.requires_network`, which DOMAIN-MODEL §4.6 does not define. Network is always off | open: add the field or drop the clause |
+| A3 | E01-S27/S28 | protocol deltas (`start` routing/effort_resolution, `apply` start_head, `discard_changes`, `fallback(FallbackRequest)`) | resolved in INTERFACES §1.4/§1.13/§2.3. E02-S08 duplicate END/HANDOFF checkpoint is resolved by E02-S08 rule 8 (no-op on `checkpoint_id`/`handover_id`) |
+| A4 | E01-S28/S29 | `ModelRouter.fallback` signature; `PROJECT_STARTED` write point | resolved: INTERFACES §1.4 takes `FallbackRequest`; §4.3 lists `DefaultOrchestrator.start` |
+| A5 | E01-S31 | `sqlite3` confinement (§2.3) vs annotation imports in four repositories | open: allow `sqlite3` type-only imports outside `persistence`, or add a `walk.persistence.Connection` alias. E01-B06 leaves `sqlite3` out until decided |
+| A6 | E01-S06 | `EvidenceManager` (telemetry) copies files under `.ai/`; CONVENTIONS §2 says only `MemoryManager` writes there, and `telemetry` may not import `memory` | open: carve out "evidence artifacts" in CONVENTIONS §2 / ARCHITECTURE §8, or route through memory |
+| A7 | E01-S11/S13/S16 | §4.3 is missing three write points the stories specify: `EFFORT_CHANGED` (effort), `HANDOVER_CREATED` (memory), `PHASE_GATE_DECISION` (workflow.lifecycle until E07-S05) | open: add the rows (or move the writes); §4.3 says "anything else is a defect" |
+| A8 | E01-S29 | the orchestrator depends on concrete `DefaultAgentExecutor`/`DefaultCheckpointManager` because `wait`, `shutdown` and `latest_open_handover` are not on the protocols | open: add them to INTERFACES §1.13 (E04-S06 adds `open_handover_for`) |
+| A9 | E01-S21/S22 | real adapters resume only sessions they started in-process (`ProviderSessionRef` lacks role and system prompt), so after a restart `resumable=True` refs always fail native resume once | open: persist what resume needs, or have recovery skip native resume for refs from another kernel instance |
+| A10 | E01-S27 | a run whose preparation fails gets `AGENT_ASSIGNED` + `ERROR` but no `AGENT_RUN_STARTED`/`ENDED` (S27 rule 3). The gate's "one start, one end per run" is checked only for started runs | decide whether prepare failures need `AGENT_RUN_ENDED` |
+
+**New-name consolidation** (Behavior 8): WBS §6 holds the planning-wide rows and delegates the full per-story list to the generated `docs/03-traceability/NAME-REGISTER.md`. That file was stale by 4 E01 entries (S09 `dependency_states`; S10 `design:` prefix; S11 `walk.workflow.lifecycle` and payload keys). It was regenerated in this commit with `py -3 scripts/build_name_register.py` (196 → 200 entries, the 4 stale E01 entries; a generated file outside this task's Files table, justified here and in the commit body). `docs/03-traceability/REQ-TRACEABILITY.md` was regenerated as well (`py -3 scripts/build_traceability.py`), so that it lists the six `E01-B*` stories. No planning-wide name is missing from §6.
+
+**Planner notes** (planning-level, not bugfix stories):
+- P1: E02-S08's `builtin.wip_commit` asserts `ctx.payload["wip_commit_done"] is True` and fails closed. E01's `ON_AGENT_CHECKPOINT` payload is `{checkpoint_id, seq, kind, handover_id}` (`runtime/checkpoints.py:296`), and E02-S08's Files table does not include `runtime/checkpoints.py`. As planned, this MUST hook would fail every checkpoint. E02-S08 must add the key (and define it for clean START checkpoints, where no commit is made) or assert on `wip_commit_sha`.
+- P2: E02-S01 rule 7 passes `scrubbed_env` as the Claude SDK `env` option. The Python SDK builds the CLI process environment from `os.environ` merged with `options.env` (not verifiable offline here: the `claude` extra is not installed). That would not scrub anything. E02-S01 needs a Claude-side mechanism and an AC like its Codex AC 8.
+- P3: E04-S06 names `HandoverRepository.latest_open_for_item/set_to_run` and `CheckpointManager.open_handover_for`; E01 has `latest_open/close` and `latest_open_handover`. Its Behavior 1 `worktree_head` rule is delivered by E01-B05. Reconcile in E04's refine.
+- P4: 16 E01 stories prescribe `Commit subject:` lines over the hook's 72 characters (S03, S04, S06, S09–S11, S14, S17, S18, S23–S28, S30). `validate_wbs.py` could check the length.
+- P5: add a `chore` story to split `runtime/executor.py` (for example `runtime/fallback.py` for INTERFACES §5.3 steps 5/6/10) after E01-B05 lands.
+- P6: the purpose → status-options table is duplicated in `agents/service.py` and `runtime/inputs.py`, and `scheduled_states.yaml` is parsed separately by `workflow/service.py` and `orchestrator/router.py`. They agree today, but no test pins them together.
+- P7: this task's prescribed subject `docs: review epic 01 stories s01-s31 (E01-R01)` was replaced by `docs: review epic 01 stories (E01-R01)` at the requesting owner's instruction.
+
+**Demo** (repository left by `pytest --basetemp=C:/Users/CPU12432-local/AppData/Local/Temp/r01 tests/e2e/test_e01_gate.py::test_provider_outage_falls_back_with_handover`, `<repo>` = `…/r01/test_provider_outage_falls_bac0/game`):
+```
+$ walk status --json --repo <repo>
+{"project_key": "DEMO", "paused": false, "current_phase": null,
+ "phase_progress": {"IMPLEMENTING": 1, "READY_FOR_REVIEW": 2}, "gdd_coverage": {}, "active_runs": [],
+ "blocked_items": [], "pending_approvals": [], "open_debates": [],
+ "model_usage": {"fake-codex/sim": {"input_tokens": 15000, "output_tokens": 3000, "cache_read_tokens": 0, "cost_usd": 0.03, "turns": 0, "tool_calls": 0, "duration_s": 0.0},
+                 "fake-claude/sim": {"input_tokens": 6000, "output_tokens": 1200, "cache_read_tokens": 0, "cost_usd": 0.012, "turns": 0, "tool_calls": 0, "duration_s": 0.0}},
+ "qc_status": {}, "build_status": null, "budgets": [], "open_improvement_candidates": 0}
+[exit 0]   (objects joined onto fewer lines here; the CLI prints them indented)
+
+$ walk ledger query --kind MODEL_FALLBACK --repo <repo>
+seq  at                         kind            actor       item        run                             outcome
+---  -------------------------  --------------  ----------  ----------  ------------------------------  -------
+87   2026-01-01T00:00:00+00:00  MODEL_FALLBACK  SENIOR_DEV  STORY-0002  RUN-01M495V8Q99ZKMNF6TCZRXDS2X  OK
+[exit 0]
+
+$ walk run --once --repo <repo>      # both stories READY_FOR_REVIEW, but no real adapter installed
+claude_agent_sdk is not installed; claude models are disabled
+models without an adapter disabled
+started 0 run(s)
+[exit 0]
+
+$ walk run --once --repo <fresh git repo>      # no project, no ready work
+no project - run 'walk bootstrap'
+started 0 run(s)
+[exit 0]
+```
+
+---
+
+### E01-B01 — Release or adopt a finished run's worktree so the item's next run can start
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §60, §6.1, §137 (Inv. 4)
+**Depends on:** E01-R01
+**Effort:** MEDIUM   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+**BLOCKER for E02.** Today, after any run of an item ends, the item's next run without a parent (REVIEW after READY_FOR_REVIEW, REWORK, or a retry after FAILED) fails in preparation, because git checks a branch out in one worktree only. After this story, a COMPLETED run releases its worktree, and a later fresh run adopts a worktree that an earlier run left behind. Each later run of the item can then start.
+
+#### Scope
+- In: worktree removal at the end of a COMPLETED run; adoption of a leftover worktree by a run without `parent_run_id`; INTERFACES §1.13 wording.
+- Out: retention or garbage collection of FAILED/BLOCKED worktrees (they stay for diagnosis); escalation of FAILED runs (E03-S16); recovery (E01-B02).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/executor.py` | modify | — (`_complete` removes the worktree after the END checkpoint; `_prepare` adopts a leftover worktree) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `AgentExecutor`/`SandboxManager` docstrings: worktree lifecycle) |
+| `tests/runtime/test_executor_worktree.py` | create | — |
+| `tests/orchestrator/test_scheduler.py` | modify | — |
+
+#### Interface contract
+No signature changes. `SandboxManager.remove(run, keep_branch=True)` and `SandboxManager.adopt(run, previous, item)` (INTERFACES §1.13) are used as they are. `AgentRunRepository.for_item(work_item_id)` returns the item's runs oldest first.
+
+#### Behavior
+1. A run that ends `COMPLETED` calls `sandbox.remove(run, keep_branch=True)` after its `AGENT_RUN_ENDED` is written and `ON_AGENT_END` has fired, and before `on_run_finished`. `ON_AGENT_END` hooks may still read the worktree. The worktree is clean at that point, because the END checkpoint committed every change. The branch and its WIP commits stay. A removal failure is logged and does not change the run's outcome.
+2. `start(...)` without `parent_run_id` looks for the newest earlier run of the same item that has a `worktree_path` whose directory still exists and whose state is terminal (not `RUNNING`, `PAUSED_FOR_APPROVAL` or `PAUSED_BY_USER`). If one exists, the new run adopts it (`sandbox.adopt(new_run, previous, item)`), and the uncommitted residue stays. Otherwise the run calls `sandbox.create` as today.
+3. Child runs (`parent_run_id` set) are unchanged: they adopt the parent's worktree.
+4. `cancel` keeps its behaviour (worktree removed, branch kept). `pause` keeps the worktree.
+5. Root cause, not a workaround: no `git worktree add --force` and no deletion of an earlier run's branch.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a run that completes, Then its worktree directory is gone, `git worktree list` no longer shows it, and the branch still has the END WIP commit | `tests/runtime/test_executor_worktree.py::test_completed_run_removes_worktree_and_keeps_branch` |
+| 2 | Given a COMPLETED run of STORY-0001 now in READY_FOR_REVIEW, When a REVIEW run of the same item starts, Then it reaches `COMPLETED`, has its own `.walk/worktrees/<run_id>` on the same branch, and has no `prepare:` failure | `tests/runtime/test_executor_worktree.py::test_next_run_after_completed_run_starts` |
+| 3 | Given a FAILED run whose worktree holds an uncommitted file, When a new run of the item starts without a parent, Then it adopts that worktree path and the file is present at its first tool call | `tests/runtime/test_executor_worktree.py::test_next_run_after_failed_run_adopts_kept_worktree` |
+| 4 | Given `sandbox.remove` raising at the end of a COMPLETED run, Then the run stays `COMPLETED`, `AGENT_RUN_ENDED` outcome is `OK`, and a warning is logged | `tests/runtime/test_executor_worktree.py::test_worktree_removal_failure_does_not_fail_run` |
+| 5 | Given a story that completed its IMPLEMENT run and a LEAD_DEV reviewer policy, When a second `tick()` runs, Then a REVIEW run is started and is not `FAILED` | `tests/orchestrator/test_scheduler.py::test_second_tick_starts_review_run_on_same_branch` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `git -C <repo> worktree list` after the AC 2 scenario, showing only the main checkout (both runs completed) and `git log --oneline <branch>` with both runs' WIP commits.
+
+#### Notes
+- Severity: BLOCKER. Reproduced in E01-R01: the first run is COMPLETED, the item is READY_FOR_REVIEW, and a second `executor.start` gives the run state `FAILED` with `failure_reason = "prepare: git command failed"`. `Scheduler._admit` has already raised the admission event and stored the `schedule:` key at that point, so the item stays stuck with no run.
+- The sandbox's own docstring states the constraint ("Never `create`: git checks a branch out in one worktree only"). E01-S27 rule 10 just never released the worktree.
+- E01-S31 gate assertions are unaffected: they inspect branches, commits and the child run's adopted path, not the completed run's directory.
+- Commit subject: `bugfix: release or adopt finished run worktrees (E01-B01)`.
+
+#### Evidence (filled by implementer)
 _pending_
 
+---
+
+### E01-B02 — Recovery re-creates a missing worktree and ends a failed recovery completely
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §89, §90, §137 (Inv. 9, 12)
+**Depends on:** E01-R01
+**Effort:** MEDIUM   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`RecoveryManager` follows ARCHITECTURE §5.3 step 4: it ensures the worktree exists before building a RECOVERY handover. A run whose recovery fails is ended the way every other failed run is ended: `AGENT_RUN_ENDED`, and the item is unassigned.
+
+#### Scope
+- In: an injected `SandboxManager` in `RecoveryManager`; the per-run failure path of `recover()`; composition and test wiring.
+- Out: re-registering approval waiters (E02-S11); `IntegrationManager.reconcile` (E03-S03).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/recovery.py` | modify | `RecoveryManager.__init__` (keyword-only `sandbox`) |
+| `src/walk/cli/composition.py` | modify | — (passes the kernel's `DefaultSandboxManager`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§5.3 recovery: step 4 and the failure path) |
+| `tests/runtime/test_recovery.py` | modify | — |
+| `tests/orchestrator/conftest.py` | modify | — (passes the sandbox) |
+
+#### Interface contract
+```python
+class RecoveryManager:
+    def __init__(self, ..., *, kernel_instance: str, project_key: ProjectKey,
+                 ready_env_keys: Callable[[], set[str]], sandbox: SandboxManager) -> None: ...
+```
+
+#### Behavior
+1. In the handover branch (§5.3 step 5 else), when no open handover exists and a RECOVERY handover must be built on the interrupted run, recovery first calls `sandbox.adopt(run, run, item)`. This returns the existing directory unchanged, or re-adds it on `run.branch` with guard hooks when it was deleted. Only then are `build_handover` and the `HANDOFF` checkpoint made.
+2. Any exception while recovering one run (today: state `FAILED` only) now does all of the following in one `UnitOfWork`: the run goes to `FAILED` (`failure_reason = "recovery: <detail>"`), the item is unassigned when `assigned_run_id == run.id`, and `AGENT_RUN_ENDED` is written (outcome `FAILED`, payload `{state: "FAILED", failure_reason, mode: "recovery"}`). After commit, `ON_TASK_FAILED` fires (`fire_safely`). The run is reported in `failed`, and the loop continues.
+3. A run whose recovery failed has exactly one `AGENT_RUN_STARTED` and one `AGENT_RUN_ENDED` (Invariant 9, the E01-S31 gate rule).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given an orphaned run with a checkpoint, an unhealthy adapter, no open handover and its worktree directory deleted, When `recover()`, Then the worktree is re-added, a `HANDOFF` checkpoint and RECOVERY handover exist, and the continuing run completes | `tests/runtime/test_recovery.py::test_recover_recreates_deleted_worktree_before_handover` |
+| 2 | Given an orphaned run whose recovery raises, When `recover()`, Then the run is `FAILED`, the item's `assigned_run_id` is `None`, the run has exactly one `AGENT_RUN_ENDED` (outcome `FAILED`), and `ON_TASK_FAILED` fired | `tests/runtime/test_recovery.py::test_recover_failure_ends_run_and_unassigns_item` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `walk ledger query --run <failed run>` from AC 2 showing `AGENT_RUN_STARTED … ERROR(INTERRUPTED) … AGENT_RUN_ENDED(FAILED)`.
+
+#### Notes
+- Severity: MAJOR. Found in E01-R01. E01-S28 Evidence states the worktree gap ("RecoveryManager has no sandbox"). The failure path was found by reading `recover()`: `set_state(FAILED)` with no ledger end and no unassign, which leaves the item stuck in IMPLEMENTING with a FAILED owner run.
+- `.walk/` is git-ignored scratch, so `git clean -fdx` while the kernel is down deletes every worktree.
+- Commit subject: `bugfix: complete recovery worktree and failure handling (E01-B02)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-B03 — A fallback or recovery continuation measures `has_commit` from the lineage start
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §21, §22, §132, §137 (Inv. 12)
+**Depends on:** E01-R01
+**Effort:** LOW   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A continuation run (fallback, native resume or recovery) may find that its predecessor already wrote and committed all the work. It verifies, and it can then submit the story for review. Today `has_commit` is computed from the continuation's own start head, so the guard rejects the run.
+
+#### Scope
+- In: the `start_head` passed to `OutputApplier.apply` and used by the final boundary audit, for runs with `parent_run_id`.
+- Out: the `has_commit` guard itself (E01-S10); kernel final commits (E03-S08).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/executor.py` | modify | — (`start_head` of a child run = the lineage root's START head) |
+| `tests/runtime/test_executor_fallback.py` | modify | — |
+
+#### Interface contract
+No signature changes. `OutputApplier.apply(run, output, *, start_head)` (INTERFACES §1.13) receives the lineage start head for child runs.
+
+#### Behavior
+1. For a run with `parent_run_id`, `start_head` is the `head_sha` of the START checkpoint (seq 1) of the root of its `parent_run_id` chain. A run without a parent keeps its own START head.
+2. The final boundary audit (`status ∪ diff_names(worktree, start_head)`) uses the same `start_head`, so it also covers files the parent committed through WIP checkpoints. A parent's forbidden path cannot pass unaudited through a handover.
+3. The root's START checkpoint may be missing (the root failed before START). In that case the earliest START checkpoint in the chain is used.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a 12-call script failing with `PROVIDER_OUTAGE` after 3 calls and a continuation that makes 0 tool calls and outputs COMPLETED, When the run ends, Then the continuation is `COMPLETED`, `effects.commit_sha` is set, and the story is `READY_FOR_REVIEW` | `tests/runtime/test_executor_fallback.py::test_verify_only_continuation_submits_for_review` |
+| 2 | Given the parent wrote a forbidden path that a WIP checkpoint committed, When the continuation completes, Then the final audit reports the boundary violation | `tests/runtime/test_executor_fallback.py::test_continuation_final_audit_covers_parent_commits` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: the AC 1 ledger sequence (`walk ledger query --item STORY-0001`) ending with `WORK_ITEM_TRANSITION` (`submit_for_review`) and `AGENT_RUN_ENDED` (OK).
+
+#### Notes
+- Severity: MAJOR. E01-S28 Evidence flagged it ("A fallback run that only verifies the parent's work is therefore guard-rejected"). E01-R01 reproduced it: the continuation run ends `FAILED guard_rejected: 'submit_for_review' rejected … has_commit is false`. The §132 failover passes only because the gate's continuation writes new files.
+- AC 2 needs the boundary auditor's forbidden paths from `executor_env` (`DEFAULT_FORBIDDEN_PATHS`). Check how `tests/runtime/test_executor_boundary.py` scripts a forbidden write.
+- Commit subject: `bugfix: measure continuation commits from lineage start (E01-B03)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-B04 — `AGENT_RUN_ENDED` carries `handover_in_id` so `failed_handoffs` counts real runs
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §81, §115, §22
+**Depends on:** E01-R01
+**Effort:** LOW   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`RetrospectiveMetrics.failed_handoffs` counts the continuation runs that failed. Today the E01-S06 metric reads `AGENT_RUN_ENDED.payload.handover_in_id`, but the executor and recovery write that key only on `AGENT_RUN_STARTED`. The metric is therefore always 0 on real ledgers.
+
+#### Scope
+- In: the `AGENT_RUN_ENDED` payload of every executor end path and of `RecoveryManager`; an end-to-end metric test.
+- Out: other `METRIC_QUERIES` fields (E09).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/executor.py` | modify | — (`_end` payload) |
+| `src/walk/runtime/recovery.py` | modify | — (`_continued` payload) |
+| `tests/runtime/test_executor_fallback.py` | modify | — |
+
+#### Interface contract
+`AGENT_RUN_ENDED.payload` gains `handover_in_id: HandoverId | None` (the ended run's `handover_in_id`) on every path: COMPLETED, FAILED, HANDED_OVER, BLOCKED_*, CANCELLED, recovery. The E01-S06 metric SQL is unchanged.
+
+#### Behavior
+1. `DefaultAgentExecutor._end` adds `"handover_in_id": live.run.handover_in_id` to the payload.
+2. `RecoveryManager._continued` adds the interrupted run's `handover_in_id`.
+3. `DefaultTelemetryManager.metrics().failed_handoffs` equals the number of runs that started from a handover and ended with outcome `FAILED`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the provider-outage fallback scenario, Then run B's `AGENT_RUN_ENDED.payload.handover_in_id == "HO-0001"` and run A's is `None` | `tests/runtime/test_executor_fallback.py::test_run_ended_payload_carries_handover_in_id` |
+| 2 | Given both fakes failing with `PROVIDER_OUTAGE` (two fallbacks, then BLOCKED_PROVIDER), When `metrics()` runs on the executor's ledger, Then `failed_handoffs == 2` | `tests/runtime/test_executor_fallback.py::test_failed_continuations_count_as_failed_handoffs` |
+
+#### Evidence required
+- Quality gate output.
+
+#### Notes
+- Severity: MAJOR. Found in E01-R01: `grep -rn handover_in_id src/walk` shows writes only at `executor.py` (`AGENT_ASSIGNED`/`AGENT_RUN_STARTED`). `tests/telemetry/test_metrics.py` passes only because it builds the `AGENT_RUN_ENDED` event by hand.
+- HANDED_OVER keeps outcome `FAILED` (E01-S28 Behavior 3; accepted in E01-R01).
+- AC 2 needs a metrics manager over `env.db`. If `ExecutorEnv` has no `DefaultTelemetryManager`, construct one in the test (`DefaultTelemetryManager(env.repo, LedgerRepository(env.db), clock)`).
+- Commit subject: `bugfix: record handover_in_id on agent run end (E01-B04)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-B05 — The handover document matches its row and its HANDOFF checkpoint
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §22, §137 (Inv. 2, 12)
+**Depends on:** E01-R01
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+`.ai/handovers/HO-NNNN.md` keeps `to_run_id: null` forever, and its `worktree_head` is the head before the HANDOFF WIP commit. That head differs from its own `freshness.commit` and from the checkpoint's `head_sha`. After this story the document, the `handovers` row and the `Handover` handed to the continuing run all name the post-commit head, and the document records its successor once the handover is closed.
+
+#### Scope
+- In: `worktree_head` stamping in `checkpoint(..., handover=)`; the document rewrite in `close_handover`; the continuation receiving the stamped handover.
+- Out: handover enrichment from context and decisions (E04-S06); the `walk handover` CLI (E04-S06).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/checkpoints.py` | modify | — (`checkpoint` stamps `worktree_head`; `close_handover` rewrites the document) |
+| `src/walk/runtime/executor.py` | modify | — (passes the stamped handover to the child run) |
+| `src/walk/runtime/recovery.py` | modify | — (same for the RECOVERY handover) |
+| `tests/runtime/test_checkpoints.py` | modify | — |
+| `tests/runtime/test_executor_fallback.py` | modify | — |
+
+#### Interface contract
+No signature changes. `close_handover(handover_id, to_run_id) -> Handover` (INTERFACES §1.13) also updates the document through `MemoryManager.write` (which writes `CONTEXT_UPDATED`, not `HANDOVER_CREATED`).
+
+#### Behavior
+1. `checkpoint(run, HANDOFF, handover=h)` sets `h.worktree_head` to the HEAD after the WIP commit (the checkpoint's `head_sha`) before it writes the document and the row. `current_state` names no other sha.
+2. The `Handover` passed to the continuing run (`AgentInput.handover`) carries that same `worktree_head`. The executor's fallback path and recovery's RECOVERY path pass the stamped value: they re-read the handover row, or apply the checkpoint's `head_sha`.
+3. `close_handover(id, to_run_id)` closes the row as today. It then reads the document (`memory.read_handover`), sets `extra.to_run_id`, and writes it with `memory.write`: version bumped, one `CONTEXT_UPDATED`, and still exactly one `HANDOVER_CREATED` for the document.
+4. `from_document(read_handover(id))` round-trips to the row's `Handover` (lossless conversion, E01-S18).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a dirty worktree, When `checkpoint(run, HANDOFF, handover=h)`, Then the row's and the document's `worktree_head`, the document's `freshness.commit` and the checkpoint's `head_sha` are equal | `tests/runtime/test_checkpoints.py::test_handover_head_matches_handoff_checkpoint` |
+| 2 | Given an open handover, When `close_handover(id, RUN-B)`, Then the document's `extra.to_run_id == RUN-B`, its version is 2, and the ledger has one `HANDOVER_CREATED` and two `CONTEXT_UPDATED` for it | `tests/runtime/test_checkpoints.py::test_close_handover_updates_document` |
+| 3 | Given the provider-outage fallback, Then run B's `AgentInput.handover.worktree_head` equals run A's HANDOFF checkpoint `head_sha` | `tests/runtime/test_executor_fallback.py::test_continuation_receives_post_commit_handover_head` |
+
+#### Evidence required
+- Quality gate output.
+- Demo: `head -20 .ai/handovers/HO-0001.md` after the E01-S31 fallback scenario, showing `to_run_id: RUN-…` and `worktree_head` equal to `freshness.commit`.
+
+#### Notes
+- Severity: MINOR. Flagged in E01-S31 Evidence and confirmed in E01-R01. ADR-0002 D-5 makes the handover document first-class, so it must not contradict its row.
+- E04-S06 Behavior 1 ("`worktree_head` = HEAD after the WIP commit") is delivered here. E04's refine should drop it from E04-S06.
+- Commit subject: `bugfix: keep handover document in sync with row (E01-B05)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E01-B06 — Architecture tests for module-level import cells and per-file process confinement
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §122, §137 (Inv. 1)
+**Depends on:** E01-R01
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+The quality gate enforces the parts of ARCHITECTURE §2.2/§2.3 that import-linter and ruff cannot express:
+- `✔` cells allow only another package's `models`/`protocols`/`errors` plus the modules the cell names, and a `Default*` class reached through a package `__init__` re-export counts as an import of the module that defines it.
+- `subprocess` and SDK imports are confined per file, not per ruff rule.
+
+#### Scope
+- In: two AST-based tests in `tests/test_import_contracts.py` that parse the §2.2 table already parsed there.
+- Out: `sqlite3` confinement (architect decision A5 in E01-R01); any production code change. The code has no current violation; E01-R01's scan found none.
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/test_import_contracts.py` | modify | — |
+
+#### Interface contract
+Test-only. The tests read `docs/01-architecture/ARCHITECTURE.md` §2.2 (including named-module cells such as `✔ (+ \`repository\`)`) and walk `src/walk/**/*.py` with `ast`.
+
+#### Behavior
+1. For each module of a package other than `orchestrator` and `cli` (§2.2 legend), every `from walk.<pkg>.<mod> import …` and `import walk.<pkg>.<mod>` of a different, non-infrastructure package must have `<mod>` in `{models, protocols, errors}` ∪ the names listed in that cell. `common` and `persistence` are infrastructure (any module).
+2. `from walk.<pkg> import Name` is resolved through `src/walk/<pkg>/__init__.py` to the submodule that defines `Name`, and rule 1 is applied to that submodule. This catches `Default*` re-exports.
+3. `subprocess` (import) and `asyncio.create_subprocess_exec` (attribute use) appear only in `src/walk/integrations/subprocess.py` and `src/walk/model_router/adapters/codex/process.py`. `claude_agent_sdk` appears only under `src/walk/model_router/adapters/claude/`, `typer` only under `src/walk/cli/`, and `keyring` only in `src/walk/integrations/credentials.py`.
+4. A failure message names the file, the line and the offending import.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given `src/walk` and §2.2, Then no package imports a module outside the allowed set of its cell | `tests/test_import_contracts.py::test_cross_package_imports_respect_module_cells` |
+| 2 | Given a name imported from a package `__init__`, Then it is checked against the submodule that defines it (a `Default*` service re-export counts as a `service` import) | `tests/test_import_contracts.py::test_reexported_services_count_as_service_imports` |
+| 3 | Given `src/walk`, Then process-spawning and SDK imports occur only in the files listed in Behavior 3 | `tests/test_import_contracts.py::test_process_and_sdk_imports_confined_per_file` |
+
+#### Evidence required
+- Quality gate output.
+- Proof that the tests can fail: run AC 1 once with one named-cell exception removed from the parsed table and paste the failure lines (E01-R01's scan found 13 such hits). AC 2 needs a positive case, so give it a fixture module tree under `tmp_path`.
+
+#### Notes
+- Severity: MINOR (enforcement gap, no live violation). Raised in the E01-S31 Level-0 decisions. E01-R01 AC 7 requires every forbidden edge of §2.2 to be enforced.
+- The E04-R01 precedent allows review-originated architecture tests. Here they are delivered as a bugfix story, because E01-R01's Files table is docs-only.
+- Commit subject: `bugfix: add module-level import and process confinement tests (E01-B06)`.
+
+#### Evidence (filled by implementer)
+_pending_

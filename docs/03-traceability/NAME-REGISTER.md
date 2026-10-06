@@ -11,7 +11,7 @@ Rules (WBS.md §2 rule 6):
   the same commit (CONVENTIONS.md §4); the epic review task checks this register for names
   that were promoted but are still story-local, and for conflicting definitions.
 
-Entries: 196
+Entries: 200
 
 | Story | Kind | Names / note | File |
 |---|---|---|---|
@@ -19,7 +19,11 @@ Entries: 196
 | `E01-S07` | NEW NAME | HookFailed` (WBS §6). `NotSupported` is defined in E01-S23 — until then S07 imports a temporary local `NotSupported`? No: define `NotSupported` in `walk.common.errors`? WBS places it in `walk.integrations.errors`. Resolution for ordering: S07 raises `ConfigError("project hooks available from E02-S09")`; E02-S09 replaces it. Use `ConfigError` here (test 10 asserts `ConfigError`). | `EPIC-01-kernel-core.md` |
 | `E01-S09` | NEW NAME | table key) names kernel-side mutations applied in the same transaction: `increment_fix_loops`, `increment_reopen_count`, `store_resume_state`. | `EPIC-01-kernel-core.md` |
 | `E01-S09` | NEW NAME | YAML keys `effects` and pseudo-state `PREVIOUS`; role alias `ANY_AGENT` (table data, not Python symbols). | `EPIC-01-kernel-core.md` |
+| `E01-S09` | NEW NAME | payload key `dependency_states`. | `EPIC-01-kernel-core.md` |
 | `E01-S10` | NEW NAME | `src/walk/workflow/tables/scheduled_states.yaml` (routing data consumed by `ready_items` and E01-S29 `TaskRouter`), effects `increment_reopen_count`, `force_children_review`, pseudo-state `CHILDREN_READY_FOR_REVIEW`. | `EPIC-01-kernel-core.md` |
+| `E01-S10` | NEW NAME | constraint prefix `design:`, by analogy with the contract's `asset:`. | `EPIC-01-kernel-core.md` |
+| `E01-S11` | NEW NAME | `walk.workflow.lifecycle` (`Lifecycles`, `LIFECYCLE_TABLE_FILES`). `DefaultWorkflowManager` delegates `create_phase/list_phases/phase_event/rc_event` to it, so the class does not keep growing (the service module was already ~600 lines). `walk.cli.composition.open_workflow(db, *, clock=None)` is the one place that wires the workflow manager for the CLI (CONVENTIONS §2); `cmd_work` now uses it instead of wiring services itself. | `EPIC-01-kernel-core.md` |
+| `E01-S11` | NEW NAME | payload keys `previous_phase_state`, `scope_feature_states`, `rejection_bug_states`, `approval_id`. | `EPIC-01-kernel-core.md` |
 | `E01-S12` | RELOCATE | BudgetPolicy → walk.budgets.models` (WBS §3.2). `NEW NAME: BudgetExhausted`. | `EPIC-01-kernel-core.md` |
 | `E01-S13` | RELOCATE | EffortPolicy → walk.effort.models`. `NEW NAME: CostEstimator`, `StaticCostEstimator`, `EFFORT_ORDER`, `STATIC_COST_USD`. | `EPIC-01-kernel-core.md` |
 | `E01-S14` | NEW NAME | CLI sub-tool names `git-cli`, `dotnet`, `graphify-cli`, `unity-cli`; `load_tool_specs`. | `EPIC-01-kernel-core.md` |
