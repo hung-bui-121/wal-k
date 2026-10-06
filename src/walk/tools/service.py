@@ -23,6 +23,7 @@ class _ToolFile(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    version: str | None = None  # behavior version of the catalogue (§105; E02-S04)
     tools: list[dict[str, object]]
 
 

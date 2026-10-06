@@ -176,7 +176,7 @@ Cycle check: every ✔ lies strictly left of the row's own diagonal, so the rela
 | `sqlite3` | `walk/persistence/` (repositories in other packages receive a `Database` handle; they write SQL, they do not open connections) |
 | `typer` | `walk/cli/` |
 | `keyring` | `walk/integrations/credentials.py` (the `CredentialStore`) |
-| `yaml` (PyYAML) | `walk/memory/`, `walk/agents/`, `walk/skills/`, `walk/hooks/`, `walk/permissions/`, `walk/workflow/` (transition tables, ADR-0010 D-4), `walk/orchestrator/router.py` (routing rows of `scheduled_states.yaml`, E01-S29), `walk/orchestrator/bootstrap.py` (`production-kit.yaml`, `work-provider.yaml` kind; ADR-0020), `walk/cli/` (configuration loaders only); `walk/integrations/manifest.py` and `walk/integrations/service.py` (`environment.yaml`, `work-provider.yaml` kind; E02-S02); `walk/integrations/assets/` (provenance files and asset rules `[Stage 8]`) |
+| `yaml` (PyYAML) | `walk/memory/`, `walk/agents/`, `walk/skills/`, `walk/hooks/`, `walk/permissions/`, `walk/workflow/` (transition tables, ADR-0010 D-4), `walk/orchestrator/router.py` (routing rows of `scheduled_states.yaml`, E01-S29), `walk/orchestrator/bootstrap.py` (`production-kit.yaml`, `work-provider.yaml` kind; ADR-0020), `walk/improvement/versions.py` (`kernel-versions.yaml` and the version fields of builtin artifacts; E02-S04), `walk/cli/` (configuration loaders only); `walk/integrations/manifest.py` and `walk/integrations/service.py` (`environment.yaml`, `work-provider.yaml` kind; E02-S02); `walk/integrations/assets/` (provenance files and asset rules `[Stage 8]`) |
 
 A ruff `banned-api` / `import-linter` configuration encodes this table.
 

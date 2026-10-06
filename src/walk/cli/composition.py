@@ -47,6 +47,7 @@ from walk.common.roles import AgentRole
 from walk.context import DefaultContextManager
 from walk.effort import DefaultEffortManager, EffortRequest, StaticCostEstimator
 from walk.hooks import DefaultHookManager, HookExecutionRepository
+from walk.improvement import PINS_PATH, BehaviorVersionCatalog, KernelVersionPins
 from walk.integrations import (
     AsyncioSubprocessRunner,
     CredentialStore,
@@ -135,6 +136,7 @@ _DEFAULT_MODELS: Final = (
     Path(walk.model_router.__file__).resolve().parent / "defaults" / "models.yaml"
 )
 _SCHEDULED_STATES: Final = TABLES_DIR / "scheduled_states.yaml"
+_PACKAGE_ROOT: Final = Path(walk.__file__).resolve().parent
 _BUILTIN_SKILLS: Final = Path(walk.skills.__file__).resolve().parent / "builtin"
 _ACTORS: Final = frozenset({AgentRole.USER, AgentRole.KERNEL})  # never instantiated as agents
 _CLAUDE_SDK: Final = "claude_agent_sdk"
@@ -464,7 +466,10 @@ def build_kernel(
         project_key=key,
         kernel_instance=instance,
         poll_interval_s=settings.poll_interval_s,
-        startup_checks=_drift_check(skills, router, repo, strict=settings.strict),
+        startup_checks=_startup_checks(
+            _version_pin_check(ai_root, clock),
+            _drift_check(skills, router, repo, strict=settings.strict),
+        ),
     )
 
     async def wake_on_finish(run: AgentRun) -> None:
@@ -738,6 +743,38 @@ def skill_drift_reports(repo: Path) -> dict[str, DriftReport]:
         worktree = repo / PROJECTIONS_DIR / projector.provider
         reports[projector.provider] = asyncio.run(registry.check_drift([projector], str(worktree)))
     return reports
+
+
+def _startup_checks(*checks: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
+    """ARCHITECTURE §3.4 step 3 checks, awaited in order; the first failure aborts startup."""
+
+    async def run_all() -> None:
+        for check in checks:
+            await check()
+
+    return run_all
+
+
+def _version_pin_check(ai_root: Path, clock: Clock) -> Callable[[], Awaitable[None]]:
+    """ARCHITECTURE §3.4 step 3: `kernel-versions.yaml` matches the installed kernel (§105).
+
+    A repository without the pin file (not bootstrapped as a Production Kit) is not checked.
+    """
+
+    async def check() -> None:
+        _validate_pins(ai_root, clock)
+
+    return check
+
+
+def _validate_pins(ai_root: Path, clock: Clock) -> None:
+    if not (ai_root / PINS_PATH).is_file():
+        _LOG.warning(
+            "no kernel version pins; run 'walk bootstrap'", extra={"ai_root": str(ai_root)}
+        )
+        return
+    catalog = BehaviorVersionCatalog(_PACKAGE_ROOT, clock).scan()
+    KernelVersionPins.load(ai_root).validate(catalog)
 
 
 def _drift_check(

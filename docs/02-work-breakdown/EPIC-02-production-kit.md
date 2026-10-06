@@ -390,7 +390,7 @@ Level-0 decisions:
 
 ### E02-S03 — `walk bootstrap`: Production Kit generation and `.ai/` initialisation
 
-**Status:** DONE (pending)
+**Status:** DONE (749ac28)
 **Type:** feat
 **Requirements:** §24, §25, §123, §124, §34, §35, §36
 **Depends on:** E02-S02, E01-S16, E01-S17
@@ -644,7 +644,7 @@ Also read: `walk/memory/{service,paths,sections,frontmatter}.py`, `walk/skills/l
 
 ### E02-S04 — `kernel-versions.yaml` and behavior-version pins
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §105, §24, §137
 **Depends on:** E02-S03
@@ -740,7 +740,66 @@ class KernelVersionPins(WalkModel):
 - Commit subject: `feat: add behavior version catalog and kernel version pins (E02-S04)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12.11):
+```
+378 files already formatted
+All checks passed!
+Success: no issues found in 377 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.85%
+1202 passed, 5 deselected in 436.58s (0:07:16)
+```
+Touched modules: `improvement/*` 100 %, `cli/cmd_version.py` 100 %, `orchestrator/bootstrap.py` 100 %, `tools/service.py` 100 %. All 9 acceptance tests pass, plus negative paths: version not `MAJOR.MINOR` or not quoted, a template without the version comment, a constitution without front matter, policies without role versions, invalid YAML, an invalid pin file (CLI exit 1), and bootstrap replacing the `{}` placeholder while keeping an edited pin file. Import-linter: 21 contracts, including the new `improvement` row.
+
+Demo on the temporary repository bootstrapped in the E02-S03 demo, outside this repository. It still had the E02-S03 `{}` placeholder:
+```
+$ cat .ai/project/kernel-versions.yaml
+{}
+$ walk --repo <tmp>/game bootstrap --provider local --key DEMO --name Demo --yes
+created:
+  .ai/project/kernel-versions.yaml
+exit=0
+$ walk --repo <tmp>/game version
+walk 0.1.0
+CONSTITUTION/LEAD_DEV 1.0
+CONSTITUTION/ORCHESTRATOR 1.0
+CONSTITUTION/QC 1.0
+CONSTITUTION/SENIOR_DEV 1.0
+EFFORT_POLICY/ART_DIRECTOR 1.0
+... (one EFFORT_POLICY line per role of policies.yaml, 11 in all)
+MODEL_ROUTING/models 1.0
+PROMPT/ANALYSIS 1.0
+... (9 PROMPT lines)
+SKILL/code-review-checklist 1.0
+SKILL/git-hygiene 1.0
+SKILL/qc-exploratory-testing 1.0
+SKILL/unity-csharp-conventions 1.0
+SKILL/walk-output-contract 1.0
+TOOL_USAGE/tools 1.0
+WORKFLOW/bug_workflow 1.0
+WORKFLOW/feature_workflow 1.0
+WORKFLOW/phase_workflow 1.0
+WORKFLOW/rc_workflow 1.0
+WORKFLOW/story_workflow 1.0
+exit=0
+$ walk version            # cwd outside any repository
+walk 0.1.0
+(no project)
+exit=0
+```
+
+Contract fixes and decisions for the owner:
+- **`TOOL_USAGE` path and version.** This is a small additive fix, made in this commit. The story names `walk/tools/defaults/tools.yaml`, but the catalogue lives at `walk/tools/builtin/tools.yaml` (E01-S14) and had no `version`, so Behavior 1 made `scan()` fail on the real package. The fix: `version: "1.0"` in the builtin catalogue, and an optional `version: str | None` on the private `_ToolFile` schema in `tools/service.py`. Project `tools.yaml` files without `version` stay valid. Both files are outside the Files table and are named in the commit body.
+- **`scheduled_states.yaml` is not catalogued.** The WORKFLOW glob is `workflow/tables/*_workflow.yaml`: the five transition tables, which are the "workflow tables" of AC 1. `scheduled_states.yaml` holds the E01-S29 routing rows. It is a top-level YAML list with no `version` field, and adding one would change its format and the router loader. As a result, routing-row changes are **not pinned** today. If they should be, the owner/architect decides on a format (for example `{version, rows}`) in a later story.
+- **`EFFORT_POLICY` per role.** `policies.yaml` has no top-level version. Each role's `RuntimePolicy` has its own `version`, so the catalogue yields one entry per role (`EFFORT_POLICY/<ROLE>`), all with the file's sha. A role without `version`, or a file without `roles`, raises `missing version`.
+- **Names.** CONSTITUTION uses the front matter `id` (`LEAD_DEV`); SKILL uses the folder name; PROMPT uses the template stem (`IMPLEMENT`); MODEL_ROUTING/TOOL_USAGE/CONTEXT_FORMAT use `models`/`tools`/`ranking`. Single-file artifacts that are absent are skipped (`context/ranking.yaml` does not exist yet). An absent file in the real package would surface at startup as `unknown pin`.
+- **Strict version type.** `version` must be a quoted `MAJOR.MINOR` string; YAML `1.0` (a float) is rejected, because `1.10` would read as `1.1`.
+- **Front matter** of constitutions and skills is parsed locally with `yaml`. `walk.memory.frontmatter` is not allowed: the `improvement → memory` cell permits only `models`/`protocols`/`errors`. ARCHITECTURE §2.3 `yaml` row now lists `walk/improvement/versions.py`.
+- **Pin file semantics.** `load` returns empty pins for an absent file and for the `{}` placeholder; anything else invalid raises `ConfigError` (`invalid kernel version pins ...`). `write` is atomic, with sorted keys under `pins:`. `validate` reports `missing pin` (sorted), then `unknown pin` (sorted), then mismatches (sorted). Its `VersionPinError` message ends with `run 'walk version' and update .ai/project/kernel-versions.yaml`, and `detail["problems"]` holds the lines. The contract name `validate` shadows pydantic's deprecated v1 classmethod `BaseModel.validate`, so the method carries `# type: ignore[override]` with that reason.
+- **Startup check placement.** E02-S07 established the pattern: §3.4 step 3 checks are a composition-built `startup_checks` callable. `build_kernel` (`cli/composition.py`, outside the Files table, named in the commit body) now chains `_version_pin_check` before the drift check. `orchestrator/service.py` changes only its docstring. **A repository without `kernel-versions.yaml` is not checked** (warning logged). That covers repositories that were never bootstrapped: the E01 e2e gate and CLI fixtures migrate a database without bootstrap. A present file, including the `{}` placeholder, is validated. A mismatch raises `VersionPinError` before `PROJECT_STARTED`/`ON_PROJECT_START`, and `walk run` exits 1 through `exit_with`.
+- **Bootstrap step (g).** It writes `KernelVersionPins.from_catalog(scan())` when the file is absent or empty, and reports it in `created_paths`; a non-empty file is listed in `unchanged_paths` (Behavior 6). An E02-S03 test assertion (`kernel-versions.yaml == {}`) now checks the real pins. A new test, `test_bootstrap_replaces_placeholder_pins_and_keeps_real_ones`, was added to `tests/orchestrator/test_bootstrap.py`, which is outside the Files table.
+- **`walk version`.** It prints the project's pins from `.ai/project/kernel-versions.yaml`, sorted, with `(no project)` without a pin file and `(no pins)` for the placeholder. `--json` gives `{"kernel": ..., "pins": {...}}`, with `pins: null` without a project. `walk --version` calls the same command for the current directory. INTERFACES §6 row updated.
+- **Import contracts.** `pyproject.toml` has the new `improvement` row (forbids permissions, tools, integrations, context, runtime, orchestrator) and `walk.improvement` in the forbidden lists of the 18 rows whose §2.2 cell is `·`. It is also in the source lists of "nothing imports cli" and "only the composition root wires service.py". `tests/improvement/__init__.py` was created, like every other test package.
 
 ---
 

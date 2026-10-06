@@ -105,139 +105,146 @@ root_package = "walk"
 name = "common: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.common"]
-forbidden_modules = ["walk.persistence", "walk.telemetry", "walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.persistence", "walk.telemetry", "walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "persistence: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.persistence"]
-forbidden_modules = ["walk.telemetry", "walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.telemetry", "walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "telemetry: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.telemetry"]
-forbidden_modules = ["walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.hooks", "walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "hooks: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.hooks"]
-forbidden_modules = ["walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "workflow: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.workflow"]
-forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "budgets: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.budgets"]
-forbidden_modules = ["walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "effort: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.effort"]
-forbidden_modules = ["walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "permissions: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.permissions"]
-forbidden_modules = ["walk.budgets", "walk.effort", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.budgets", "walk.effort", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "tools: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.tools"]
-forbidden_modules = ["walk.workflow", "walk.effort", "walk.permissions", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.workflow", "walk.effort", "walk.permissions", "walk.skills", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "skills: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.skills"]
-forbidden_modules = ["walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.workflow", "walk.budgets", "walk.effort", "walk.permissions", "walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "integrations: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.integrations"]
-forbidden_modules = ["walk.effort", "walk.permissions", "walk.skills", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.effort", "walk.permissions", "walk.skills", "walk.memory", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "memory: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.memory"]
-forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.decisions", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "decisions: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.decisions"]
-forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.budgets", "walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.debate", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "debate: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.debate"]
-forbidden_modules = ["walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.effort", "walk.permissions", "walk.tools", "walk.skills", "walk.integrations", "walk.memory", "walk.context", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "context: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.context"]
-forbidden_modules = ["walk.budgets", "walk.permissions", "walk.tools", "walk.skills", "walk.debate", "walk.agents", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.budgets", "walk.permissions", "walk.tools", "walk.skills", "walk.debate", "walk.agents", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "agents: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.agents"]
-forbidden_modules = ["walk.integrations", "walk.model_router", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.integrations", "walk.model_router", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "model_router: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.model_router"]
-forbidden_modules = ["walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.runtime", "walk.orchestrator"]
+forbidden_modules = ["walk.integrations", "walk.memory", "walk.decisions", "walk.debate", "walk.runtime", "walk.improvement", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "runtime: ARCHITECTURE 2.2 row"
 type = "forbidden"
 source_modules = ["walk.runtime"]
-forbidden_modules = ["walk.orchestrator"]
+forbidden_modules = ["walk.improvement", "walk.orchestrator"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "improvement: ARCHITECTURE 2.2 row"
+type = "forbidden"
+source_modules = ["walk.improvement"]
+forbidden_modules = ["walk.permissions", "walk.tools", "walk.integrations", "walk.context", "walk.runtime", "walk.orchestrator"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "nothing imports cli (ARCHITECTURE 2.1)"
 type = "forbidden"
-source_modules = ["walk.agents", "walk.budgets", "walk.common", "walk.context", "walk.debate", "walk.decisions", "walk.effort", "walk.hooks", "walk.integrations", "walk.memory", "walk.model_router", "walk.orchestrator", "walk.permissions", "walk.persistence", "walk.runtime", "walk.skills", "walk.telemetry", "walk.tools", "walk.workflow"]
+source_modules = ["walk.agents", "walk.budgets", "walk.common", "walk.context", "walk.debate", "walk.decisions", "walk.effort", "walk.hooks", "walk.improvement", "walk.integrations", "walk.memory", "walk.model_router", "walk.orchestrator", "walk.permissions", "walk.persistence", "walk.runtime", "walk.skills", "walk.telemetry", "walk.tools", "walk.workflow"]
 forbidden_modules = ["walk.cli"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "only the composition root wires service.py (ARCHITECTURE 1.3)"
 type = "forbidden"
-source_modules = ["walk.agents", "walk.budgets", "walk.cli", "walk.common", "walk.context", "walk.debate", "walk.decisions", "walk.effort", "walk.hooks", "walk.integrations", "walk.memory", "walk.model_router", "walk.orchestrator", "walk.permissions", "walk.persistence", "walk.runtime", "walk.skills", "walk.telemetry", "walk.tools", "walk.workflow"]
+source_modules = ["walk.agents", "walk.budgets", "walk.cli", "walk.common", "walk.context", "walk.debate", "walk.decisions", "walk.effort", "walk.hooks", "walk.improvement", "walk.integrations", "walk.memory", "walk.model_router", "walk.orchestrator", "walk.permissions", "walk.persistence", "walk.runtime", "walk.skills", "walk.telemetry", "walk.tools", "walk.workflow"]
 forbidden_modules = ["walk.*.service"]
 allow_indirect_imports = true
 ignore_imports = [  # each package re-exports its own service from __init__

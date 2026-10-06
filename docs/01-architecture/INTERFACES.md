@@ -1637,6 +1637,6 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk memory index` / `walk memory freshness [DOC_ID]` | | §42 |
 | `walk improvement observations` / `candidates` / `retro PHASE_ID` / `promote OBS_ID` | | `[Stage 10]`; `retro` and `observations` `[MVP skeleton]` |
 | `walk db migrate` / `walk db backup PATH` | | |
-| `walk version` | | kernel version + pinned behavior versions |
+| `walk version` | `--json` | kernel version + pinned behavior versions (`<KIND>/<name> <version>` from `.ai/project/kernel-versions.yaml`; `(no project)` without a pin file; also `walk --version`; E02-S04) |
 
 Exit codes: 0 ok · 1 validation/config error · 2 guard rejected / permission denied · 3 daemon required but not running · 4 preflight failed.

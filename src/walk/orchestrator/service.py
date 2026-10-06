@@ -68,8 +68,10 @@ class DefaultOrchestrator:
             project_key: Project of the kernel.
             kernel_instance: This kernel process.
             poll_interval_s: Seconds between ticks without a wake-up.
-            startup_checks: ARCHITECTURE §3.4 step 3 checks (skill drift, E02-S07), awaited
-                before recovery; an exception aborts startup before ``PROJECT_STARTED``.
+            startup_checks: ARCHITECTURE §3.4 step 3 checks (kernel version pins, E02-S04;
+                skill drift, E02-S07), awaited before recovery; an exception (e.g.
+                `VersionPinError`) aborts startup before ``PROJECT_STARTED`` and
+                ``ON_PROJECT_START``.
         """
         self._scheduler = scheduler
         self._executor = executor

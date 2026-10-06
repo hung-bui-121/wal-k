@@ -5,7 +5,6 @@ from typing import Annotated
 
 import typer
 
-from walk import __version__
 from walk.cli.cmd_bootstrap import bootstrap
 from walk.cli.cmd_cost import cost_app
 from walk.cli.cmd_db import db_app
@@ -16,6 +15,7 @@ from walk.cli.cmd_phase import phase_app
 from walk.cli.cmd_run import run
 from walk.cli.cmd_skills import skills_app
 from walk.cli.cmd_status import status
+from walk.cli.cmd_version import version
 from walk.cli.cmd_work import work_app
 
 app = typer.Typer(
@@ -35,11 +35,12 @@ app.command("bootstrap")(bootstrap)
 app.command("doctor")(doctor)
 app.command("run")(run)
 app.command("status")(status)
+app.command("version")(version)
 
 
-def _version_callback(value: bool) -> None:
-    if value:
-        typer.echo(f"walk {__version__}")
+def _version_callback(ctx: typer.Context, value: bool) -> None:
+    if value:  # same output as `walk version` for the current directory
+        version(ctx)
         raise typer.Exit
 
 

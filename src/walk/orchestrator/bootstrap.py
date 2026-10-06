@@ -16,11 +16,13 @@ from typing import Final, Literal
 import yaml
 from pydantic import Field
 
+import walk
 from walk.common.clock import Clock
 from walk.common.errors import ConfigError
 from walk.common.ids import ProjectKey, Sha
 from walk.common.models import Actor, WalkModel
 from walk.common.roles import AgentRole
+from walk.improvement.versions import BehaviorVersionCatalog, KernelVersionPins
 from walk.integrations.errors import GitError
 from walk.integrations.models import EnvironmentManifest, ProductionKit
 from walk.integrations.preflight import REQUIRED_DEFAULT
@@ -36,6 +38,7 @@ NO_COMMIT_SHA: Sha = "0000000"
 """Stamped as head on documents written in a repository without commits."""
 
 _AI: Final = ".ai"
+_PACKAGE_ROOT: Final = Path(walk.__file__).resolve().parent
 _SCRATCH: Final = ".walk"
 # ARCHITECTURE §8 [MVP] folders and the Production Kit folders (§24) that start empty; `.ai/` and
 # `.ai/project/` are made silently (they hold reported files, and the database opens `.ai/`).
@@ -155,7 +158,7 @@ class Bootstrapper:
         _copy_defaults(kit)  # (d)
         kit.text(_WORK_PROVIDER, _work_provider(options.provider))  # (e)
         await self._write_documents(kit, repo, options, gdd_paths)  # (f)
-        kit.text(_KERNEL_VERSIONS, "{}\n")  # (g)
+        self._write_pins(kit)  # (g)
         kit.text(f"{_AI}/.gitignore", _resource("integrations", "ai.gitignore"))  # (h)
         kit.append_lines(".gitignore", _resource("integrations", "root.gitignore.fragment"))
         if not known:  # (i)
@@ -212,6 +215,20 @@ class Bootstrapper:
             return await self._git.head(str(repo)), await self._git.current_branch(str(repo))
         except GitError:
             return NO_COMMIT_SHA, str(Project.model_fields["default_branch"].default)
+
+    def _write_pins(self, kit: "_KitFiles") -> None:
+        """Step (g): pin every builtin behavior version (E02-S04 Behavior 6).
+
+        An existing non-empty pin file is left untouched; an absent one, or the ``{}``
+        placeholder of an E02-S03 bootstrap, gets the catalogue's current versions.
+        """
+        ai_root = kit.repo / _AI
+        if KernelVersionPins.load(ai_root).pins:
+            kit.unchanged.append(_KERNEL_VERSIONS)
+            return
+        catalog = BehaviorVersionCatalog(_PACKAGE_ROOT, self._clock).scan()
+        KernelVersionPins.from_catalog(catalog).write(ai_root)
+        kit.created.append(_KERNEL_VERSIONS)
 
     async def _insert_project(
         self, repo: Path, options: BootstrapOptions, gdd_paths: list[str]

@@ -14,6 +14,7 @@ from walk.agents import ConstitutionLoader, PolicyLoader
 from walk.cli.composition import open_bootstrapper
 from walk.common.errors import ConfigError
 from walk.common.roles import AgentRole
+from walk.improvement import BehaviorVersionCatalog, KernelVersionPins
 from walk.integrations import AsyncioSubprocessRunner, ProductionKit, SubprocessResult
 from walk.memory import MemoryDocument, parse_document
 from walk.model_router import load_models_config
@@ -129,7 +130,9 @@ async def test_bootstrap_creates_full_ai_tree(tmp_game_repo: Path, fake_clock: F
         copied = (repo / ".ai" / "agents" / "roles" / role).read_bytes()
         assert copied == (AGENT_DEFAULTS / role).read_bytes()
     assert (repo / ".ai" / "agents" / "hooks.yaml").read_text(encoding="utf-8") == "hooks: []\n"
-    assert yaml.safe_load((repo / ".ai" / "project" / "kernel-versions.yaml").read_text()) == {}
+    pins = KernelVersionPins.load(repo / ".ai").pins  # real pins since E02-S04
+    assert pins["WORKFLOW/story_workflow"] == "1.0"
+    KernelVersionPins.load(repo / ".ai").validate(BehaviorVersionCatalog(SRC, fake_clock).scan())
     work_provider = yaml.safe_load((repo / ".ai" / "project" / "work-provider.yaml").read_text())
     assert work_provider == {"kind": "local"}
     assert (repo / ".ai" / ".gitignore").read_text(encoding="utf-8").splitlines() == [
@@ -345,3 +348,22 @@ async def test_bootstrap_reports_a_failed_write(
 
     leftovers = list((tmp_game_repo / ".ai" / "agents" / "roles").glob(".*.tmp"))
     assert leftovers == []
+
+
+async def test_bootstrap_replaces_placeholder_pins_and_keeps_real_ones(
+    tmp_game_repo: Path, fake_clock: FakeClock
+) -> None:
+    pin_file = tmp_game_repo / ".ai" / "project" / "kernel-versions.yaml"
+    pin_file.parent.mkdir(parents=True)
+    pin_file.write_bytes(b"{}\n")  # an E02-S03 bootstrap placeholder
+
+    first = await _bootstrap(tmp_game_repo, fake_clock)
+    pins = KernelVersionPins.load(tmp_game_repo / ".ai")
+    pins.pins["WORKFLOW/story_workflow"] = "0.9"
+    pins.write(tmp_game_repo / ".ai")
+    edited = pin_file.read_bytes()
+    second = await _bootstrap(tmp_game_repo, fake_clock)
+
+    assert ".ai/project/kernel-versions.yaml" in first.created_paths
+    assert ".ai/project/kernel-versions.yaml" in second.unchanged_paths
+    assert pin_file.read_bytes() == edited

@@ -1,6 +1,7 @@
 # Kernel tool catalogue (§30, §91; E01-S14). Projects override rows by name in
 # .ai/agents/tools.yaml. Columns: name | kind | provider | protected_action | requires_env |
 # command_patterns. Protected tools carry protected_action == name (ADR-0006).
+version: "1.0"  # behavior version (§105): bump on any change to this catalogue
 tools:
   # Provider-native file and shell tools.
   - {name: bash, kind: PROVIDER_NATIVE, description: Run a shell command in the worktree}
