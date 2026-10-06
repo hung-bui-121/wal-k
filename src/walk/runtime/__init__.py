@@ -13,6 +13,8 @@ from walk.runtime.errors import CheckpointNotFound, RunNotFound
 from walk.runtime.executor import (
     MAX_REPAIR_TURNS,
     REPAIR_INSTRUCTION,
+    RESUME_INSTRUCTION,
+    RETRY_DELAYS_S,
     RUN_TIMEOUT_S,
     DefaultAgentExecutor,
 )
@@ -35,6 +37,7 @@ from walk.runtime.protocols import (
     SandboxManager,
     ToolInvoker,
 )
+from walk.runtime.recovery import RecoveryManager, RecoveryReport
 from walk.runtime.repository import AgentRunRepository, CheckpointRepository, HandoverRepository
 from walk.runtime.sandbox import WORKTREES_DIR, DefaultSandboxManager, branch_name_for
 from walk.runtime.tool_invoker import (
@@ -52,6 +55,8 @@ __all__ = [
     "IMPLEMENT_OUTPUT_EVENTS",
     "MAX_REPAIR_TURNS",
     "REPAIR_INSTRUCTION",
+    "RESUME_INSTRUCTION",
+    "RETRY_DELAYS_S",
     "RUN_TIMEOUT_S",
     "WORKTREES_DIR",
     "AgentExecutor",
@@ -78,6 +83,8 @@ __all__ = [
     "KernelToolHandler",
     "OutputApplier",
     "PollingApprovalWaiter",
+    "RecoveryManager",
+    "RecoveryReport",
     "RunNotFound",
     "SandboxManager",
     "ToolInvoker",

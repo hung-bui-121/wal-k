@@ -413,8 +413,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S24 | Context manager skeleton: mandatory items, token budget, `ContextBundle` | feat | E01-S08, E01-S16 | MEDIUM | DONE (4d0ccd9) |
 | E01-S25 | Runtime persistence: `AgentRun` repository, `SandboxManager`, `CheckpointManager`, `BoundaryAuditor` | feat | E01-S18, E01-S20, E01-S23 | HIGH | DONE (65bdf50) |
 | E01-S26 | `ToolInvoker`: permission enforcement point, Claude `can_use_tool` bridge, Codex sandbox config | feat | E01-S15, E01-S25, E01-S07, E01-S12 | HIGH | DONE (edbb0ed) |
-| E01-S27 | `AgentExecutor` event loop, output validation/repair, `OutputApplier` core | feat | E01-S26, E01-S20, E01-S24, E01-S06 | HIGH | DONE (pending) |
-| E01-S28 | Fallback, handover and recovery | feat | E01-S27 | HIGH | TODO |
+| E01-S27 | `AgentExecutor` event loop, output validation/repair, `OutputApplier` core | feat | E01-S26, E01-S20, E01-S24, E01-S06 | HIGH | DONE (406b6d9) |
+| E01-S28 | Fallback, handover and recovery | feat | E01-S27 | HIGH | DONE (pending) |
 | E01-S29 | `TaskRouter`, `Scheduler`, `Orchestrator` service | feat | E01-S28, E01-S13, E01-S10, E01-S11 | HIGH | TODO |
 | E01-S30 | Daemon and composition root: `build_kernel`, `KernelLock`, `CommandConsumer`, `walk run`, `walk status` | feat | E01-S29 | HIGH | TODO |
 | E01-S31 | Epic gate: kernel loop with fake adapters incl. fallback (e2e), import-linter contracts | feat | E01-S30, E01-S21, E01-S22 | MEDIUM | TODO |

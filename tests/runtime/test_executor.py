@@ -17,7 +17,7 @@ from tests.runtime.executor_env import (
 from walk.agents import AgentInput, AgentOutputStatus
 from walk.budgets import BudgetDimension, BudgetScope
 from walk.common.enums import Effort
-from walk.common.errors import ConfigError, ProviderUnavailable
+from walk.common.errors import ConfigError
 from walk.decisions import AutonomyLevel, DecisionCategory, EscalationRequest
 from walk.effort import EffortResolution
 from walk.hooks import Hook, HookContext, HookFailPolicy, HookName
@@ -253,6 +253,7 @@ async def test_text_events_never_persisted(
 
 
 async def test_error_event_fails_run_until_fallback_lands(make_executor_env: EnvFactory) -> None:
+    # E01-S28 landed the fallback: a triggered ERROR hands the run over instead of failing it.
     plan = script(
         tool_calls=12, fail_after_tool_calls=3, fail_trigger=FallbackTrigger.PROVIDER_OUTAGE
     )
@@ -260,46 +261,15 @@ async def test_error_event_fails_run_until_fallback_lands(make_executor_env: Env
 
     run = await env.run_to_end()
 
-    assert run.state is AgentRunState.FAILED
-    assert run.failure_reason == "error: PROVIDER_OUTAGE: scripted failure"
-    errors = await env.events(run.id, K.ERROR)
-    assert len(errors) == 1
-    assert errors[0].payload["trigger"] == "PROVIDER_OUTAGE"
-    assert errors[0].payload["kind"] == "RUN_ERROR"
-    assert len(env.hooks_fired(HookName.ON_TASK_FAILED)) == 1
-    assert await _assigned(env) is None
+    assert run.state is AgentRunState.HANDED_OVER
+    assert run.failure_reason == "fallback: PROVIDER_OUTAGE: scripted failure"
+    assert await env.events(run.id, K.ERROR) == []
+    fallback = (await env.events(run.id, K.MODEL_FALLBACK))[0]
+    assert fallback.payload["trigger"] == "PROVIDER_OUTAGE"
+    assert [c for c in env.hooks_fired(HookName.ON_TASK_FAILED) if c.run_id == run.id] == []
     ended = (await env.events(run.id, K.AGENT_RUN_ENDED))[0]
     assert ended.outcome == "FAILED"
-    assert await _story_state(env) is WorkItemState.IMPLEMENTING
-
-
-class _CrashingAdapter(FakeModelAdapter):
-    """Fake whose stream raises after STARTED."""
-
-    def run(self, input: AgentInput, session: RunSession) -> AsyncIterator[AgentEvent]:  # noqa: A002 - parameter name fixed by INTERFACES §2.1
-        return self._crash(super().run(input, session))
-
-    async def _crash(self, inner: AsyncIterator[AgentEvent]) -> AsyncIterator[AgentEvent]:
-        async for event in inner:
-            yield event
-            msg = "provider went away"
-            raise ProviderUnavailable(msg)
-
-
-async def test_adapter_exception_fails_run_with_classified_trigger(
-    make_executor_env: EnvFactory, fake_clock: FakeClock
-) -> None:
-    adapter = _CrashingAdapter(
-        "fake-codex", [fake_descriptor(CODEX_MODEL, "fake-codex")], script(), fake_clock
-    )
-    env = await make_executor_env(adapters={"fake-codex": adapter})
-
-    run = await env.run_to_end()
-
-    assert run.state is AgentRunState.FAILED
-    assert run.failure_reason == "error: PROVIDER_OUTAGE: provider went away"
-    error = (await env.events(run.id, K.ERROR))[0]
-    assert error.payload["trigger"] == "PROVIDER_OUTAGE"
+    assert ended.payload["state"] == "HANDED_OVER"
 
 
 class _SilentAdapter(FakeModelAdapter):
@@ -415,15 +385,6 @@ async def test_cancel_unknown_or_inactive_run(make_executor_env: EnvFactory) -> 
         await env.executor.pause(run.id)
     with pytest.raises(RunNotFound):
         await env.executor.wait("RUN-01J0000000000000000000ZZZZ")
-
-
-async def test_resume_native_deferred(make_executor_env: EnvFactory) -> None:
-    env = await make_executor_env(script(tool_calls=0))
-    run = await env.run_to_end()
-    checkpoint = env.checkpoints_of(run.id)[0]
-
-    with pytest.raises(ConfigError, match="E01-S28"):
-        await env.executor.resume_native(checkpoint)
 
 
 async def test_failing_start_hook_fails_run_before_adapter_call(
@@ -706,7 +667,7 @@ async def test_failure_after_the_run_ended_is_only_logged(
 async def test_unrecoverable_end_failure_leaves_run_for_recovery(
     make_executor_env: EnvFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan = script(tool_calls=2, fail_after_tool_calls=1, fail_trigger=FallbackTrigger.TIMEOUT)
+    plan = script(tool_calls=2, fail_after_tool_calls=1)
     env = await make_executor_env(plan)
 
     async def broken_end(*args: object) -> None:
@@ -720,3 +681,28 @@ async def test_unrecoverable_end_failure_leaves_run_for_recovery(
 
     assert run.state is AgentRunState.RUNNING
     assert env.executor.running() == []
+
+
+class _EndlessAdapter(FakeModelAdapter):
+    """Fake whose stream simply stops instead of emitting ENDED."""
+
+    def run(self, input: AgentInput, session: RunSession) -> AsyncIterator[AgentEvent]:  # noqa: A002 - parameter name fixed by INTERFACES §2.1
+        return self._no_end(super().run(input, session))
+
+    async def _no_end(self, inner: AsyncIterator[AgentEvent]) -> AsyncIterator[AgentEvent]:
+        async for event in inner:
+            if event.kind is not AgentEventKind.ENDED:
+                yield event
+
+
+async def test_stream_without_ended_event_completes(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapter = _EndlessAdapter(
+        "fake-codex", [fake_descriptor(CODEX_MODEL, "fake-codex")], script(), fake_clock
+    )
+    env = await make_executor_env(adapters={"fake-codex": adapter})
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.COMPLETED

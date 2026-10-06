@@ -4232,7 +4232,7 @@ Level-0 decisions:
 
 ### E01-S27 — `AgentExecutor` event loop, output validation/repair, `OutputApplier` core
 
-**Status:** DONE (pending)
+**Status:** DONE (406b6d9)
 **Type:** feat
 **Requirements:** §6.1, §9, §22, §40, §41, §54, §81, §84, §86, §89, §91 (repository boundary), §126, §137 (Inv. 1, 2, 9, 12), §138 (Hallucinated Project State)
 **Depends on:** E01-S26, E01-S20, E01-S24, E01-S06
@@ -4565,7 +4565,7 @@ Level-0 decisions:
 
 ### E01-S28 — Fallback, handover and recovery
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §21, §22, §41, §89, §90, §128, §132 (path exercised with fakes), §137 (Inv. 1, 12), §138 (Model Lock-In, Tool Failure)
 **Depends on:** E01-S27
@@ -4689,7 +4689,99 @@ class RecoveryManager:
 - Commit subject: `feat: add model fallback with handover, retries and startup recovery (E01-S28)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21, `git version 2.41.0.windows.1`):
+```
+298 files already formatted
+All checks passed!
+Success: no issues found in 296 source files
+Required test coverage of 85% reached. Total coverage: 99.97%
+934 passed, 2 deselected in 229.98s
+```
+Touched modules: `model_router/*` 100%; `runtime/executor.py`, `recovery.py`, `sandbox.py`, `repository.py` 100%; `integrations/git/provider.py` 100%.
+
+Demo: `test_provider_outage_falls_back_with_handover` run with `--basetemp` kept, then the real CLI on its database. The run has a 12-call codex script failing with `ERROR(PROVIDER_OUTAGE)` after 3 calls; claude finishes the work. `HOOK_EXECUTED`, `TOOL_INVOKED`, `COST_RECORDED` and `BUDGET_EVENT` rows are filtered out, and the `at` column is dropped:
+```
+$ walk --repo <tmp> ledger query --item STORY-0001
+seq  kind                  actor       item        run                             outcome
+1    AGENT_ASSIGNED        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001
+2    AGENT_RUN_STARTED     SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+3    MODEL_SELECTED        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+4    EFFORT_SET            SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+6    CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK      (START)
+20   COMMIT                KERNEL      STORY-0001                                  OK      (WIP of the HANDOFF checkpoint)
+22   HANDOVER_CREATED      SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+23   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK      (HANDOFF)
+25   MODEL_FALLBACK        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  OK
+27   AGENT_RUN_ENDED       SENIOR_DEV  STORY-0001  RUN-00000000000000000000000001  FAILED  (HANDED_OVER)
+28   AGENT_ASSIGNED        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005
+29   AGENT_RUN_STARTED     SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK
+30   MODEL_SELECTED        SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (is_fallback, PROVIDER_OUTAGE)
+31   EFFORT_SET            SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK
+33   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (START)
+55   COMMIT                KERNEL      STORY-0001                                  OK
+56   CHECKPOINT_CREATED    SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (END)
+58   WORK_ITEM_TRANSITION  SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK      (submit_for_review)
+59   AGENT_RUN_ENDED       SENIOR_DEV  STORY-0001  RUN-00000000000000000000000005  OK
+$ head -15 <tmp>/.ai/handovers/HO-0001.md
+---
+created_at: '2026-01-01T00:00:00Z'
+extra:
+  branch: feat/story-0001-player-jump-double-jump
+  created_at: '2026-01-01T00:00:00Z'
+  from_model_id: fake-codex/sim
+  from_run_id: RUN-00000000000000000000000001
+  reason: FALLBACK
+  role: SENIOR_DEV
+  to_run_id: null
+  work_item_id: STORY-0001
+  worktree_head: f2e82dce56c833cbdcb621f61784557c2e9bffba
+freshness:
+  branch: feat/story-0001-player-jump-double-jump
+  build: null
+```
+`to_run_id` stays `null` in the document. Closing a handover updates the `handovers` row only (E01-S25 `HandoverRepository.close`), and the test asserts that row.
+
+The commit subject is shortened to `feat: add model fallback, retries and startup recovery (E01-S28)` (64 characters), because the prescribed one has 78 and the hook allows 72.
+
+Contract changes and fixes outside the Files table (see the commit body):
+- `AgentRunRepository.db` (read-only property, `runtime/repository.py`). `RecoveryManager`'s constructor has no `Database`, but its state changes and ledger events must share a unit of work. This follows `IdempotencyStore.db`/`MemoryIndexRepository.db`.
+- **Root-cause fix in `GitCliProvider.add_worktree` (`integrations/git/provider.py`).** git keeps a worktree registered after its directory is deleted. `add_worktree` treated such a path as existing and returned it, still missing, so AC 20 (re-add a deleted worktree) could not pass. A registered path whose directory is gone is now pruned (`git worktree prune`) and added again.
+- `DefaultAgentExecutor(..., agents, permissions, *, ready_env_keys=set, sleep=asyncio.sleep, ...)` as the contract says. `agents`/`permissions` are positional after `clock`.
+- **For owner attention: tests superseded by this story.** E01-S27 AC 18 `test_resume_native_deferred` is removed: `resume_native` exists now. The deferred-stub assertion of E01-S20 in `test_router_requires_an_adapter_per_enabled_provider` is removed too. E01-S27 AC 15 `test_error_event_fails_run_until_fallback_lands` now asserts what its name anticipated: a triggered `ERROR` hands the run over (HANDED_OVER, `MODEL_FALLBACK`, no `ON_TASK_FAILED` for that run). E01-R01 should read those three rows that way.
+- INTERFACES.md: the `resume_native` docstring and the §5.3 recovery path now say what is implemented (see the next two items).
+
+Level-0 decisions:
+- **`resume_native`.**
+  - Adapters refuse an unknown session eagerly. `resume_native` therefore opens the continued stream before it returns: a refusal ends the new run FAILED (`not_resumable`, `ERROR(kind=NOT_RESUMABLE)`) and re-raises `NotResumable`, so `RecoveryManager` can take the handover path.
+  - This matches the binding fact: after a real restart, adapters do not know the session, and recovery goes through the handover. `test_recover_after_restart_uses_handover_on_the_same_model` shows it.
+  - Budget ids of the resumed instance are those applicable to the item and role.
+- **For owner attention: the interrupted run after a native resume also ends HANDED_OVER**, with `AGENT_RUN_ENDED{state: HANDED_OVER, mode}`. ARCHITECTURE §5.3 names HANDED_OVER only for the handover branch, but leaving it INTERRUPTED forever would contradict "resume pending" and break the one-start-one-end ledger rule. INTERFACES §5.3 records it.
+- **Retry.**
+  - Only exceptions raised by the adapter iterator are retried, and only `TransientError`s, at most `len(RETRY_DELAYS_S)` = 5 times per run.
+  - The `RETRY` payload is `{reason: "transient", attempt, delay, error, message}`.
+  - The continuation uses `resume(RESUME_INSTRUCTION)` when the session is resumable and does not refuse, otherwise `run`.
+  - A cancel during the back-off stops the run.
+  - Exhausted retries are classified: a trigger falls back, `BudgetExhausted` blocks, anything else fails.
+- **Fallback.**
+  - Kernel-side exceptions are not classified, except `BudgetExhausted` with `hard_action=FALLBACK_MODEL` (→ `BUDGET_RESTRICTION`).
+  - Order 5 → 7-9 → 6 → 10. The adapter is cancelled and the stream closed first; a boundary audit precedes the HANDOFF WIP commit.
+  - The old run's `failure_reason` is `fallback: <trigger>: <message>`. `AGENT_RUN_ENDED` payload adds `trigger`, `to_model_id`. No `ERROR` and no `ON_TASK_FAILED`: the work continues.
+  - The child gets `fallbacks + 1` through a private `_start`, so the count is set at allocation.
+  - `on_run_finished` is awaited after the child started, so a woken scheduler never sees the item unassigned between the two runs.
+- **BLOCKED_PROVIDER.** The `ESCALATION` approval request (approver USER, JSON request `{reason, work_item_id, run_id, rejected}`) is created before the end events, so `ON_TASK_FAILED` comes last. `failure_reason` is `blocked_provider: <router message>`.
+- **Router.**
+  - `fallback` shares `select`'s core.
+  - The current model is always excluded. For `PROVIDER_WIDE_TRIGGERS` (and only when the current model is configured) every model of its provider is excluded too.
+  - CONTEXT_OVERFLOW and BUDGET_RESTRICTION re-order the candidates before evaluation; cross-model deferral still applies afterwards.
+  - The `max_fallbacks` rejection is `detail.rejected = [[current, "max_fallbacks"]]`.
+- **Recovery.**
+  - `ERROR(kind=INTERRUPTED)` payload is `{kind, previous_state, previous_kernel_instance}`. `RECOVERY_RESUMED` is written on the new run with the normative payload; `ON_RECOVERY_RESUME` payload is `{handover_id, mode, from_run_id}`.
+  - The handover-path agent is instantiated for the checkpoint's model first, so that the rule-9 profile has the role's tools and skills. Only `model_id`/`effort` then change (Invariant 1). Its `budget_ids` are empty, because the manager has no budget service.
+  - A failure inside one run's recovery sets that run FAILED (`recovery: <detail>`) and the loop continues.
+- **For owner attention: E01 limits.**
+  - Recovery does not re-create a deleted worktree before the RECOVERY handover checkpoint (ARCHITECTURE §5.3 step 4), because `RecoveryManager` has no sandbox. Such a run fails recovery and is reported in `failed`.
+  - `has_commit` compares against the continuing run's own `start_head`. A fallback run that only verifies the parent's work is therefore guard-rejected (`submit_for_review` needs a commit). The gate's continuation writes new files.
+  - `executor.py` has grown to about 1,270 lines. E01-R01 may want it split, for example into a `runtime/fallback.py` for steps 5/6/10.
 
 ---
 

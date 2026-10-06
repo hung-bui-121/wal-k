@@ -1,3 +1,5 @@
+import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -5,6 +7,7 @@ import pytest
 
 from tests.fakes.fake_git_provider import FakeGitProvider
 from tests.runtime.conftest import AT, RUN_A, RUN_B, make_run
+from walk.common.errors import ConfigError
 from walk.integrations import GitCliProvider, GitError
 from walk.integrations.git.guard_hooks import GUARD_HOOK_MARKER
 from walk.runtime import WORKTREES_DIR, AgentRun, DefaultSandboxManager, branch_name_for
@@ -144,3 +147,48 @@ async def test_create_uses_default_branch_and_item_branch(tmp_game_repo: Path) -
     assert fake.hooks_installed == [
         (str((tmp_game_repo / WORKTREES_DIR / RUN_A).resolve()), PROTECTED)
     ]
+
+
+def _remove_tree(path: Path) -> None:
+    def make_writable(function: object, target: str, info: object) -> None:
+        del function, info
+        Path(target).chmod(stat.S_IWRITE)
+        Path(target).unlink()
+
+    shutil.rmtree(path, onexc=make_writable)
+
+
+async def test_adopt_reuses_or_re_adds_worktree(git: GitCliProvider, tmp_game_repo: Path) -> None:
+    sandbox = DefaultSandboxManager(tmp_game_repo, git, PROTECTED)
+    story = _story()
+    first = await sandbox.create(make_run(RUN_A), story)
+    parent = make_run(RUN_A, worktree_path=first, branch=branch_name_for(story))
+    (Path(first) / "Residue.cs").write_bytes(b"// not committed\n")
+    seen: list[str] = []
+
+    async def projections(run: AgentRun, item: WorkItem, path: str) -> None:
+        del item
+        seen.append(f"{run.id}:{path}")
+
+    sandbox.post_create.append(projections)
+
+    reused = await sandbox.adopt(make_run(RUN_B), parent, story)
+
+    assert reused == first
+    assert _exists(Path(first) / "Residue.cs")
+    assert seen == []
+
+    _remove_tree(Path(first))
+    re_added = await sandbox.adopt(make_run(RUN_B), parent, story)
+
+    assert re_added == first
+    assert _git(Path(re_added), "rev-parse", "--abbrev-ref", "HEAD") == parent.branch
+    assert not _exists(Path(first) / "Residue.cs")
+    hook = (tmp_game_repo / ".git" / "hooks" / "pre-commit").read_text(encoding="utf-8")
+    assert GUARD_HOOK_MARKER in hook
+    assert seen == [f"{RUN_B}:{first}"]
+    worktrees = _git(tmp_game_repo, "worktree", "list", "--porcelain")
+    assert worktrees.count("worktree ") == 2
+
+    with pytest.raises(ConfigError, match="no worktree to adopt"):
+        await sandbox.adopt(make_run(RUN_B), make_run(RUN_A), story)

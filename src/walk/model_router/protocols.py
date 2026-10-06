@@ -1,7 +1,4 @@
-"""Model router and adapter protocols (INTERFACES §1.4, §2.1; ADR-0004).
-
-`ModelRouter.fallback` arrives with `FallbackRequest` in E01-S28.
-"""
+"""Model router and adapter protocols (INTERFACES §1.4, §2.1; ADR-0004)."""
 
 from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
@@ -14,6 +11,7 @@ from walk.model_router.models import (
     AdapterHealth,
     AgentEvent,
     CapabilityRegistry,
+    FallbackRequest,
     FallbackTrigger,
     ModelDescriptor,
     ProviderEffortConfig,
@@ -117,6 +115,17 @@ class ModelRouter(Protocol):
         Ordered candidates (override, preferred, fallback) minus restricted/disabled/excluded;
         reject on capability (§16), context window, effort support, health; first survivor
         wins. Ledger MODEL_SELECTED by caller.
+        """
+        ...
+
+    async def fallback(self, request: FallbackRequest) -> RoutingDecision:
+        """INTERFACES §5.3 steps 7-9, the decision only.
+
+        Max-fallback check, exclusion (whole provider for PROVIDER_WIDE_TRIGGERS),
+        CONTEXT_OVERFLOW / BUDGET_RESTRICTION re-ordering, then `select`. Returns
+        is_fallback=True, trigger=request.trigger. No ledger writes, no checkpoint, no run
+        start; the caller (runtime.AgentExecutor) owns steps 5, 6 and 10. Raises
+        BlockedProvider.
         """
         ...
 

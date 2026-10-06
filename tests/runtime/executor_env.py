@@ -4,8 +4,9 @@ One real game repository (worktrees, WIP commits), one migrated database and fak
 adapters; `ExecutorEnv` exposes every service a test asserts on.
 """
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import walk.agents
@@ -29,7 +30,14 @@ from walk.context import DefaultContextManager
 from walk.hooks import DefaultHookManager, Hook, HookContext, HookName
 from walk.integrations import GitCliProvider
 from walk.memory import DefaultMemoryManager
-from walk.model_router import DefaultModelRouter, ModelAdapter, ModelsConfig
+from walk.model_router import (
+    AgentEvent,
+    AgentEventKind,
+    DefaultModelRouter,
+    ModelAdapter,
+    ModelsConfig,
+    RunSession,
+)
 from walk.permissions import (
     ApprovalRepository,
     DefaultPermissionManager,
@@ -85,6 +93,8 @@ RECORDED_HOOKS = (
     HookName.ON_AGENT_END,
     HookName.ON_TASK_FAILED,
     HookName.ON_TOOL_AFTER,
+    HookName.ON_MODEL_FALLBACK,
+    HookName.ON_RECOVERY_RESUME,
 )
 
 ScriptSource = FakeScript | Callable[[AgentInput], FakeScript]
@@ -120,6 +130,48 @@ def fake_adapters(plan: ScriptSource, clock: FakeClock) -> dict[str, ModelAdapte
     }
 
 
+class DyingAdapter(FakeModelAdapter):
+    """Fake whose first stream of each run dies like a killed kernel after ``die_after`` results.
+
+    The task ends with `asyncio.CancelledError`, so the run row stays RUNNING with its
+    checkpoints; the provider session stays known to this adapter (same process).
+    """
+
+    def __init__(
+        self, provider: str, model_id: str, plan: ScriptSource, clock: FakeClock, die_after: int
+    ) -> None:
+        super().__init__(provider, [fake_descriptor(model_id, provider)], plan, clock)
+        self._die_after = die_after
+        self._died: set[str] = set()
+
+    def run(self, input: AgentInput, session: RunSession) -> AsyncIterator[AgentEvent]:  # noqa: A002 - parameter name fixed by INTERFACES §2.1
+        return self._dying(super().run(input, session), session.run_id)
+
+    async def _dying(
+        self, inner: AsyncIterator[AgentEvent], run_id: str
+    ) -> AsyncIterator[AgentEvent]:
+        results = 0
+        async for event in inner:
+            yield event
+            if event.kind is AgentEventKind.TOOL_CALL_RESULT:
+                results += 1
+                if results == self._die_after and run_id not in self._died:
+                    self._died.add(run_id)
+                    raise asyncio.CancelledError
+
+
+def _fake_model_policies(ai_root: Path) -> Path:
+    """A project `policies.yaml` routing every role to the fake models."""
+    path = ai_root / "agents" / "policies.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    policy = f"model_policy: {{preferred: [{CODEX_MODEL}], fallback: [{CLAUDE_MODEL}]}}"
+    lines = ["roles:"]
+    for role in (SENIOR, LEAD):
+        lines += [f"  {role.value}:", f"    {policy}"]
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+    return path
+
+
 async def no_sleep(seconds: float) -> None:
     """Injected sleep: never waits."""
     del seconds
@@ -151,6 +203,7 @@ class ExecutorEnv:
     router: DefaultModelRouter
     tool_invoker: DefaultToolInvoker
     checkpoints: DefaultCheckpointManager
+    permissions: DefaultPermissionManager
     adapters: dict[str, ModelAdapter]
     fired: list[HookContext]
 
@@ -176,9 +229,17 @@ class ExecutorEnv:
         return [Checkpoint.model_validate_json(row[0]) for row in rows]
 
     async def run_to_end(self, purpose: str = "IMPLEMENT") -> AgentRun:
-        """Start a run of the story and wait for its end."""
+        """Start a run of the story, wait for its end and for every continuation run."""
         run = await self.executor.start(self.agent, self.story, purpose)
-        return await self.executor.wait(run.id)
+        ended = await self.executor.wait(run.id)
+        await self.settle()
+        return ended
+
+    async def settle(self) -> None:
+        """Wait until no run (fallback or repair continuations included) is executing."""
+        while running := self.executor.running():
+            for run in running:
+                await self.executor.wait(run.id)
 
 
 @dataclass
@@ -195,6 +256,7 @@ class BaseFixtures:
     git: GitCliProvider
     runs: AgentRunRepository
     clock: FakeClock
+    ids: SequentialIdFactory = field(default_factory=SequentialIdFactory)
 
 
 EnvFactory = Callable[..., Awaitable[ExecutorEnv]]
@@ -222,6 +284,8 @@ async def build_executor_env(
     model_id: str = CODEX_MODEL,
     prompt_version: Callable[[str], str] | None = None,
     rules: list[PermissionRule] | None = None,
+    kernel_instance: str = "instance-a",
+    sleep: Callable[[float], Awaitable[None]] = no_sleep,
 ) -> ExecutorEnv:
     """Wire the executor over ``base``; ``plan`` drives both fake adapters."""
     db, clock = base.db, base.clock
@@ -254,7 +318,7 @@ async def build_executor_env(
     tools = DefaultToolRegistry(load_tool_specs([]))
     agents = DefaultAgentManager(
         ConstitutionLoader(AGENT_DEFAULTS, None),
-        PolicyLoader(AGENT_DEFAULTS / "policies.yaml", None),
+        PolicyLoader(AGENT_DEFAULTS / "policies.yaml", _fake_model_policies(db.path.parent)),
         permissions,
         tools,
         TemplateRenderer(AGENT_TEMPLATES),
@@ -322,10 +386,14 @@ async def build_executor_env(
         costs,
         base.hooks,
         base.ledger,
-        SequentialIdFactory(),
+        base.ids,
         clock,
+        agents,
+        permissions,
         project_key="DEMO",
-        kernel_instance="instance-a",
+        kernel_instance=kernel_instance,
+        ready_env_keys=lambda: {"git"},
+        sleep=sleep,
         prompt_version=prompt_version,
     )
     agent = await agents.instantiate(SENIOR, base.story, model_id, Effort.MEDIUM, [], {"git"})
@@ -355,6 +423,7 @@ async def build_executor_env(
         router=router,
         tool_invoker=tool_invoker,
         checkpoints=checkpoints,
+        permissions=permissions,
         adapters=adapters,
         fired=fired,
     )

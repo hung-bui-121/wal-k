@@ -116,11 +116,14 @@ class GitCliProvider:
     async def add_worktree(self, path: str, branch: str) -> str:
         """``git worktree add <path> <branch>``; return the absolute worktree path.
 
-        Parent directories are created; an existing worktree at ``path`` is left as is.
+        Parent directories are created; an existing worktree at ``path`` is left as is. A
+        registered worktree whose directory was deleted is pruned and added again.
         """
         target = _resolve(path)
         if target in await self._worktree_paths():
-            return str(target)
+            if target.is_dir():
+                return str(target)
+            await self._git(str(self._repo_root), "worktree", "prune")
         _ensure_dir(target.parent)
         await self._git(str(self._repo_root), "worktree", "add", str(target), branch)
         return str(target)

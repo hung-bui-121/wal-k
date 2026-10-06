@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Final
 
+from walk.common.errors import ConfigError
 from walk.integrations.protocols import GitProvider
 from walk.runtime.models import AgentRun
 from walk.workflow.models import WorkItem
@@ -73,6 +74,30 @@ class DefaultSandboxManager:
             await hook(run, item, path)
         return path
 
+    async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str:
+        """Reuse ``previous``'s worktree for the child ``run`` (fallback, recovery, resume).
+
+        An existing directory is returned unchanged (uncommitted residue kept). A missing one is
+        re-added on ``previous``'s branch with guard hooks (and the post-create extensions).
+        Never `create`: git checks a branch out in one worktree only.
+
+        Raises:
+            ConfigError: ``previous`` has no worktree.
+            GitError: From re-adding the worktree.
+        """
+        if previous.worktree_path is None:
+            msg = f"run {previous.id} has no worktree to adopt"
+            raise ConfigError(msg, detail={"run_id": run.id, "previous_run_id": previous.id})
+        path = previous.worktree_path
+        if _is_dir(path):
+            return path
+        branch = previous.branch or branch_name_for(item)
+        path = await self._git.add_worktree(path, branch)
+        await self._git.install_guard_hooks(path, self._protected)
+        for hook in self.post_create:
+            await hook(run, item, path)
+        return path
+
     async def remove(self, run: AgentRun, *, keep_branch: bool = True) -> None:
         """Force-remove the run's worktree; delete its branch only on request and if unprotected."""
         path = run.worktree_path or str(self._worktree_path(run))
@@ -86,3 +111,7 @@ class DefaultSandboxManager:
 
     def _worktree_path(self, run: AgentRun) -> Path:
         return (self._repo_root / WORKTREES_DIR / run.id).resolve()
+
+
+def _is_dir(path: str) -> bool:
+    return Path(path).is_dir()

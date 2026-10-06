@@ -38,6 +38,11 @@ class AgentRunRepository(Repository[AgentRun]):
         super().__init__(db)
         self._clock: Clock = clock if clock is not None else SystemClock()
 
+    @property
+    def db(self) -> Database:
+        """The database of the table (recovery opens its units of work on it)."""
+        return self._db
+
     def projection(self, obj: AgentRun) -> dict[str, object]:
         """Indexed columns of the ``agent_runs`` table."""
         return {

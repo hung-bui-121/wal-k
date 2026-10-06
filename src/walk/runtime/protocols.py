@@ -1,7 +1,4 @@
-"""Runtime protocols (INTERFACES §1.13).
-
-`SandboxManager.adopt` arrives with E01-S28.
-"""
+"""Runtime protocols (INTERFACES §1.13)."""
 
 from typing import Protocol
 
@@ -89,7 +86,8 @@ class AgentExecutor(Protocol):
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
         """Same model, provider-side session resume (ModelAdapter.resume).
 
-        Falls back to `start(handover=…)` on failure.
+        Raises NotResumable when the session cannot be continued; the caller (RecoveryManager)
+        then continues with `start(handover=…)` (E01-S28).
         """
         ...
 
@@ -139,6 +137,14 @@ class SandboxManager(Protocol):
         """`git worktree add <repo>/.walk/worktrees/<run_id> <branch>`; installs guard hooks.
 
         branch = item.branch or feat/<id>-<slug>; writes projections; returns path.
+        """
+        ...
+
+    async def adopt(self, run: AgentRun, previous: AgentRun, item: WorkItem) -> str:
+        """Child run (fallback / recovery / native resume) reuses previous.worktree_path.
+
+        Re-adds it on previous.branch with guard hooks when the directory is missing. Never
+        `create` for a child run (one branch, one worktree). E01-S28.
         """
         ...
 

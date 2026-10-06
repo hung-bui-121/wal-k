@@ -1,11 +1,13 @@
-"""`DefaultAgentExecutor`: one `AgentRun` end-to-end over the adapter event stream (E01-S27).
+"""`DefaultAgentExecutor`: one `AgentRun` end-to-end over the adapter event stream.
 
-ARCHITECTURE §3.2 steps 3-7: allocation, worktree, `AgentInput` and `RunSession` assembly, start
-events, the event loop (tool results, usage metering, periodic and hinted checkpoints with a
-boundary audit before every WIP commit), output validation with one repair turn, the output
-applier, and the run's end events. The executor is the ``runtime.AgentExecutor`` ledger write
-point (ARCHITECTURE §4.3). Every state change runs in its own unit of work; no transaction is
-held across an await on the adapter stream.
+ARCHITECTURE §3.2 steps 3-7 (E01-S27): allocation, worktree, `AgentInput` and `RunSession`
+assembly, start events, the event loop (tool results, usage metering, periodic and hinted
+checkpoints with a boundary audit before every WIP commit), output validation with one repair
+turn, the output applier, and the run's end events. E01-S28 adds transient-error retries with
+backoff, the fallback side effects of INTERFACES §5.3 (steps 5, 6, 10; the router decides), the
+worktree adoption of child runs and the native session resume. The executor is the
+``runtime.AgentExecutor`` ledger write point (ARCHITECTURE §4.3). Every state change runs in its
+own unit of work; no transaction is held across an await on the adapter stream.
 """
 
 import asyncio
@@ -17,11 +19,12 @@ from enum import Enum
 from typing import Final, Literal
 
 from walk.agents.models import AgentInput, AgentInstance, AgentOutput, Handover
+from walk.agents.protocols import AgentManager
 from walk.budgets.errors import BudgetExhausted
 from walk.budgets.models import BudgetDimension, BudgetHardAction, BudgetSubject
 from walk.budgets.protocols import BudgetManager, CostManager
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError, GuardRejected, WalkError
+from walk.common.errors import ConfigError, GuardRejected, TransientError, WalkError
 from walk.common.ids import IdFactory, ProjectKey, RunId, Sha
 from walk.common.models import JsonDict
 from walk.debate.models import Debate
@@ -30,17 +33,21 @@ from walk.hooks.errors import HookFailed
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.integrations.protocols import GitProvider
-from walk.model_router.errors import NotResumable
+from walk.model_router.errors import BlockedProvider, NotResumable
 from walk.model_router.models import (
     AgentEvent,
     AgentEventKind,
+    FallbackRequest,
     FallbackTrigger,
     ModelDescriptor,
+    ProviderSessionRef,
     RoutingDecision,
     RunSession,
+    TaskProfile,
 )
 from walk.model_router.protocols import ModelAdapter, ModelRouter
-from walk.permissions.models import ToolCallRequest
+from walk.permissions.models import Approver, ToolCallRequest
+from walk.permissions.protocols import PermissionManager
 from walk.persistence.database import Database
 from walk.persistence.uow import UnitOfWork
 from walk.runtime.boundary import DEFAULT_ALLOWED_PATHS, DEFAULT_FORBIDDEN_PATHS
@@ -70,6 +77,10 @@ REPAIR_INSTRUCTION = (
     "Your final output was rejected by the kernel:\n{errors}\n"
     "Write a corrected AgentOutput JSON object to .walk/output.json and finish."
 )
+RETRY_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)  # ARCHITECTURE §5.1, max 5 attempts
+RESUME_INSTRUCTION = (
+    "Continue the task from the current worktree state. Write .walk/output.json when finished."
+)
 
 _MAX_TURNS: Final = 50
 _MS_PER_S: Final = 1000
@@ -86,6 +97,7 @@ _ADVISORY_REJECTIONS: Final = frozenset({"DENY", "REQUIRE_APPROVAL"})
 _KERNEL_DECISION: Final = "kernel_decision"
 _MEMORY_PREFIX: Final = ".ai/"
 _NO_TRIGGER: Final = "none"
+_NATIVE_RESUME: Final = "native_resume"
 _Outcome = Literal["OK", "FAILED", "SKIPPED"]
 
 
@@ -115,10 +127,21 @@ class _Live:
     final: AgentEvent | None = None
     pending: list[tuple[ToolCallRequest, datetime]] = field(default_factory=list)
     advisory: list[str] = field(default_factory=list)
+    resume: Checkpoint | None = None
+    retries: int = 0
     stop: _Stop | None = None
     finalizing: bool = False
     ended: bool = False
     task: asyncio.Task[None] | None = None
+
+
+@dataclass(frozen=True)
+class _StreamResult:
+    """Why `DefaultAgentExecutor._consume` stopped reading a stream."""
+
+    proceed: bool = False  # ended normally; the run continues with the final output
+    error: AgentEvent | None = None  # the adapter reported ERROR
+    failure: Exception | None = None  # the adapter iterator raised
 
 
 @dataclass(frozen=True)
@@ -135,7 +158,7 @@ class _End:
 class DefaultAgentExecutor:
     """`AgentExecutor`: runs each `AgentRun` as an asyncio task."""
 
-    def __init__(  # noqa: PLR0917 - parameters fixed by the E01-S27 contract
+    def __init__(  # noqa: PLR0917 - parameters fixed by the E01-S27/S28 contracts
         self,
         db: Database,
         runs: AgentRunRepository,
@@ -155,9 +178,13 @@ class DefaultAgentExecutor:
         ledger: LedgerManager,
         ids: IdFactory,
         clock: Clock,
+        agents: AgentManager,
+        permissions: PermissionManager,
         *,
         project_key: ProjectKey,
         kernel_instance: str,
+        ready_env_keys: Callable[[], set[str]] = set,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         env_allowlist: Callable[[], dict[str, str]] = dict,
         on_run_finished: Callable[[AgentRun], Awaitable[None]] | None = None,
         allowed_paths: tuple[str, ...] = DEFAULT_ALLOWED_PATHS,
@@ -185,8 +212,13 @@ class DefaultAgentExecutor:
             ledger: The ``runtime.AgentExecutor`` write point (ARCHITECTURE §4.3).
             ids: ``RUN-`` and cost record ULIDs.
             clock: Stamps events and measures the run's wall-clock time.
+            agents: Instantiates the agent of a native resume.
+            permissions: Escalates a run blocked by its providers to the user.
             project_key: Project of the runs, events and budgets.
             kernel_instance: Kernel process that owns the runs.
+            ready_env_keys: Environment keys available to tools (native resume instances).
+            sleep: Awaited between retries (`RETRY_DELAYS_S`); the composition root adds
+                jitter, tests inject a recorder.
             env_allowlist: Environment of the run's subprocesses (scrubbed by E02-S01).
             on_run_finished: Awaited after a run reached an end state (wakes the scheduler);
                 the composition root may bind it after construction.
@@ -213,8 +245,12 @@ class DefaultAgentExecutor:
         self._ledger = ledger
         self._ids = ids
         self._clock = clock
+        self._agents = agents
+        self._permissions = permissions
         self._project_key = project_key
         self._kernel_instance = kernel_instance
+        self._ready_env_keys = ready_env_keys
+        self._sleep = sleep
         self._env_allowlist = env_allowlist
         self.on_run_finished = on_run_finished
         self._allowed_paths = list(allowed_paths)
@@ -240,33 +276,70 @@ class DefaultAgentExecutor:
         A failure while preparing the run (worktree, input, session) ends it FAILED and returns
         it; a failing ``ON_AGENT_START`` hook ends it FAILED_HOOK before the adapter is called.
 
+        A child run (``parent_run_id`` of a run with a worktree) adopts that worktree.
+
         Raises:
             ConfigError: Unknown purpose or model, or the item already has an active run.
             WorkItemNotFound: ``item`` does not exist.
         """
-        expected_output_for(purpose, item)
-        current = await self._items.get(item.id)
-        if current is None:
-            msg = f"work item not found: {item.id}"
-            raise WorkItemNotFound(msg, detail={"work_item_id": item.id})
-        await self._refuse_active_run(current)
-        adapter = self._router.adapter_for(agent.model_id)
-        run = await self._allocate(agent, current, purpose, adapter, handover, parent_run_id)
-        try:
-            live = await self._prepare(run, agent, current, purpose, adapter, handover, debate)
-        except Exception as exc:  # noqa: BLE001 - any preparation failure fails the run
-            return await self._prepare_failed(run, exc)
-        await self._start_events(live, routing, effort_resolution)
-        return await self._launch(live)
+        return await self._start(
+            agent,
+            item,
+            purpose,
+            handover=handover,
+            parent_run_id=parent_run_id,
+            debate=debate,
+            routing=routing,
+            effort_resolution=effort_resolution,
+        )
 
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
-        """Provider-side session resume; not available before E01-S28.
+        """Continue the checkpoint's run on the same model through the provider session.
+
+        The new run has ``parent_run_id`` = the checkpoint's run, its session and tool-call
+        count, adopts its worktree and writes ``MODEL_SELECTED(reason=native_resume)``.
 
         Raises:
-            ConfigError: Always.
+            NotResumable: The session is missing or not resumable, the adapter is unhealthy,
+                or the adapter refuses the resume (the new run then ends FAILED,
+                ``not_resumable``).
+            RunNotFound: The checkpoint's run does not exist.
+            WorkItemNotFound: Its work item does not exist.
+            ConfigError: Unknown model, or the item already has an active run.
         """
-        msg = "implemented in E01-S28"
-        raise ConfigError(msg, detail={"story": "E01-S28", "checkpoint_id": checkpoint.id})
+        parent = await self._persisted(checkpoint.run_id)
+        item = await self._item(parent.work_item_id)
+        adapter = self._router.adapter_for(checkpoint.model_id)
+        ref = checkpoint.provider_session
+        if ref is None or not ref.resumable:
+            msg = f"checkpoint {checkpoint.id} has no resumable provider session"
+            raise NotResumable(msg, detail={"checkpoint_id": checkpoint.id})
+        if not (await adapter.health()).ok:
+            msg = f"adapter {adapter.provider} is unhealthy"
+            raise NotResumable(msg, detail={"provider": adapter.provider})
+        subject = BudgetSubject(
+            project_key=self._project_key,
+            phase_id=item.phase_id,
+            role=parent.role,
+            work_item_id=item.id,
+        )
+        budget_ids = [budget.id for budget in await self._budgets.applicable(subject)]
+        agent = await self._agents.instantiate(
+            parent.role,
+            item,
+            checkpoint.model_id,
+            checkpoint.effort,
+            budget_ids,
+            self._ready_env_keys(),
+        )
+        return await self._start(
+            agent,
+            item,
+            parent.purpose,
+            parent_run_id=parent.id,
+            fallbacks=parent.fallbacks,
+            resume=checkpoint,
+        )
 
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun:
         """Stop the run: PAUSE checkpoint, CANCELLED, worktree removed (branch kept).
@@ -322,6 +395,48 @@ class DefaultAgentExecutor:
 
     # ---- start ---------------------------------------------------------------------------
 
+    async def _start(
+        self,
+        agent: AgentInstance,
+        item: WorkItem,
+        purpose: str,
+        *,
+        handover: Handover | None = None,
+        parent_run_id: RunId | None = None,
+        debate: Debate | None = None,
+        routing: RoutingDecision | None = None,
+        effort_resolution: EffortResolution | None = None,
+        fallbacks: int = 0,
+        resume: Checkpoint | None = None,
+    ) -> AgentRun:
+        expected_output_for(purpose, item)
+        current = await self._item(item.id)
+        await self._refuse_active_run(current)
+        adapter = self._router.adapter_for(agent.model_id)
+        run = await self._allocate(agent, current, purpose, adapter, handover, parent_run_id)
+        run = run.model_copy(update={"fallbacks": fallbacks})
+        if resume is not None:
+            run = run.model_copy(
+                update={
+                    "provider_session": resume.provider_session,
+                    "tool_calls": resume.tool_calls_so_far,
+                }
+            )
+        try:
+            live = await self._prepare(run, agent, current, purpose, adapter, handover, debate)
+        except Exception as exc:  # noqa: BLE001 - any preparation failure fails the run
+            return await self._prepare_failed(run, exc)
+        live.resume = resume
+        await self._start_events(live, routing, effort_resolution)
+        return await self._launch(live)
+
+    async def _item(self, work_item_id: str) -> WorkItem:
+        item = await self._items.get(work_item_id)
+        if item is None:
+            msg = f"work item not found: {work_item_id}"
+            raise WorkItemNotFound(msg, detail={"work_item_id": work_item_id})
+        return item
+
     async def _refuse_active_run(self, item: WorkItem) -> None:
         if item.assigned_run_id is None:
             return
@@ -373,8 +488,14 @@ class DefaultAgentExecutor:
         handover: Handover | None,
         debate: Debate | None,
     ) -> _Live:
-        worktree = await self._sandbox.create(run, item)
-        run = run.model_copy(update={"worktree_path": worktree, "branch": branch_name_for(item)})
+        parent = await self._runs.get(run.parent_run_id) if run.parent_run_id else None
+        if parent is not None and parent.worktree_path is not None:
+            worktree = await self._sandbox.adopt(run, parent, item)
+            branch = parent.branch or branch_name_for(item)
+        else:
+            worktree = await self._sandbox.create(run, item)
+            branch = branch_name_for(item)
+        run = run.model_copy(update={"worktree_path": worktree, "branch": branch})
         async with UnitOfWork(self._db) as uow:
             await self._runs.upsert(run, uow)
         descriptor = self._router.registry().models[run.model_id]  # adapter_for checked it
@@ -461,7 +582,7 @@ class DefaultAgentExecutor:
             "handover_in_id": run.handover_in_id,
             "context_item_ids": live.agent_input.context.ref().item_ids,
         }
-        selected: JsonDict = {"reason": "direct"}
+        selected: JsonDict = {"reason": _NATIVE_RESUME if live.resume else "direct"}
         if routing is not None:
             selected = {
                 "reason": routing.reason,
@@ -508,27 +629,50 @@ class DefaultAgentExecutor:
             await self._fail_with(live, exc)
             return live.run
         live.start_head = start.head_sha
+        ref = live.resume.provider_session if live.resume is not None else None
+        stream = await self._open_resumed_stream(live, ref) if ref is not None else None
         self._live[live.run.id] = live
-        live.task = asyncio.create_task(self._drive(live), name=f"walk-run-{live.run.id}")
+        live.task = asyncio.create_task(self._drive(live, stream), name=f"walk-run-{live.run.id}")
         self._tasks[live.run.id] = live.task
         return live.run
 
+    async def _open_resumed_stream(
+        self, live: _Live, ref: ProviderSessionRef
+    ) -> AsyncIterator[AgentEvent]:
+        """The provider session continuation of a native resume (adapters refuse eagerly)."""
+        try:
+            return live.adapter.resume(ref, RESUME_INSTRUCTION, live.session)
+        except NotResumable as exc:
+            error: JsonDict = {"kind": "NOT_RESUMABLE", "message": exc.message}
+            await self._end(live, _End(AgentRunState.FAILED, "FAILED", "not_resumable", error))
+            await self._notify_finished(live)
+            raise
+
     # ---- event loop ----------------------------------------------------------------------
 
-    async def _drive(self, live: _Live) -> None:
+    async def _drive(self, live: _Live, stream: AsyncIterator[AgentEvent] | None) -> None:
         # CancelledError (kernel shutdown) is not an Exception: the run stays RUNNING for recovery.
         try:
             if live.stop is None:
-                await self._execute(live)
+                await self._execute(live, stream)
         except Exception as exc:  # noqa: BLE001 - the task must leave a terminal state
             await self._fail_safely(live, exc)
         finally:
             self._live.pop(live.run.id, None)
 
-    async def _execute(self, live: _Live) -> None:
-        stream: AsyncIterator[AgentEvent] | None = live.adapter.run(live.agent_input, live.session)
+    async def _execute(self, live: _Live, first: AsyncIterator[AgentEvent] | None) -> None:
+        stream: AsyncIterator[AgentEvent] | None = first or live.adapter.run(
+            live.agent_input, live.session
+        )
         while stream is not None:
-            if not await self._consume(live, stream):
+            result = await self._consume(live, stream)
+            if result.failure is not None:
+                stream = await self._after_adapter_failure(live, result.failure)
+                continue
+            if result.error is not None:
+                await self._on_error_event(live, result.error)
+                return
+            if not result.proceed:
                 return
             final = live.final
             if final is None:
@@ -540,27 +684,76 @@ class DefaultAgentExecutor:
                 return
             stream = await self._repair(live, errors or "invalid output")
 
-    async def _consume(self, live: _Live, stream: AsyncIterator[AgentEvent]) -> bool:
-        """Handle the stream's events; True when it ended normally and the run continues."""
+    async def _consume(self, live: _Live, stream: AsyncIterator[AgentEvent]) -> _StreamResult:
+        """Handle the stream's events until it ends; the stream is always closed on return."""
         try:
-            async for event in stream:
+            while True:
+                try:
+                    event = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                except Exception as exc:  # noqa: BLE001 - classified by the caller
+                    return _StreamResult(failure=exc)
                 if live.stop is not None or live.ended:
-                    return False
+                    return _StreamResult()
                 if event.kind is AgentEventKind.ERROR:
-                    await self._fail_run(
-                        live, event.trigger, event.error or "adapter reported an error"
-                    )
-                    return False
+                    return _StreamResult(error=event)
                 await self._handle(live, event)
                 if live.ended:
-                    return False
+                    return _StreamResult()
                 if event.kind is AgentEventKind.ENDED:
                     break
         finally:
             close = getattr(stream, "aclose", None)
             if callable(close):
                 await close()
-        return live.stop is None and not live.ended
+        return _StreamResult(proceed=live.stop is None and not live.ended)
+
+    async def _after_adapter_failure(
+        self, live: _Live, exc: Exception
+    ) -> AsyncIterator[AgentEvent] | None:
+        """Retry a transient adapter error (ARCHITECTURE §5.1); otherwise end or fall back."""
+        if isinstance(exc, TransientError) and live.retries < len(RETRY_DELAYS_S):
+            return await self._retry(live, exc)
+        await self._on_exception(live, exc, from_adapter=True)
+        return None
+
+    async def _retry(self, live: _Live, exc: Exception) -> AsyncIterator[AgentEvent] | None:
+        live.retries += 1
+        delay = RETRY_DELAYS_S[live.retries - 1]
+        payload: JsonDict = {
+            "reason": "transient",
+            "attempt": live.retries,
+            "delay": delay,
+            "error": type(exc).__name__,
+            "message": _message(exc),
+        }
+        async with UnitOfWork(self._db) as uow:
+            await self._ledger.append(
+                self._event(LedgerEventKind.RETRY, live.run, outcome="OK", payload=payload),
+                uow=uow,
+            )
+        await self._sleep(delay)
+        if live.stop is not None:
+            return None
+        live.pending.clear()
+        live.final = None
+        ref = live.run.provider_session
+        if ref is not None and ref.resumable:
+            try:
+                return live.adapter.resume(ref, RESUME_INSTRUCTION, live.session)
+            except NotResumable:
+                _LOG.info(
+                    "session not resumable; restarting the run", extra={"run_id": live.run.id}
+                )
+        return live.adapter.run(live.agent_input, live.session)
+
+    async def _on_error_event(self, live: _Live, event: AgentEvent) -> None:
+        message = event.error or "adapter reported an error"
+        if event.trigger is not None:
+            await self._fall_back(live, event.trigger, message)
+            return
+        await self._fail_run(live, None, message)
 
     async def _handle(self, live: _Live, event: AgentEvent) -> None:
         kind = event.kind
@@ -747,18 +940,116 @@ class DefaultAgentExecutor:
 
     async def _fail_safely(self, live: _Live, exc: Exception) -> None:
         try:
-            await self._fail_with(live, exc)
+            await self._on_exception(live, exc, from_adapter=False)
         except Exception:  # noqa: BLE001 - logged; recovery resumes a run left RUNNING
             _LOG.exception("agent run could not be ended", extra={"run_id": live.run.id})
 
     async def _fail_with(self, live: _Live, exc: Exception) -> None:
+        await self._on_exception(live, exc, from_adapter=False)
+
+    async def _on_exception(self, live: _Live, exc: Exception, *, from_adapter: bool) -> None:
+        """Adapter errors and budget exhaustion may fall back (§21); others fail the run."""
         if live.ended:
             _LOG.exception("error after the run ended", extra={"run_id": live.run.id})
             return
-        if isinstance(exc, BudgetExhausted):
+        trigger = (
+            self._router.classify_error(exc, live.adapter)
+            if from_adapter or isinstance(exc, BudgetExhausted)
+            else None
+        )
+        if trigger is not None:
+            await self._fall_back(live, trigger, _message(exc))
+        elif isinstance(exc, BudgetExhausted):
             await self._block_budget(live, exc)
+        else:
+            await self._fail_run(live, None, _message(exc))
+
+    async def _fall_back(self, live: _Live, trigger: FallbackTrigger, message: str) -> None:
+        """INTERFACES §5.3 in the order 5 → 7-9 → 6 → 10."""
+        run = live.run
+        await live.adapter.cancel(run.id)
+        if await self._violates_boundary(live, await self._git.status(_worktree(live))):
             return
-        await self._fail_run(live, self._router.classify_error(exc, live.adapter), _message(exc))
+        handover = await self._checkpoints.build_handover(run, "FALLBACK", live.partial)
+        checkpoint = await self._checkpoints.checkpoint(
+            live.run,
+            CheckpointKind.HANDOFF,
+            handover=handover,
+            workflow_state=live.item.state,
+            budget_consumed=self._consumed(live),
+            context_manifest=live.agent_input.context.ref(),
+        )
+        request = FallbackRequest(
+            role=run.role,
+            policy=live.agent.runtime_policy.model_policy,
+            current_model_id=run.model_id,
+            trigger=trigger,
+            profile=_profile(live),
+            effort=run.effort,
+            fallbacks_so_far=run.fallbacks,
+        )
+        try:
+            decision = await self._router.fallback(request)
+        except BlockedProvider as exc:
+            await self._block_provider(live, exc)
+            return
+        payload: JsonDict = {
+            "trigger": trigger.value,
+            "from": run.model_id,
+            "to": decision.model_id,
+            "handover_id": handover.id,
+            "checkpoint_id": checkpoint.id,
+            "rejected": [[model, why] for model, why in decision.rejected],
+        }
+        async with UnitOfWork(self._db) as uow:
+            await self._ledger.append(
+                self._event(
+                    LedgerEventKind.MODEL_FALLBACK, live.run, outcome="OK", payload=payload
+                ),
+                uow=uow,
+            )
+        await self._fire(HookName.ON_MODEL_FALLBACK, live, payload)
+        reason = f"fallback: {trigger.value}: {message}"
+        ended: JsonDict = {"trigger": trigger.value, "to_model_id": decision.model_id}
+        await self._end(live, _End(AgentRunState.HANDED_OVER, "FAILED", reason), ended)
+        successor = live.agent.model_copy(
+            update={"model_id": decision.model_id, "effort": decision.effort}
+        )
+        child = await self._start(
+            successor,
+            live.item,
+            live.purpose,
+            handover=handover,
+            parent_run_id=run.id,
+            routing=decision,
+            fallbacks=run.fallbacks + 1,
+        )
+        await self._checkpoints.close_handover(handover.id, child.id)
+        await self._notify_finished(live)
+
+    async def _block_provider(self, live: _Live, exc: BlockedProvider) -> None:
+        """§21 level 3: no model left; the user decides (HANDOFF checkpoint stays)."""
+        rejected = exc.detail.get("rejected", [])
+        await self._permissions.request_approval(
+            {
+                "reason": "blocked_provider",
+                "work_item_id": live.run.work_item_id,
+                "run_id": live.run.id,
+                "rejected": rejected,
+            },
+            kind="ESCALATION",
+            approver=Approver.USER,
+            requested_by=live.run.role,
+            run_id=live.run.id,
+            work_item_id=live.run.work_item_id,
+        )
+        error: JsonDict = {"kind": "BLOCKED_PROVIDER", "rejected": rejected}
+        reason = f"blocked_provider: {exc.message}"
+        await self._end(
+            live,
+            _End(AgentRunState.BLOCKED_PROVIDER, "FAILED", reason, error, task_failed=True),
+        )
+        await self._notify_finished(live)
 
     async def _fail_run(self, live: _Live, trigger: FallbackTrigger | None, message: str) -> None:
         """E01-S27 rule 12: FAILED, ERROR with the trigger, ON_TASK_FAILED."""
@@ -947,6 +1238,17 @@ class DefaultAgentExecutor:
 
 def _worktree(live: _Live) -> str:
     return live.session.worktree_path
+
+
+def _profile(live: _Live) -> TaskProfile:
+    """E01-S28 rule 9 profile; E03-S07 replaces it with the router-built one."""
+    return TaskProfile(
+        required_capabilities=[],
+        required_tools=list(live.agent.tools),
+        required_skills=list(live.agent.skills),
+        estimated_context_tokens=live.agent_input.context.total_tokens_estimate,
+        risk=live.item.risk,
+    )
 
 
 def _message(exc: BaseException) -> str:

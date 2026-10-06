@@ -270,8 +270,6 @@ async def test_router_requires_an_adapter_per_enabled_provider(
     with pytest.raises(ConfigError, match="fake-claude"):
         router.adapter_for(CLAUDE)
     assert sorted(await router.health_all()) == [CODEX]
-    with pytest.raises(ConfigError, match="E01-S28"):
-        await router.fallback(object())
 
 
 class RefusingAdapter(FakeModelAdapter):

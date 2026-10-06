@@ -702,7 +702,9 @@ class AgentExecutor(Protocol):
         (MODEL_SELECTED, EFFORT_SET). A preparation failure returns the run FAILED instead of raising."""
 
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
-        """Same model, provider-side session resume (ModelAdapter.resume). Falls back to `start(handover=…)` on failure."""
+        """Same model, provider-side session resume (ModelAdapter.resume). E01-S28: raises NotResumable when the session
+        is not resumable, the adapter is unhealthy or refuses the resume (the new run then ends FAILED `not_resumable`);
+        the caller (runtime.RecoveryManager) continues with `start(handover=…)`."""
 
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun: ...
     async def pause(self, run_id: RunId) -> AgentRun: ...
@@ -1487,6 +1489,8 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
     if decision.model_id != ckpt.model_id → ledger MODEL_FALLBACK{trigger: PROVIDER_OUTAGE, from: ckpt.model_id, to: decision.model_id}
                                             and fire ON_MODEL_FALLBACK
     the interrupted run ends HANDED_OVER; the new run starts with the handover (reason RECOVERY) and parent_run_id = interrupted run
+    E01-S28: after a native resume the interrupted run ends HANDED_OVER too (continued by another run); both paths write
+    its AGENT_RUN_ENDED{state: HANDED_OVER, mode}
 ```
 
 ### 5.4 Context-first retrieval (§40, §42) — `ContextManager.build` (ADR-0012)

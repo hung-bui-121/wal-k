@@ -1,7 +1,6 @@
 """Model routing and adapter-boundary contracts (DOMAIN-MODEL §3, §4.10; INTERFACES §2.1).
 
-`Capability` lives in `walk.common.enums` (RELOCATE, WBS §3.2). `FallbackRequest` and
-`MAX_FALLBACKS_PER_RUN` arrive with the fallback path (E01-S28).
+`Capability` lives in `walk.common.enums` (RELOCATE, WBS §3.2).
 """
 
 from collections.abc import Awaitable, Callable
@@ -10,16 +9,19 @@ from enum import StrEnum
 
 from pydantic import Field, field_validator
 
-from walk.agents.models import AgentOutput
+from walk.agents.models import AgentOutput, ModelPolicy
 from walk.common.enums import Capability, Effort
 from walk.common.ids import ModelId, RunId, SkillName, ToolName
 from walk.common.models import FrozenModel, JsonDict, WalkModel
+from walk.common.roles import AgentRole
 from walk.permissions.models import PermissionDecision, ToolCallRequest
 from walk.tools.models import ToolSpec
 from walk.workflow.models import Risk
 
 _MIN_SCORE = 0
 _MAX_SCORE = 5
+
+MAX_FALLBACKS_PER_RUN = 2  # ARCHITECTURE.md §5.5
 
 
 class FallbackTrigger(StrEnum):
@@ -104,6 +106,28 @@ class RoutingDecision(FrozenModel):
     is_fallback: bool = Field(default=False, description="Chosen model is not a preferred one.")
     trigger: FallbackTrigger | None = Field(
         default=None, description="Trigger that caused a fallback decision."
+    )
+
+
+class FallbackRequest(FrozenModel):
+    """Input of `ModelRouter.fallback` (INTERFACES.md §5.3 steps 7-9).
+
+    Plain data instead of an `AgentRun`, because model_router may not import runtime
+    (ARCHITECTURE.md §2.2). Built by runtime.AgentExecutor (E01-S28).
+    """
+
+    role: AgentRole = Field(description="Role of the failing run.")
+    policy: ModelPolicy = Field(description="Model policy of the role.")
+    current_model_id: ModelId = Field(description="Model of the failing run.")
+    trigger: FallbackTrigger = Field(description="§21 trigger of the fallback.")
+    profile: TaskProfile = Field(description="Task profile for the new selection.")
+    effort: Effort = Field(description="Effort of the failing run.")
+    fallbacks_so_far: int = Field(description="AgentRun.fallbacks of the failing run (chain count)")
+    max_fallbacks: int = Field(
+        default=MAX_FALLBACKS_PER_RUN, description="Fallbacks allowed per chain of runs."
+    )
+    measured_context_tokens: int | None = Field(
+        default=None, description="Measured context size (CONTEXT_OVERFLOW only)."
     )
 
 
