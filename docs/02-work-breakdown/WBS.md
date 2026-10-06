@@ -388,7 +388,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | ID | Title | Type | Depends on | Effort | Status |
 |---|---|---|---|---|---|
 | E01-S01 | Project scaffold, `walk.common`, quality gate, `walk --version` | chore | none | HIGH | DONE (54f3361) |
-| E01-S02 | Provider CLI/SDK spike → ADR-0014 | docs | none | MEDIUM | DONE (pending) |
+| E01-S02 | Provider CLI/SDK spike → ADR-0014 | docs | none | MEDIUM | DONE (4a82edc) |
 | E01-S03 | SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup` | feat | E01-S01 | HIGH | DONE (2edcc6c) |
 | E01-S04 | `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore` | feat | E01-S03 | MEDIUM | DONE (1513909) |
 | E01-S05 | Execution ledger: `LedgerManager`, `walk ledger tail/query` | feat | E01-S04 | MEDIUM | DONE (68e1158) |
@@ -399,7 +399,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S10 | `feature_workflow`/`bug_workflow` tables, remaining guards, DoR, `ready_items`, done dimensions | feat | E01-S09 | HIGH | DONE (1a3924a) |
 | E01-S11 | Phases and release candidates: models, tables, `walk phase list/start/gate` | feat | E01-S09 | MEDIUM | DONE (7b73aef) |
 | E01-S12 | Budgets and cost: `BudgetManager`, `CostManager`, `walk cost` | feat | E01-S05, E01-S07 | HIGH | DONE (4b56802) |
-| E01-S13 | Effort resolution: `EffortManager` | feat | E01-S10, E01-S12 | MEDIUM | TODO |
+| E01-S13 | Effort resolution: `EffortManager` | feat | E01-S10, E01-S12 | MEDIUM | DONE (pending) |
 | E01-S14 | Tool and skill catalogues: `ToolRegistry`, `tools.yaml`, `Skill`/`SkillProjector` models | feat | E01-S12 | MEDIUM | TODO |
 | E01-S15 | Permission policy core: `PermissionManager.decide/rules_for` | feat | E01-S14 | MEDIUM | TODO |
 | E01-S16 | Memory core: front matter, `MemoryDocument`, atomic `write`, `apply_updates`, handovers, index | feat | E01-S05, E01-S07 | HIGH | TODO |

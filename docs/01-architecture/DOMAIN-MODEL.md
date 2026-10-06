@@ -934,6 +934,7 @@ class ModelPolicy(WalkModel):
     allow_task_override: bool = True
 
 
+# Implemented in walk.effort.models (RELOCATE, WBS §3.2; E01-S13): effort may not import agents.
 class EffortPolicy(WalkModel):
     """§18–§19 inputs."""
 

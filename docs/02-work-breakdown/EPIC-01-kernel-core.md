@@ -228,7 +228,7 @@ Level-0 decisions (no contract change):
 
 ### E01-S02 — Provider CLI/SDK spike → ADR-0014
 
-**Status:** DONE (pending)
+**Status:** DONE (4a82edc)
 **Type:** docs
 **Requirements:** §6.1, §17, §21–§22, §128, §139
 **Depends on:** none
@@ -1750,7 +1750,7 @@ Level-0 decisions:
 
 ### E01-S13 — Effort resolution: `EffortManager`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §17, §18, §19
 **Depends on:** E01-S10, E01-S12
@@ -1848,7 +1848,32 @@ class DefaultEffortManager:
 - Commit: `feat: add effort resolution and dynamic effort requests (E01-S13)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+114 files already formatted
+All checks passed!
+Success: no issues found in 112 source files
+Required test coverage of 85% reached. Total coverage: 99.91%
+440 passed in 22.43s
+```
+Touched modules: `effort/*` 100%.
+
+Demo (no CLI in this story; `resolve` on a CRITICAL-risk LARGE story with the default policy):
+```
+READY  {'role_default': 'MEDIUM', 'complexity_component': 'HIGH', 'risk_bump': 2, 'stage_bump': 0, 'escalation_bump': 0, 'effective': 'HIGH', 'clamped_by_policy': True, 'clamped_by_budget': False}
+REWORK {'role_default': 'MEDIUM', 'complexity_component': 'HIGH', 'risk_bump': 2, 'stage_bump': 1, 'escalation_bump': 0, 'effective': 'LOW', 'clamped_by_policy': True, 'clamped_by_budget': True}   (COST_USD headroom 2.5)
+```
+
+Contract changes (small, additive; see commit body):
+- Import order: INTERFACES §1.5 types headroom as `dict[BudgetDimension, float]`, but ARCHITECTURE §2.2 put `effort` before `budgets`. That made `effort → budgets` illegal. [ADR-0019](../01-architecture/adr/ADR-0019-budgets-before-effort.md) swaps the two packages in the L2 order (`hooks, workflow, budgets, effort, …`) and allows the single edge `effort → budgets`. The table in ARCHITECTURE §2.2 and the ADR index are updated. No cycle results, and no other cell changes.
+- `DefaultEffortManager.__init__` takes an extra keyword-only `project_key: ProjectKey`. `request_change` receives only a run id, but `LedgerEvent` and `HookContext` require a project key. There is one project per kernel database. The `EffortManager` protocol is unchanged.
+- `DOMAIN-MODEL.md` §4.2: one comment line records that `EffortPolicy` is implemented in `walk.effort.models` (RELOCATE, WBS §3.2).
+
+Level-0 decisions:
+- `resolve` follows INTERFACES §5.2 literally. Risk is `item.risk`, the work-item field, not `contract.risk`. Step 6 clamps to `[min, max]`. `clamped_by_policy` means the clamp changed the index, in either direction. Step 7 stops at LOW (index 0). A `complexity_map` or `risk_bump` without an entry for the item raises `ConfigError`; `stage_bump` defaults to 0, as in the algorithm. No validation of `min <= default <= max` is added.
+- Cost estimates in `resolve` use the role `item.owner_role`, then `contract.owner_role`, then `KERNEL`. `request_change` has no item, so it estimates with `KERNEL`. `StaticCostEstimator` ignores the role. The rolling-mean estimator (E09-S03) will need the caller's role in `request_change`, which would change the protocol at that point.
+- `request_change` checks run in this order: (a) target in `[min, max]`; then the target must actually move in `request.direction` (otherwise denied, including target == current, so a mislabelled "DOWNGRADE" cannot bypass the approval and budget checks); (b) the approval callback, only for upgrades and only when `auto_approve_upgrade_within_budget` is false; (c) the budget: `estimate(target) − estimate(current) > headroom[COST_USD]`, where a missing key means unlimited; (d) accept. A denial logs `effort change denied` with a `deny_reason` (`outside_policy`, `direction_mismatch`, `approval_denied`, `budget`) and writes or fires nothing.
+- An accepted change writes `EFFORT_CHANGED` first: actor KERNEL, `run_id`, `effort = target`, outcome OK, payload `{from, to, direction, reason}`. It then fires `ON_EFFORT_CHANGE` with the same payload. This matches the write-then-fire order of E01-S12. Persisting `run.effort_next` is left to the runtime (E01-S25+), which uses the returned effort.
 
 ---
 
