@@ -987,7 +987,7 @@ Level-0 decisions (no listed signature changed):
 
 ### E01-S08 — Work-item aggregates, repository, `WorkflowManager.create/get/query`, `walk work list/show`
 
-**Status:** DONE (pending)
+**Status:** DONE (dff4ff5)
 **Type:** feat
 **Requirements:** §52, §54, §57, §81
 **Depends on:** E01-S04, E01-S05
@@ -1152,7 +1152,7 @@ Level-0 decisions:
 
 ### E01-S09 — `StateMachine`, YAML tables, guard registry, `raise_event`, `story_workflow`, `walk work transition`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §53, §54, §61, §81, §105 (tables as versioned data), §137 (Inv. 4, 9)
 **Depends on:** E01-S07, E01-S08
@@ -1287,7 +1287,53 @@ Guards registered in this story (all read WBS §3.4 payload keys): `definition_o
 - Commit: `feat: add state machine, guard registry and story workflow table (E01-S09)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+87 files already formatted
+All checks passed!
+Success: no issues found in 84 source files
+Required test coverage of 85% reached. Total coverage: 99.87%
+283 passed in 10.23s
+```
+Touched modules: `workflow/state_machine.py`, `guards.py`, `service.py`, `repository.py`, `models.py`, `errors.py`, `cli/cmd_work.py` each 100%.
+
+Demo (scratch repo from the E01-S08 demo, `STORY-0001` in IDEA):
+```
+$ walk work transition STORY-0001 ready --repo ./demo
+STORY-0001: IDEA -> READY
+$ walk work transition STORY-0001 start_implementation --repo ./demo
+error: 'start_implementation' rejected for STORY-0001: branch_available: payload missing; budget_available: payload missing      (exit 2)
+$ walk work transition STORY-0001 review_approved --repo ./demo
+error: no transition for event 'review_approved' from READY (STORY)      (exit 1)
+$ walk work transition STORY-0001 start_implementation --payload '{"branch_available": true, "budget_ok": true}' --repo ./demo
+STORY-0001: READY -> IMPLEMENTING
+$ walk work show STORY-0001 --repo ./demo   (tail)
+transitions:
+  1  2026-10-06T11:15:32.717902+00:00  IDEA -> READY  ready  USER
+  2  2026-10-06T11:15:34.622313+00:00  READY -> IMPLEMENTING  start_implementation  USER
+runs: none
+cost: none
+$ walk ledger query --kind WORK_ITEM_TRANSITION --repo ./demo
+seq  at                                kind                  actor  item        run  outcome
+4    2026-10-06T11:15:32.717902+00:00  WORK_ITEM_TRANSITION  USER   STORY-0001       OK
+5    2026-10-06T11:15:34.622313+00:00  WORK_ITEM_TRANSITION  USER   STORY-0001       OK
+```
+
+Contract alignments (docs updated in this commit; all additive):
+- INTERFACES §1.3 `Transition` gains `excluded_states` and `effects` (both default `()`), plus `applies_to(state)`. `from_state` widens to `WorkItemState | "*"` and `to_state` to `WorkItemState | "PREVIOUS"`. Without these, the story's YAML keys (`* except …`, `PREVIOUS`, `effects`) cannot be carried from `transition_for` to `raise_event`. `TransitionTable` gains `kinds` (default `()`), which AC 1 asserts and which `table_for` uses to index tables.
+- ARCHITECTURE §2.3: `walk/workflow/` joins the PyYAML allow-list. The story's `TableLoader` and ADR-0010 D-4 put YAML tables there, but the confinement table did not list the package.
+- **Role semantics (owner attention):** `actor_role=USER` may raise every event and guards still apply. AC 16 and the demo require `walk work transition STORY-0001 ready` to succeed as USER, but the `ready` row lists only ORCHESTRATOR/LEAD_DEV/SCRUM_MASTER. INTERFACES §6 says "Raises event as USER (guards still apply)". Agent roles are still checked strictly (AC 6). This is recorded on `Transition.allowed_roles` in INTERFACES §1.3.
+
+Outside the Files table: `workflow/models.py`, `workflow/repository.py`, `workflow/__init__.py`, `tests/workflow/test_service_create.py` and `docs/01-architecture/*`. The changes are the model fields above. The repository gains `add_transition`, `transitions`, `last_transition_into` and `states_of`, which keep the SQL out of the service. `__init__` re-exports `StateMachine`, `TableLoader`, `TABLES_DIR` and `UnknownTransition`. The S08 deferred-method test drops the two methods implemented here.
+
+Level-0 decisions:
+- Kernel-owned guard facts: before guards run, `raise_event` adds `dependency_states` (`{dep_id: state}` of the contract dependencies, read in the transaction) and, for a BLOCKED item, `resume_state` to the payload. `resume_state` is the `from_state` of the item's latest transition into BLOCKED, so `WorkItemBase` needs no new field and the transition row is the stored resume state. Kernel values override caller values for these two keys. `dependencies_complete` therefore needs no caller input. WBS §3.4 had no key for it, and the E01-S29 scheduler sends only `budget_ok`/`branch_available`. `NEW NAME:` payload key `dependency_states`.
+- Guard semantics: a boolean fact passes only when it `is True`. A missing key gives the reason `payload missing`, and `False` gives `<key> is false`. `output_status` is compared as the string value (`AgentOutputStatus` arrives in E01-S18). `max_fix_loops` defaults to 3. `required_evidence_present` and `dependencies_complete` pass when the contract requires nothing. `definition_of_ready` checks the contract goal (non-blank) and acceptance criteria, and fails "no contract" for items without one (E01-S10 extends it).
+- `transition_for` filters candidate rows by role first (`PermissionDenied`, with `detail.allowed_roles` the union of the candidates' roles), then evaluates guards row by row. `GuardRejected.detail.failed_guards` lists `{guard, reason}` for every failing guard of every permitted row, and the message joins them as `guard: reason`. `UnknownTransition(PermanentError)` is raised for an unknown kind, state or event (CLI exit 1).
+- `raise_event` does everything in one `UnitOfWork`: it reads the item, checks `expected_state_version` (`GuardRejected("stale state_version …")`), selects the row, resolves the target and applies effects. It then upserts the item (`state_version + 1`, `updated_at`; `completed_at` on COMPLETE; `blocked_reason` = `payload["reason"]` on entering BLOCKED and cleared on leaving it), inserts the transition row and appends `WORK_ITEM_TRANSITION` (payload `from, to, event, reason, state_version, kind, fix_loops`, plus `resume_state` on block/unblock). Hooks run through `UnitOfWork.after_commit`: first `ON_STATE_TRANSITION`, then the row's hooks, each with `HookContext(payload={from, to, event}, role=actor)`. A `HookFailed` propagates after the commit. A non-string `payload["reason"]` is a `ConfigError`.
+- Effects: `increment_fix_loops`; `increment_reopen_count` (`ConfigError` on a non-bug); `store_resume_state` is a no-op, because the transition row into BLOCKED stores the resume state. The loader rejects unknown effects, guards, hooks, roles, states and row keys with `ConfigError("<file> row N (<from> --<event>-->): …")` and `detail.row = N`. The role alias `ANY_AGENT` expands to every role except USER/KERNEL.
+- `DefaultWorkflowManager` loads every `*_workflow.yaml` in `tables_dir` when constructed, so a bad table fails at startup. Other YAML files, such as E01-S10's `scheduled_states.yaml`, are ignored. Two tables governing one kind, or a missing folder, raise `ConfigError`. The guard registry is the module-level dict the contract's `register_guard` implies. It is filled only at import time, and a duplicate name raises `ConfigError`.
+- CLI: `walk work transition ID EVENT [--reason] [--payload JSON] [--json]` opens the DB writable only if it already exists, and raises as USER/USER. Exit codes: 2 for guard/permission rejection; 1 for an unknown item or event, invalid `--payload` (non-object) or a missing DB. `walk work show` now lists transitions (text and JSON `transitions`), which E01-S08 deferred to this story.
 
 ---
 

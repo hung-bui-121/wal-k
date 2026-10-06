@@ -1,10 +1,11 @@
 """Default workflow manager (INTERFACES §1.3); E01-S08 implements create/get/query."""
 
+from datetime import datetime
 from pathlib import Path
 from typing import Final, NoReturn
 
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError
+from walk.common.errors import ConfigError, GuardRejected
 from walk.common.ids import (
     EvidenceId,
     FeatureId,
@@ -14,6 +15,7 @@ from walk.common.ids import (
     WorkItemId,
 )
 from walk.common.roles import AgentRole
+from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.persistence import Database, IdSequenceStore, UnitOfWork
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
@@ -30,6 +32,7 @@ from walk.workflow.models import (
     ReleaseCandidate,
     Story,
     Task,
+    Transition,
     TransitionContext,
     TransitionTable,
     WorkItem,
@@ -39,6 +42,7 @@ from walk.workflow.models import (
     WorkItemTransition,
 )
 from walk.workflow.repository import ProjectRepository, WorkflowRepository
+from walk.workflow.state_machine import StateMachine, TableLoader
 
 _ID_PREFIXES: Final[dict[WorkItemKind, str]] = {
     WorkItemKind.EPIC: "EPIC",
@@ -84,9 +88,12 @@ class DefaultWorkflowManager:
             projects: Project repository (one project per database).
             ids: Allocates work-item ids inside the create transaction.
             ledger: Write point for ``WORK_ITEM_CREATED``.
-            hooks: Fires transition hooks after commit (E01-S09).
+            hooks: Fires ``ON_STATE_TRANSITION`` and the row's hooks after commit.
             clock: Stamps ``created_at``/``updated_at``.
-            tables_dir: Folder of the YAML transition tables (E01-S09).
+            tables_dir: Folder of the ``*_workflow.yaml`` transition tables (`TABLES_DIR`).
+
+        Raises:
+            ConfigError: If a table is invalid, or two tables govern the same kind.
         """
         self._db = db
         self._items = items
@@ -95,7 +102,8 @@ class DefaultWorkflowManager:
         self._ledger = ledger
         self._hooks = hooks
         self._clock = clock
-        self._tables_dir = tables_dir
+        self._tables = _load_tables(tables_dir)
+        self._machine = StateMachine(self._tables)
 
     async def create(
         self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None
@@ -171,16 +179,80 @@ class DefaultWorkflowManager:
         return await self._items.list_where(where, params, order_by="created_at, id")
 
     def table_for(self, kind: WorkItemKind) -> TransitionTable:
-        """Not available before E01-S09 (raises `ConfigError`)."""
-        del kind
-        _deferred("table_for", "E01-S09")
+        """Return the transition table that governs ``kind``.
+
+        Raises:
+            ConfigError: If no loaded table lists ``kind``.
+        """
+        table = self._tables.get(kind)
+        if table is None:
+            msg = f"no transition table governs {kind.value}"
+            raise ConfigError(msg, detail={"kind": kind.value})
+        return table
 
     async def raise_event(
         self, work_item_id: WorkItemId, event: str, ctx: TransitionContext
     ) -> WorkItemTransition:
-        """Not available before E01-S09 (raises `ConfigError`)."""
-        del work_item_id, event, ctx
-        _deferred("raise_event", "E01-S09")
+        """Apply ``event`` to the item in one transaction, then fire hooks after commit.
+
+        The kernel adds the facts it owns to the payload before the guards run:
+        ``dependency_states`` (contract dependencies) and, for a BLOCKED item, ``resume_state``
+        (the state it was blocked from). ``payload["reason"]`` becomes the transition reason.
+
+        Raises:
+            WorkItemNotFound: No item has ``work_item_id``.
+            UnknownTransition: The item's table has no row for its state and ``event``.
+            PermissionDenied: ``ctx.actor_role`` may not raise ``event``.
+            GuardRejected: A guard failed, PREVIOUS has no resume state, or
+                ``payload["expected_state_version"]`` is stale.
+            HookFailed: A fail-closed hook failed after the commit (the transition stays).
+        """
+        reason = ctx.payload.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            msg = "payload 'reason' must be a string"
+            raise ConfigError(msg, detail={"work_item_id": work_item_id, "event": event})
+        async with UnitOfWork(self._db) as uow:
+            item = await self.get(work_item_id)
+            expected = ctx.payload.get("expected_state_version")
+            if expected is not None and expected != item.state_version:
+                msg = f"stale state_version for {item.id}: expected {expected}"
+                detail = {"work_item_id": item.id, "expected": expected}
+                raise GuardRejected(msg, detail=detail | {"actual": item.state_version})
+            facts = await self._kernel_facts(item)
+            ctx = ctx.model_copy(update={"payload": ctx.payload | facts})
+            row = self._machine.transition_for(item.kind, item.state, event, item, ctx)
+            target = self._machine.resolve_target(row, item, ctx)
+            now = self._clock.now()
+            updated = _apply(item, row, target, reason, now)
+            await self._items.upsert(updated, uow)
+            transition = await self._items.add_transition(
+                WorkItemTransition(
+                    seq=0,
+                    work_item_id=item.id,
+                    from_state=item.state,
+                    to_state=target,
+                    event=event,
+                    source=ctx.source,
+                    actor_role=ctx.actor_role,
+                    run_id=ctx.run_id,
+                    reason=reason,
+                    at=now,
+                ),
+                uow,
+            )
+            await self._ledger.append(_transition_event(item, updated, transition), uow=uow)
+            hook_ctx = HookContext(
+                name=HookName.ON_STATE_TRANSITION,
+                at=now,
+                project_key=item.project_key,
+                work_item_id=item.id,
+                run_id=ctx.run_id,
+                phase_id=item.phase_id,
+                role=ctx.actor_role,
+                payload={"from": item.state.value, "to": target.value, "event": event},
+            )
+            uow.after_commit(lambda: self._fire(row.hooks, hook_ctx))
+        return transition
 
     async def ready_items(self, phase_id: PhaseId | None) -> list[WorkItem]:
         """Not available before E01-S10 (raises `ConfigError`)."""
@@ -229,6 +301,21 @@ class DefaultWorkflowManager:
         """Not available before E06-S06 (raises `ConfigError`)."""
         del project_key
         _deferred("gdd_coverage", "E06-S06")
+
+    async def _kernel_facts(self, item: WorkItem) -> dict[str, object]:
+        facts: dict[str, object] = {}
+        contract = getattr(item, "contract", None)
+        if contract is not None and contract.dependencies:
+            states = await self._items.states_of(contract.dependencies)
+            facts["dependency_states"] = {key: state.value for key, state in states.items()}
+        if item.state is WorkItemState.BLOCKED:
+            blocked = await self._items.last_transition_into(item.id, WorkItemState.BLOCKED)
+            facts["resume_state"] = None if blocked is None else blocked.from_state.value
+        return facts
+
+    async def _fire(self, hooks: tuple[HookName, ...], ctx: HookContext) -> None:
+        for name in (HookName.ON_STATE_TRANSITION, *hooks):
+            await self._hooks.fire(name, ctx.model_copy(update={"name": name}))
 
     @staticmethod
     def _check_contract(draft: WorkItemDraft) -> None:
@@ -302,3 +389,77 @@ class DefaultWorkflowManager:
                 }
             )
         return (Epic if draft.kind is WorkItemKind.EPIC else Feature).model_validate(common)
+
+
+def _load_tables(tables_dir: Path) -> dict[WorkItemKind, TransitionTable]:
+    """Load every ``*_workflow.yaml`` table and index it by the kinds it governs."""
+    if not tables_dir.is_dir():
+        msg = f"transition tables folder not found: {tables_dir}"
+        raise ConfigError(msg, detail={"tables_dir": str(tables_dir)})
+    loader = TableLoader()
+    tables: dict[WorkItemKind, TransitionTable] = {}
+    for path in sorted(tables_dir.glob("*_workflow.yaml")):
+        table = loader.load(path)
+        for kind in table.kinds:
+            if kind in tables:
+                msg = f"{kind.value} is governed by both {tables[kind].name} and {table.name}"
+                raise ConfigError(msg, detail={"kind": kind.value})
+            tables[kind] = table
+    return tables
+
+
+def _apply(
+    item: WorkItem, row: Transition, target: WorkItemState, reason: object, now: datetime
+) -> WorkItem:
+    """Return the item after the transition: state, version, timestamps and effects."""
+    update: dict[str, object] = {
+        "state": target,
+        "state_version": item.state_version + 1,
+        "updated_at": now,
+    }
+    if target is WorkItemState.BLOCKED:
+        update["blocked_reason"] = reason
+    elif item.state is WorkItemState.BLOCKED:
+        update["blocked_reason"] = None
+    if target is WorkItemState.COMPLETE:
+        update["completed_at"] = now
+    for effect in row.effects:
+        if effect == "increment_fix_loops":
+            update["fix_loops"] = item.fix_loops + 1
+        elif effect == "increment_reopen_count":
+            if not isinstance(item, Bug):
+                msg = f"effect increment_reopen_count needs a bug, got {item.kind.value}"
+                raise ConfigError(msg, detail={"work_item_id": item.id})
+            update["reopen_count"] = item.reopen_count + 1
+        # store_resume_state needs no field: the transition row into BLOCKED keeps the state.
+    return item.model_validate(item.model_dump() | update)
+
+
+def _transition_event(
+    item: WorkItem, updated: WorkItem, transition: WorkItemTransition
+) -> LedgerEvent:
+    """``WORK_ITEM_TRANSITION`` with the payload read by ``METRIC_QUERIES`` (E01-S06)."""
+    payload: dict[str, object] = {
+        "from": transition.from_state.value,
+        "to": transition.to_state.value,
+        "event": transition.event,
+        "reason": transition.reason,
+        "state_version": updated.state_version,
+        "kind": item.kind.value,
+        "fix_loops": updated.fix_loops,
+    }
+    if transition.to_state is WorkItemState.BLOCKED:
+        payload["resume_state"] = transition.from_state.value
+    elif transition.from_state is WorkItemState.BLOCKED:
+        payload["resume_state"] = transition.to_state.value
+    return LedgerEvent(
+        kind=LedgerEventKind.WORK_ITEM_TRANSITION,
+        at=transition.at,
+        project_key=item.project_key,
+        actor_role=transition.actor_role,
+        work_item_id=item.id,
+        run_id=transition.run_id,
+        phase_id=item.phase_id,
+        outcome="OK",
+        payload=payload,
+    )

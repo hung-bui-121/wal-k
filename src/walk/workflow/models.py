@@ -422,12 +422,30 @@ class GuardResult(FrozenModel):
 class Transition(FrozenModel):
     """One row of a transition table."""
 
-    from_state: WorkItemState = Field(description="State the row applies to.")
+    from_state: WorkItemState | Literal["*"] = Field(
+        description="State the row applies to; '*' = any state not in excluded_states."
+    )
+    excluded_states: tuple[WorkItemState, ...] = Field(
+        default=(), description="States a '*' row does not apply to ('* except A,B')."
+    )
     event: str = Field(description="Event name.")
-    to_state: WorkItemState = Field(description="Target state.")
+    to_state: WorkItemState | Literal["PREVIOUS"] = Field(
+        description="Target state; 'PREVIOUS' = the payload resume_state (unblock)."
+    )
     guards: tuple[str, ...] = Field(description="guard names (registered callables)")
     allowed_roles: tuple[AgentRole, ...] = Field(description="Roles that may raise the event.")
     hooks: tuple[HookName, ...] = Field(description="fired after commit, in order")
+    effects: tuple[str, ...] = Field(
+        default=(),
+        description="Kernel mutations applied in the transition's transaction, e.g. "
+        "increment_fix_loops.",
+    )
+
+    def applies_to(self, state: WorkItemState) -> bool:
+        """Return whether the row's ``from`` side matches ``state``."""
+        if self.from_state == "*":
+            return state not in self.excluded_states
+        return self.from_state == state
 
 
 class TransitionTable(FrozenModel):
@@ -438,4 +456,7 @@ class TransitionTable(FrozenModel):
 
     name: str = Field(description="Table name, e.g. story_workflow.")
     version: str = Field(description="Behavior version, e.g. 1.0.")
+    kinds: tuple[WorkItemKind, ...] = Field(
+        default=(), description="Work-item kinds governed by the table (none for phase/RC)."
+    )
     transitions: tuple[Transition, ...] = Field(description="Rows in evaluation order.")

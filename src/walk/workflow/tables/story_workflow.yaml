@@ -1,0 +1,25 @@
+# Story/Task lifecycle (INTERFACES §3.2, ADR-0010). Rows are evaluated in file order.
+# Roles: KERNEL, USER, ANY_AGENT (every agent role); effects run in the transition's transaction.
+# 'to: PREVIOUS' returns to the state stored when the item was blocked.
+name: story_workflow
+version: "1.0"
+kinds: [STORY, TASK]
+transitions:
+  - {from: IDEA, event: ready, to: READY, guards: [definition_of_ready], roles: [ORCHESTRATOR, LEAD_DEV, SCRUM_MASTER], hooks: []}
+  - {from: IDEA, event: block, to: BLOCKED, guards: [], roles: [ANY_AGENT], hooks: [on_task_blocked]}
+  - {from: READY, event: start_implementation, to: IMPLEMENTING, guards: [dependencies_complete, branch_available, budget_available], roles: [KERNEL], hooks: [on_task_start]}
+  - {from: IMPLEMENTING, event: submit_for_review, to: READY_FOR_REVIEW, guards: [output_status_is_completed, has_commit, required_evidence_present], roles: [SENIOR_DEV], hooks: []}
+  - {from: IMPLEMENTING, event: partial, to: IMPLEMENTING, guards: [handover_present], roles: [SENIOR_DEV], hooks: [on_agent_handoff]}
+  - {from: IMPLEMENTING, event: block, to: BLOCKED, guards: [escalations_non_empty], roles: [SENIOR_DEV], hooks: [on_task_blocked]}
+  - {from: READY_FOR_REVIEW, event: start_review, to: LEAD_DEV_REVIEW, guards: [reviewer_role_differs, reviewer_model_differs_or_disabled], roles: [KERNEL], hooks: []}
+  - {from: LEAD_DEV_REVIEW, event: review_approved, to: INTEGRATION, guards: [output_status_is_approved], roles: [LEAD_DEV], hooks: []}
+  - {from: LEAD_DEV_REVIEW, event: review_rejected, to: REWORK, guards: [], roles: [LEAD_DEV], hooks: []}
+  - {from: INTEGRATION, event: integration_passed, to: QC, guards: [ci_green], roles: [KERNEL], hooks: [on_ready_for_qc]}
+  - {from: INTEGRATION, event: ci_failed, to: REWORK, guards: [], roles: [KERNEL], hooks: [on_build_failure]}
+  - {from: QC, event: qc_passed, to: COMPLETE, guards: [output_status_is_approved, required_evidence_present], roles: [QC], hooks: [on_task_complete, on_qc_result]}
+  - {from: QC, event: qc_rejected, to: REWORK, guards: [fix_loops_below_max], roles: [QC], hooks: [on_qc_result, on_bug_created], effects: [increment_fix_loops]}
+  - {from: QC, event: qc_rejected, to: BLOCKED, guards: [fix_loops_at_max], roles: [QC], hooks: [on_task_failed]}
+  - {from: REWORK, event: start_implementation, to: IMPLEMENTING, guards: [budget_available], roles: [KERNEL], hooks: [on_task_start]}
+  - {from: BLOCKED, event: unblock, to: PREVIOUS, guards: [blocker_resolved], roles: [ORCHESTRATOR, SCRUM_MASTER, USER], hooks: []}
+  - {from: "* except COMPLETE", event: cancel, to: CANCELLED, guards: [], roles: [USER], hooks: [on_task_cancelled]}
+  - {from: IMPLEMENTING, event: force_review, to: READY_FOR_REVIEW, guards: [], roles: [USER], hooks: []}

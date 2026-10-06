@@ -11,6 +11,7 @@ from walk.hooks import DefaultHookManager, HookExecutionRepository
 from walk.persistence import Database, IdSequenceStore, UnitOfWork
 from walk.telemetry import DefaultLedgerManager, LedgerEvent, LedgerEventKind, LedgerRepository
 from walk.workflow import (
+    TABLES_DIR,
     Bug,
     BugDraft,
     DefaultWorkflowManager,
@@ -62,7 +63,7 @@ def _manager(
         ledger,
         DefaultHookManager(HookExecutionRepository(db), ledger, clock),
         clock,
-        tmp_path / "tables",
+        TABLES_DIR,
     )
 
 
@@ -275,8 +276,6 @@ async def test_query_filters(workflow: DefaultWorkflowManager, fake_clock: FakeC
 
 
 def test_deferred_sync_methods_name_their_story(workflow: DefaultWorkflowManager) -> None:
-    with pytest.raises(ConfigError, match="E01-S09"):
-        workflow.table_for(WorkItemKind.STORY)
     with pytest.raises(ConfigError, match="E01-S10"):
         workflow.check_definition_of_ready(Feature(id="FEAT-0001", project_key="DEMO", title="F"))
 
@@ -284,7 +283,6 @@ def test_deferred_sync_methods_name_their_story(workflow: DefaultWorkflowManager
 @pytest.mark.parametrize(
     ("method", "story"),
     [
-        ("raise_event", "E01-S09"),
         ("ready_items", "E01-S10"),
         ("set_done_dimension", "E01-S10"),
         ("phase_event", "E01-S11"),
@@ -299,7 +297,6 @@ async def test_deferred_methods_name_their_story(
 ) -> None:
     ctx = TransitionContext(actor_role=AgentRole.USER, source=TransitionSource.USER)
     calls: dict[str, Callable[[], Awaitable[object]]] = {
-        "raise_event": lambda: workflow.raise_event("STORY-0001", "ready", ctx),
         "ready_items": lambda: workflow.ready_items(None),
         "set_done_dimension": lambda: workflow.set_done_dimension(
             "FEAT-0001", DoneDimension.TESTED, done=True, evidence_id=None

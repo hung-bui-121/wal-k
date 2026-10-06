@@ -1,6 +1,6 @@
 """Work-item hierarchy, workflow states and transitions (§52-§58, ADR-0010)."""
 
-from walk.workflow.errors import WorkItemNotFound
+from walk.workflow.errors import UnknownTransition, WorkItemNotFound
 from walk.workflow.models import (
     Bug,
     BugDraft,
@@ -35,8 +35,10 @@ from walk.workflow.models import (
 from walk.workflow.protocols import Guard, WorkflowManager
 from walk.workflow.repository import ProjectRepository, WorkflowRepository
 from walk.workflow.service import DefaultWorkflowManager
+from walk.workflow.state_machine import TABLES_DIR, StateMachine, TableLoader
 
 __all__ = [
+    "TABLES_DIR",
     "Bug",
     "BugDraft",
     "DefaultWorkflowManager",
@@ -56,13 +58,16 @@ __all__ = [
     "ReleaseCandidateState",
     "Risk",
     "Severity",
+    "StateMachine",
     "Story",
     "StoryContract",
+    "TableLoader",
     "Task",
     "Transition",
     "TransitionContext",
     "TransitionSource",
     "TransitionTable",
+    "UnknownTransition",
     "WorkItem",
     "WorkItemBase",
     "WorkItemDraft",

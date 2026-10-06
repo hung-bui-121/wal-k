@@ -1,5 +1,7 @@
 """SQLite repositories of the workflow aggregates (``work_items``, ``projects``)."""
 
+import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -8,11 +10,23 @@ from pydantic import TypeAdapter
 from walk.common.errors import ConfigError
 from walk.common.ids import PhaseId, WorkItemId
 from walk.common.models import utcnow
-from walk.persistence import Repository
-from walk.workflow.models import Project, WorkItem
+from walk.persistence import Repository, UnitOfWork
+from walk.workflow.models import Project, WorkItem, WorkItemState, WorkItemTransition
 
 _WORK_ITEM: TypeAdapter[WorkItem] = TypeAdapter(WorkItem)
 _CREATION_ORDER = "created_at, id"
+_TRANSITION_COLUMNS = (
+    "seq, work_item_id, from_state, to_state, event, source, actor_role, run_id, reason, at"
+)
+_INSERT_TRANSITION_SQL = (
+    "INSERT INTO work_item_transitions (work_item_id, from_state, to_state, event, source, "
+    "actor_role, run_id, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+_SELECT_TRANSITIONS_SQL = f"SELECT {_TRANSITION_COLUMNS} FROM work_item_transitions"  # noqa: S608 - constant
+
+
+def _transition(row: sqlite3.Row) -> WorkItemTransition:
+    return WorkItemTransition.model_validate(dict(row))
 
 
 def _utc_text(value: datetime) -> str:
@@ -60,6 +74,55 @@ class WorkflowRepository(Repository[WorkItem]):
         """Return whether ``phases`` holds ``phase_id`` (work items reference it)."""
         row = self._db.connect().execute("SELECT 1 FROM phases WHERE id = ?", (phase_id,))
         return row.fetchone() is not None
+
+    async def states_of(self, ids: Sequence[WorkItemId]) -> dict[WorkItemId, WorkItemState]:
+        """Return the current state of each existing item in ``ids``; unknown ids are absent."""
+        if not ids:
+            return {}
+        marks = ", ".join("?" for _ in ids)
+        sql = f"SELECT id, state FROM work_items WHERE id IN ({marks})"  # noqa: S608 - placeholders only
+        rows = self._db.connect().execute(sql, list(ids)).fetchall()
+        return {str(row["id"]): WorkItemState(row["state"]) for row in rows}
+
+    async def add_transition(
+        self, transition: WorkItemTransition, uow: UnitOfWork
+    ) -> WorkItemTransition:
+        """Append a ``work_item_transitions`` row and return it with the assigned ``seq``.
+
+        The ``seq`` of ``transition`` is ignored; SQLite assigns it.
+        """
+        cursor = uow.conn.execute(
+            _INSERT_TRANSITION_SQL,
+            (
+                transition.work_item_id,
+                transition.from_state.value,
+                transition.to_state.value,
+                transition.event,
+                transition.source.value,
+                transition.actor_role.value,
+                transition.run_id,
+                transition.reason,
+                _utc_text(transition.at),
+            ),
+        )
+        return transition.model_copy(update={"seq": cursor.lastrowid})
+
+    async def transitions(self, work_item_id: WorkItemId) -> list[WorkItemTransition]:
+        """Return the item's transitions in commit order."""
+        sql = f"{_SELECT_TRANSITIONS_SQL} WHERE work_item_id = ? ORDER BY seq"
+        rows = self._db.connect().execute(sql, (work_item_id,)).fetchall()
+        return [_transition(row) for row in rows]
+
+    async def last_transition_into(
+        self, work_item_id: WorkItemId, state: WorkItemState
+    ) -> WorkItemTransition | None:
+        """Return the item's most recent transition whose target is ``state``, or ``None``."""
+        sql = (
+            f"{_SELECT_TRANSITIONS_SQL} WHERE work_item_id = ? AND to_state = ? "
+            "ORDER BY seq DESC LIMIT 1"
+        )
+        row = self._db.connect().execute(sql, (work_item_id, state.value)).fetchone()
+        return None if row is None else _transition(row)
 
     def _load(self, raw: str) -> WorkItem:
         return _WORK_ITEM.validate_json(raw)
