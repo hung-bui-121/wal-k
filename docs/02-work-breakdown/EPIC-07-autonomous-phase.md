@@ -707,3 +707,522 @@ _pending_
 
 ---
 
+### E07-S07 — CHANGE intake and `ChangeImpactAnalyzer`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §72, §70, §43, §73, §92, §137 (Inv. 7, 14), §138 (Over-Engineering)
+**Depends on:** E07-S05, E04-S11
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+A `CHANGE` decision becomes a §72 impact analysis that the user approves before anything changes: the kernel creates a change-analysis TASK run by `LEAD_DEV` (then `PRODUCT_OWNER` when enabled) with purpose `ANALYSIS`, `ChangeImpactAnalyzer` merges the agents' declared impact with kernel facts (`CodeGraphProvider.impact`, scope work items, tests, future phases) into a `ChangeImpact` covering all eight §72 categories plus a migration plan, records it as change-plan evidence, and raises an `ApprovalRequest(USER)`; approval moves the phase `CHANGE_ANALYSIS → PLANNED` and re-plans it, denial returns it to `USER_GATE`.
+
+#### Scope
+- In: `DefaultPhaseGate.change_intake`, `on_change_analysis_completed`, `apply_change_decision`; `ChangeImpact` model; `ChangeImpactAnalyzer` (kernel fact expansion, rendering, evidence recording); routing of the change-analysis task (LEAD_DEV → PRODUCT_OWNER, purpose `ANALYSIS`); admission of that task in `CHANGE_ANALYSIS`; `ApprovalRequest.kind == "CHANGE_PLAN"`; payload producers `change_plan_evidence_id` and `approval_state`; `change_plan_approved` / `change_rejected` transitions; `plan_phase` re-run after approval; `ANALYSIS.md.j2` block `change_analysis`.
+- Out: executing the migration plan (the re-planned phase is started by the user with `walk phase start`, E07-S02); gate decision recording (E07-S05); REWORK intake (E07-S06); GDD compiler internals (E06-S04 `plan_phase`); asset-provider impact (E08 — assets are agent-declared here).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/orchestrator/models.py` | modify | `ChangeImpact` |
+| `src/walk/orchestrator/change_impact.py` | create | `ChangeImpactAnalyzer`, `CHANGE_PLAN_SECTIONS`, `CHANGE_FINDING_PREFIXES`, `render_change_plan` |
+| `src/walk/orchestrator/phase_gate.py` | modify | `DefaultPhaseGate.change_intake`, `DefaultPhaseGate.on_change_analysis_completed`, `DefaultPhaseGate.apply_change_decision` |
+| `src/walk/orchestrator/router.py` | modify | — (row `PHASE / CHANGE_ANALYSIS`: change-analysis task → `LEAD_DEV` then `PRODUCT_OWNER` if enabled, purpose `ANALYSIS`) `(verify: E03-S07 full table module)` |
+| `src/walk/orchestrator/scheduler.py` | modify | — (in `CHANGE_ANALYSIS`, only items labelled `phase-intake` + `change` are admissible) |
+| `src/walk/orchestrator/service.py` | modify | — (`decide` CHANGE → `change_intake`; after `OutputApplier.apply` on a change-analysis task → `on_change_analysis_completed`; `tick` step 0 → `apply_change_decision` for decided `CHANGE_PLAN` approvals) |
+| `src/walk/orchestrator/__init__.py` | modify | re-exports `ChangeImpact`, `ChangeImpactAnalyzer` |
+| `src/walk/permissions/models.py` | modify | `ApprovalRequest.kind` gains `"CHANGE_PLAN"` |
+| `src/walk/workflow/guards.py` | modify | — (`impact_analysis_evidence_present` reads `change_plan_evidence_id`; `approval_user` reads `approval_state`) |
+| `src/walk/memory/paths.py` | modify | `change_plan_path` |
+| `src/walk/agents/templates/ANALYSIS.md.j2` | modify | — (block `change_analysis`: feedback, §72 category list, `CHANGE_FINDING_PREFIXES`, scope list, kernel seed impact, "migration plan in `result`", "no `new_tasks`") |
+| `src/walk/cli/cmd_approvals.py` | modify | — (offline `walk approve/deny` of a `CHANGE_PLAN` request calls `apply_change_decision` in-process) `(verify: E02-S11)` |
+| `src/walk/cli/composition.py` | modify | — (constructs `ChangeImpactAnalyzer` with `IntegrationManager.code_graph` or `None`) |
+| `docs/01-architecture/DOMAIN-MODEL.md` | modify | — (`ApprovalRequest.kind` literal, `ChangeImpact` in §4.15) |
+| `tests/orchestrator/test_change_impact.py` | create | — |
+| `tests/orchestrator/test_change_intake.py` | create | — |
+| `tests/orchestrator/test_change_approval.py` | create | — |
+| `tests/cli/test_cmd_approvals_change.py` | create | — |
+| `tests/agents/test_templates_change.py` | create | — |
+
+#### Interface contract
+```python
+# src/walk/orchestrator/models.py
+class ChangeImpact(WalkModel):
+    """§72 impact analysis result; rendered to .ai/phases/<PHASE-id>/evidence/change-plan-<gate_round>.md."""
+    phase_id: PhaseId
+    gate_round: int
+    feedback: str
+    affected_gdd: list[GddRef]                 # Affected GDD
+    affected_specs: list[str]                  # Affected Specs (doc ids / .ai paths)
+    affected_work_items: list[WorkItemId]      # Affected Jira Work (kernel ids; provider keys rendered alongside)
+    affected_code: list[str]                   # Affected Code (repo paths; declared ∪ CodeGraphProvider.impact)
+    affected_assets: list[str]                 # Affected Assets
+    affected_save_data: list[str]              # Affected Save Data
+    affected_tests: list[str]                  # Affected Tests (paths + AUTOMATED_TEST evidence ids)
+    affected_future_phases: list[PhaseId]      # Affected Future Phases
+    migration_plan: str                        # §72 SHOULD: migration/change plan (markdown)
+    graph_available: bool
+    analysis_run_ids: list[RunId]
+    generated_at: datetime
+
+# src/walk/orchestrator/change_impact.py
+CHANGE_PLAN_SECTIONS = ("Feedback", "Affected GDD", "Affected Specs", "Affected Jira Work", "Affected Code", "Affected Assets",
+                        "Affected Save Data", "Affected Tests", "Affected Future Phases", "Migration Plan")   # §72 order + plan
+CHANGE_FINDING_PREFIXES: dict[str, str] = {"GDD:": "affected_gdd", "SPEC:": "affected_specs", "WORK:": "affected_work_items",
+    "CODE:": "affected_code", "ASSET:": "affected_assets", "SAVE:": "affected_save_data", "TEST:": "affected_tests",
+    "PHASE:": "affected_future_phases"}   # Finding.summary prefix → field; values come from Finding.affected_files
+
+class ChangeImpactAnalyzer:
+    def __init__(self, workflow: WorkflowManager, memory: MemoryManager, evidence: EvidenceManager,
+                 code_graph: CodeGraphProvider | None, repo_path: str, clock: Clock) -> None: ...
+    async def seed(self, phase: Phase, feedback: str) -> ChangeImpact:
+        """Kernel facts before any agent run: affected_future_phases = phases with ordinal > phase.ordinal not COMPLETE/STOPPED;
+        affected_work_items = []; all other lists empty; migration_plan = ''. Passed to the ANALYSIS template."""
+    async def analyze(self, phase: Phase, feedback: str, outputs: list[tuple[RunId, AgentOutput]]) -> ChangeImpact:
+        """Merge declared findings (CHANGE_FINDING_PREFIXES) of every output, then expand:
+        affected_code ∪= [n.path for n in code_graph.impact(repo_path, declared_code) if n.path];
+        affected_tests ∪= impacted paths matching tests globs + AUTOMATED_TEST evidence ids of affected work items;
+        affected_work_items ∪= scope descendants whose FeatureContext.relevant_files ∩ affected_code ≠ ∅ or whose gdd_refs ∩ affected_gdd ≠ ∅;
+        affected_future_phases ∪= seed facts; migration_plan = LEAD_DEV output.result (+ PO output.result under '### Product');
+        all lists de-duplicated and sorted."""
+    async def record(self, impact: ChangeImpact, *, actor: Actor) -> Evidence:
+        """render_change_plan → file at change_plan_path(phase_id, gate_round) → EvidenceManager.record(
+        EvidenceDraft(kind=PROJECT_DATA, path_or_uri=<file>, description=f"Change plan {phase_id} r{gate_round}",
+        metrics=impact.model_dump(mode="json")), actor=actor, work_item_id=None, phase_id=phase_id, commit=HEAD)."""
+
+def render_change_plan(impact: ChangeImpact, titles: dict[WorkItemId, str]) -> str:
+    """One '## <section>' per CHANGE_PLAN_SECTIONS in order; empty list → '_none identified_';
+    Affected Code adds '_code graph unavailable — agent-declared paths only_' when graph_available is False."""
+
+# src/walk/memory/paths.py
+def change_plan_path(phase_id: PhaseId, gate_round: int) -> str: ...   # "phases/<PHASE-id>/evidence/change-plan-<gate_round>.md"
+
+# src/walk/orchestrator/phase_gate.py — DefaultPhaseGate additions (constructor gains analyzer, permissions, plan_phase)
+async def change_intake(self, phase: Phase, feedback: str, actor: Actor) -> Task:
+    """INTERFACES §5.6 CHANGE line. WorkflowManager.create(WorkItemDraft(kind=TASK, title=f"Change analysis: {phase.id} r{phase.gate_round}",
+    description=feedback, contract=StoryContract(goal=feedback, owner_role=LEAD_DEV,
+    reviewer_role=PRODUCT_OWNER if enabled else LEAD_DEV, acceptance_criteria=["every §72 category answered", "migration plan in result"]),
+    labels=["phase-intake", "change"]), actor=KERNEL, phase_id=phase.id) → READY; idempotency key f"phase.change:{phase.id}:{phase.gate_round}"."""
+async def on_change_analysis_completed(self, task: Task, output: AgentOutput, run_id: RunId) -> ApprovalRequest | None:
+    """LEAD_DEV run done and PRODUCT_OWNER enabled → add label 'change:lead-dev-done', task stays READY, return None.
+    Last run done → analyzer.analyze(all change-analysis outputs) → analyzer.record → task COMPLETE (KERNEL) →
+    PermissionManager.request_approval({"phase_id", "gate_round", "evidence_id", "path"}, kind="CHANGE_PLAN",
+    approver=USER, requested_by=LEAD_DEV, run_id=run_id, work_item_id=task.id)."""
+async def apply_change_decision(self, approval_id: ApprovalRequestId) -> Phase:
+    """Approval kind CHANGE_PLAN, state APPROVED → phase_event("change_plan_approved", ctx(Actor(USER, name=decided_by),
+    payload={"change_plan_evidence_id": payload.evidence_id, "approval_state": "APPROVED"})) → PLANNED → plan_phase(phase_id);
+    DENIED/EXPIRED → phase_event("change_rejected") → USER_GATE. Idempotency key f"phase.change_decided:{approval_id}"."""
+```
+Routing (INTERFACES §4 `PHASE | CHANGE_ANALYSIS | LEAD_DEV + PRODUCT_OWNER | ANALYSIS`), realised on the change-analysis TASK: labels ⊇ {`phase-intake`, `change`} and no `change:lead-dev-done` → `LEAD_DEV`/`ANALYSIS`; with `change:lead-dev-done` → `PRODUCT_OWNER`/`ANALYSIS`. "Enabled" = `AgentManager.list_roles()` contains `PRODUCT_OWNER` (same rule as E07-S06).
+Guards (E01-S11 names): `impact_analysis_evidence_present` passes iff payload `change_plan_evidence_id` is a non-empty `EvidenceId`; `approval_user` passes iff payload `approval_state == "APPROVED"` and `ctx.actor.role == USER`.
+
+#### Behavior
+1. `decide(CHANGE, feedback)` (E07-S05) now ends by calling `change_intake`; the task has `phase_id == phase.id`, labels `phase-intake`, `change`, `owner_role == LEAD_DEV`, state `READY`, and is the only admissible item while the phase is `CHANGE_ANALYSIS` (E07-S04 rule 2 refined; counter `scheduler.skipped{reason=phase_gate}` for the rest).
+2. The `ANALYSIS.md.j2` `change_analysis` block renders the feedback, the eight §72 categories, `CHANGE_FINDING_PREFIXES` as the reporting format ("one `Finding` per affected item, `summary` starts with the prefix, paths in `affected_files`"), the phase scope list and the `seed()` impact; ordinary `ANALYSIS` items render byte-identically to before (snapshot).
+3. A change-analysis run must not mutate production work: its `new_tasks`, `new_bugs` and `changes` are rejected by `OutputApplier` with `GuardRejected("change_analysis_read_only")`, the run ends `FAILED`, the task returns to `READY` for a retry (bounded by `max_fix_loops`, then `BLOCKED`) — Inv. 7, §138.
+4. Output status `NEEDS_INPUT`/`BLOCKED` follows the normal escalation path (INTERFACES §1.1 `handle_escalation`); the phase stays `CHANGE_ANALYSIS`.
+5. With `PRODUCT_OWNER` enabled the task gets two runs in order (LEAD_DEV then PRODUCT_OWNER, both `ANALYSIS`); without it, one LEAD_DEV run. The approval is requested only after the last run.
+6. `analyze` treats a finding whose summary matches no prefix as context only (ignored for lists); a `WORK:` value that is not an existing work item id is dropped with a `TelemetryManager.log` warning; a `PHASE:` value that is not a later phase is dropped likewise.
+7. When `code_graph is None` or `impact()` raises `TransientError`, `affected_code` is the declared set only, `graph_available=False`, and the rendered section carries the unavailability note; the analysis still completes (E04-S11 rule 7).
+8. `record` writes the change plan under the phase evidence dir, `EVIDENCE_RECORDED` is emitted by `EvidenceManager`, and the `ApprovalRequest` payload points to that evidence id and repo-relative path; `walk approvals --pending` lists it with kind `CHANGE_PLAN`.
+9. `walk approve APV-NNNN` (daemon: through `commands`; offline: in-process via `cmd_approvals`) → `apply_change_decision`: phase `PLANNED`, `PHASE_TRANSITION` with `event == "change_plan_approved"`, then `Orchestrator.plan_phase(phase_id)` (E06-S04) adds/updates scope work; completed stories stay `COMPLETE`; the phase is not started automatically — the user runs `walk phase start` (E07-S02; baseline `r<gate_round>` supersedes the previous one).
+10. `walk deny APV-NNNN` or expiry (E02-S11 `expire_due`) → `change_rejected` → `USER_GATE` with `gate_round` unchanged and `last_decision == CHANGE`; the user decides again (E07-S05).
+11. `change_plan_approved` raised without a recorded change plan or with a non-USER actor fails `impact_analysis_evidence_present` / `approval_user` (`GuardRejected`); nothing else reaches it (Inv. 14).
+12. Idempotency: `change_intake` per `(phase_id, gate_round)` and `apply_change_decision` per approval id; a restart between approval and transition applies the decision once (§90).
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given USER_GATE When `decide(CHANGE, "Replace energy system with stamina")` Then phase `CHANGE_ANALYSIS` and one TASK `READY` with labels `phase-intake`, `change`, `owner_role == LEAD_DEV`, `phase_id` set | `tests/orchestrator/test_change_intake.py::test_change_creates_analysis_task` |
+| 2 | Given phase `CHANGE_ANALYSIS` with 3 other READY stories When `tick()` Then only the change-analysis task is admitted with role `LEAD_DEV` and purpose `ANALYSIS` | `tests/orchestrator/test_change_intake.py::test_only_analysis_task_admitted` |
+| 3 | Given PRODUCT_OWNER enabled and a completed LEAD_DEV run When applied Then label `change:lead-dev-done`, task `READY`, no approval; next `tick()` admits PRODUCT_OWNER with purpose `ANALYSIS` | `tests/orchestrator/test_change_intake.py::test_po_run_follows_lead_dev` |
+| 4 | Given an analysis output with `new_tasks` When applied Then `GuardRejected("change_analysis_read_only")`, zero tasks created, run `FAILED`, task `READY` | `tests/orchestrator/test_change_intake.py::test_analysis_run_is_read_only` |
+| 5 | Given `decide(CHANGE)` then a simulated crash before task creation and a restart Then exactly one change-analysis task | `tests/orchestrator/test_change_intake.py::test_change_intake_idempotent_across_restart` |
+| 6 | Given findings `CODE: Assets/Scripts/Energy.cs` and a fake graph where `Hud.cs`, `Tests/EnergyTests.cs` depend on it When `analyze` Then `affected_code` contains all three, `affected_tests` contains the test path, `graph_available` True | `tests/orchestrator/test_change_impact.py::test_analyze_expands_code_via_graph` |
+| 7 | Given a scope story whose feature context lists `Assets/Scripts/Hud.cs` in relevant files When `analyze` Then the story id is in `affected_work_items` | `tests/orchestrator/test_change_impact.py::test_analyze_maps_code_to_work_items` |
+| 8 | Given PHASE-01 and PLANNED PHASE-02, PHASE-03 When `seed` Then `affected_future_phases == [PHASE-02, PHASE-03]`; a `PHASE: PHASE-01` finding is dropped | `tests/orchestrator/test_change_impact.py::test_future_phases_from_kernel_facts` |
+| 9 | Given `code_graph=None` When `analyze` Then `affected_code` equals the declared paths, `graph_available` False | `tests/orchestrator/test_change_impact.py::test_analyze_without_graph_degrades` |
+| 10 | Given the same outputs and frozen clock When `analyze` twice Then equal `model_dump()` with sorted lists | `tests/orchestrator/test_change_impact.py::test_analyze_deterministic` |
+| 11 | Given an impact with empty assets When `render_change_plan` Then exactly 10 `## ` headings equal to `CHANGE_PLAN_SECTIONS` in order and `Affected Assets` reads `_none identified_` | `tests/orchestrator/test_change_impact.py::test_render_change_plan_sections` |
+| 12 | Given the last analysis run completes When applied Then `change-plan-1.md` exists under the phase evidence dir, one `EVIDENCE_RECORDED`, task `COMPLETE`, one PENDING `ApprovalRequest` with `kind == "CHANGE_PLAN"`, `approver == USER`, payload `evidence_id` | `tests/orchestrator/test_change_approval.py::test_completion_records_plan_and_requests_approval` |
+| 13 | Given the pending approval When approved by USER and `apply_change_decision` Then phase `PLANNED`, `plan_phase` called once, COMPLETE stories unchanged | `tests/orchestrator/test_change_approval.py::test_approved_change_replans_phase` |
+| 14 | Given the pending approval When denied (or expired) Then phase `USER_GATE`, `gate_round` unchanged, `last_decision == CHANGE` | `tests/orchestrator/test_change_approval.py::test_denied_change_returns_to_gate` |
+| 15 | Given `phase_event("change_plan_approved")` with no `change_plan_evidence_id` or actor ORCHESTRATOR Then `GuardRejected` naming `impact_analysis_evidence_present` / `approval_user` | `tests/orchestrator/test_change_approval.py::test_change_plan_approved_guards` |
+| 16 | Given `apply_change_decision(APV-0001)` called twice Then one `PHASE_TRANSITION` | `tests/orchestrator/test_change_approval.py::test_apply_change_decision_idempotent` |
+| 17 | Given offline `walk approve APV-0001 --note ok` on a `CHANGE_PLAN` request Then exit 0 and output `PHASE-01 PLANNED (change plan approved)` | `tests/cli/test_cmd_approvals_change.py::test_offline_approve_applies_change_decision` |
+| 18 | Given a change-analysis item When `render_instructions(purpose="ANALYSIS")` Then output contains the feedback, all eight §72 categories and every prefix; given an ordinary ANALYSIS item Then output equals the prior snapshot | `tests/agents/test_templates_change.py::test_analysis_template_change_block_and_snapshot` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the fixture repo at `USER_GATE` (fake LEAD_DEV/PO adapters, `FakeCodeGraphProvider`): `walk phase gate PHASE-01 --decision CHANGE --feedback "Replace energy with stamina"` → `PHASE-01 CHANGE_ANALYSIS intake=TASK-00NN`; `walk run --once` twice; `walk approvals --pending` → `APV-NNNN CHANGE_PLAN USER`; `cat .ai/phases/PHASE-01/evidence/change-plan-1.md | head -40`; `walk approve APV-NNNN --note ok`; `walk phase list` → `PHASE-01 PLANNED`.
+
+#### Notes
+- INTERFACES §5.6 CHANGE line, §3.4 rows 9–10, §4 `PHASE / CHANGE_ANALYSIS` row, §2.6 `impact` ("used by §72 CHANGE analysis"); ARCHITECTURE §1.2 lists `ChangeImpactAnalyzer` `[Stage 6+]` in `walk.orchestrator` without a contract — this story gives it one as a concrete class (no protocol: single implementation, orchestrator-internal).
+- Findings-as-impact (`CHANGE_FINDING_PREFIXES`) keeps `AgentOutput` unchanged (§126); the analyzer, not the agent, decides the final lists, so a hallucinated work item or phase id is dropped (Behavior 6).
+- `ApprovalRequest.kind` literal extension must be mirrored in DOMAIN-MODEL §4.5 in the same commit; the `approval_requests.kind` column is free text, so no migration is needed.
+- `plan_phase` is E06-S04's GDD compiler entry; this story only calls it. If E06-S04's signature differs, X01 corrects the call site.
+- `NEW NAME:` `ChangeImpact`, `ChangeImpactAnalyzer` (concrete, `walk.orchestrator.change_impact`), `CHANGE_PLAN_SECTIONS`, `CHANGE_FINDING_PREFIXES`, `render_change_plan`, `change_plan_path`, `change_intake`, `on_change_analysis_completed`, `apply_change_decision`, `ApprovalRequest.kind "CHANGE_PLAN"`, labels `change`, `change:lead-dev-done`, idempotency keys `phase.change:{phase_id}:{gate_round}` and `phase.change_decided:{approval_id}`, `GuardRejected` reason `change_analysis_read_only`, template block `change_analysis`.
+- Commit subject: `feat: add change intake with impact analysis and approval (E07-S07)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E07-S08 — Phase retrospective skeleton
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §115, §114, §116, §83, §90, §136 (retrospective skeleton), §137 (Inv. 9)
+**Depends on:** E07-S03, E04-S13
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+Every phase review produces a metrics-only §115 retrospective without any agent run: `ImprovementManager.phase_retrospective(phase_id, with_narrative=False)` computes `RetrospectiveMetrics` from the ledger plus a deterministic top bottleneck and top defect, persists a `Retrospective` row and writes `.ai/phases/PHASE-NN/retrospective.md` from the `ON_PHASE_REVIEW_START` default hook, so the `retrospective_written` guard (E07-S04) is satisfied and the evidence package links it.
+
+#### Scope
+- In: `phase_retrospective` (was `NotSupported("E07-S08")` since E04-S13), `RetrospectiveRepository`, bottleneck/defect rules, `RETROSPECTIVE_SECTIONS` + document, default hook `builtin.phase_retrospective`, `PhaseEvidencePackage.retrospective_id`, `walk improvement retro PHASE_ID` (`[MVP skeleton]`), `request_phase_review` resuming a phase stuck in `EVIDENCE_REVIEW`.
+- Out: narrative / `PROCESS_ARCHITECT` `RETRO` run, `RETRO.md.j2` content and the `.ai/improvements/RETRO-PHASE-NN.md` copy (E10-S07); improvement candidates (E10-S04 — `candidate_ids` stays empty); TASK/FEATURE/PROJECT retrospective levels (E10).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/improvement/service.py` | modify | `DefaultImprovementManager.phase_retrospective` |
+| `src/walk/improvement/repository.py` | modify | `RetrospectiveRepository` |
+| `src/walk/improvement/retrospective.py` | create | `top_bottleneck`, `top_defect`, `render_retrospective` |
+| `src/walk/improvement/__init__.py` | modify | re-exports `RetrospectiveRepository` |
+| `src/walk/memory/sections.py` | modify | `RETROSPECTIVE_SECTIONS` |
+| `src/walk/hooks/builtins.py` | modify | `phase_retrospective` (hook `builtin.phase_retrospective`) |
+| `src/walk/orchestrator/evidence_packager.py` | modify | — (`build` sets `retrospective_id` when the phase retrospective exists) |
+| `src/walk/orchestrator/service.py` | modify | — (`request_phase_review` on a phase already in `EVIDENCE_REVIEW` re-fires `ON_PHASE_REVIEW_START` hooks and retries `package_ready` only) |
+| `src/walk/cli/cmd_improvement.py` | modify | `retro` |
+| `src/walk/cli/composition.py` | modify | — (`DefaultImprovementManager` gains `telemetry`, `retrospectives`) |
+| `tests/improvement/test_phase_retrospective.py` | create | — |
+| `tests/improvement/test_retrospective_rules.py` | create | — |
+| `tests/hooks/test_builtins_phase_retrospective.py` | create | — |
+| `tests/orchestrator/test_request_phase_review_resume.py` | create | — |
+| `tests/cli/test_cmd_improvement_retro.py` | create | — |
+
+#### Interface contract
+Protocol: INTERFACES §1.15 `ImprovementManager.phase_retrospective(phase_id, *, with_narrative) -> Retrospective`; model DOMAIN-MODEL §4.14 `Retrospective`, §4.12 `RetrospectiveMetrics`; table DOMAIN-MODEL §6.2 `retrospectives`.
+```python
+# src/walk/improvement/repository.py
+class RetrospectiveRepository:
+    def __init__(self, db: Database) -> None: ...
+    async def upsert(self, retro: Retrospective) -> None: ...                 # PK id; json = model_dump_json()
+    async def get(self, retro_id: RetrospectiveId) -> Retrospective | None: ...
+
+# src/walk/improvement/retrospective.py — pure functions over ledger events (§83)
+def top_bottleneck(transitions: list[LedgerEvent], now: datetime) -> str:
+    """Sum dwell time per WorkItemState over WORK_ITEM_TRANSITION events of STORY/TASK/BUG items (state entered → next transition,
+    open intervals closed at `now`), excluding COMPLETE and CANCELLED. Max sum wins; tie → state name ascending.
+    Returns f"{state}: {hours:.1f} h over {n} items (worst {item_id})" or "none"."""
+def top_defect(bug_events: list[LedgerEvent]) -> str:
+    """Group BUG_CREATED by payload.parent_id (feature or story). Max count wins; tie → highest payload.severity, then id ascending.
+    Returns f"{count} bugs under {parent_id} (max severity {severity}; first {bug_id})" or "none"."""
+def render_retrospective(retro: Retrospective, phase_id: PhaseId, gate_round: int) -> str:
+    """One '## <section>' per RETROSPECTIVE_SECTIONS. Metrics = '| metric | value |' table in §115 order
+    (Stories, First-pass success %, Reworked stories, QC Bugs, Escaped Bugs, Context stale incidents, Fallbacks, Failed handoffs,
+    Build failures) followed by Debate rounds, User escalations, Total cost USD, Total tokens, Mean task duration s."""
+
+# src/walk/memory/sections.py
+RETROSPECTIVE_SECTIONS = ("Metrics", "Top Bottleneck", "Top Defect", "Candidates", "Narrative")
+
+# DefaultImprovementManager — constructor gains telemetry: TelemetryManager, retrospectives: RetrospectiveRepository
+async def phase_retrospective(self, phase_id: PhaseId, *, with_narrative: bool) -> Retrospective:
+    """with_narrative=True → NotSupported("E10-S07"). Else: metrics = telemetry.metrics(phase_id=phase_id);
+    top_bottleneck/top_defect from ledger.query(phase_id=phase_id, kinds=[...]); Retrospective(id=f"RETRO-{phase_id}", level="PHASE",
+    subject_id=phase_id, candidate_ids=[], narrative_markdown=""); repository upsert; MemoryManager.write(doc type=retrospective,
+    id=f"RETRO-{phase_id}") at retrospective_path(phase_id) (E07-S04). Returns the Retrospective."""
+
+# ON_PHASE_REVIEW_START  builtin.phase_retrospective  prio 5  required=False  (default attachment, ARCHITECTURE §4.1)
+#   improvement.phase_retrospective(phase_id, with_narrative=False); ctx.payload["retrospective_written"] = True
+```
+CLI: `walk improvement retro PHASE_ID [--json]` — regenerates the retrospective (same call as the hook) and prints the document (`--json` → `Retrospective.model_dump(mode="json")`).
+
+#### Behavior
+1. Metrics come only from `TelemetryManager.metrics(phase_id=…)` (E01 `METRIC_QUERIES`); the retrospective reads no agent output and starts no run (§83, Inv. 9 — ledger is the source).
+2. `top_bottleneck` and `top_defect` are pure and deterministic for a given event list and `now` (injected `Clock`); an empty phase yields `"none"` for both and all-zero metrics.
+3. The hook runs at priority 5, before `builtin.phase_review_build_package` (priority 10), so `DefaultEvidencePackager.build` finds the retrospective and sets `PhaseEvidencePackage.retrospective_id = "RETRO-<phase>"`; when absent it stays `None`.
+4. The document has front matter `type: retrospective`, `id: RETRO-<phase>`, `related.work_items` = scope stories, the five `RETROSPECTIVE_SECTIONS` in order; `Candidates` reads `_none — candidate generation is E10-S04_`, `Narrative` reads `_not generated (with_narrative=False)_`.
+5. A later gate round overwrites the same document (version bump, `MemoryManager.write`) and upserts the same row; the previous round remains in git history only.
+6. Hook failure is `LOG_AND_CONTINUE` (default attachment): the phase stays `EVIDENCE_REVIEW` because `retrospective_written` is false (E07-S04 rule 5). `walk phase review ID` on a phase in `EVIDENCE_REVIEW` re-fires `ON_PHASE_REVIEW_START` and retries `package_ready` without a second `request_review` transition — the same path a restarted kernel uses after a crash during review (§90).
+7. `with_narrative=True` raises `NotSupported("E10-S07")`; the hook never passes `True`.
+8. `walk improvement retro PHASE-01` on a phase with no ledger events still writes a valid document and exits 0; an unknown phase id exits 1.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a seeded phase ledger (4 stories COMPLETE, 1 with a QC rejection, 2 bugs, 1 fallback, 1 build failure) When `phase_retrospective(PHASE-01, with_narrative=False)` Then `metrics == telemetry.metrics(phase_id=PHASE-01)`, `level == "PHASE"`, `candidate_ids == []`, `narrative_markdown == ""` | `tests/improvement/test_phase_retrospective.py::test_phase_retrospective_metrics_from_ledger` |
+| 2 | Given the call When done Then a `retrospectives` row `RETRO-PHASE-01` and `.ai/phases/PHASE-01/retrospective.md` with `type: retrospective` and five sections in order | `tests/improvement/test_phase_retrospective.py::test_phase_retrospective_persists_row_and_document` |
+| 3 | Given two calls on different gate rounds Then one row, one file, document `version == 2` | `tests/improvement/test_phase_retrospective.py::test_second_round_overwrites` |
+| 4 | Given `with_narrative=True` Then `NotSupported` naming `E10-S07` | `tests/improvement/test_phase_retrospective.py::test_narrative_not_supported` |
+| 5 | Given transitions where items spend 10 h in `LEAD_DEV_REVIEW` and 4 h in `IMPLEMENTING` When `top_bottleneck` Then it starts with `LEAD_DEV_REVIEW: 10.0 h` | `tests/improvement/test_retrospective_rules.py::test_top_bottleneck_largest_dwell` |
+| 6 | Given equal dwell in two states Then the alphabetically first state wins; given no events Then `"none"` | `tests/improvement/test_retrospective_rules.py::test_top_bottleneck_tie_and_empty` |
+| 7 | Given 3 bugs under FEAT-0002 and 3 under FEAT-0001 with a higher max severity on FEAT-0002 When `top_defect` Then it names FEAT-0002 | `tests/improvement/test_retrospective_rules.py::test_top_defect_count_then_severity` |
+| 8 | Given a retrospective When `render_retrospective` Then the Metrics table lists the §115 figures first and in order | `tests/improvement/test_retrospective_rules.py::test_render_metrics_order` |
+| 9 | Given `ON_PHASE_REVIEW_START` fired Then the retrospective file exists, `ctx.payload["retrospective_written"] is True`, and the package built after it has `retrospective_id == "RETRO-PHASE-01"` | `tests/hooks/test_builtins_phase_retrospective.py::test_hook_writes_retro_before_package` |
+| 10 | Given `phase_retrospective` raising When the hook fires Then hook `FAILED`, no exception propagates, `retrospective_written` absent | `tests/hooks/test_builtins_phase_retrospective.py::test_hook_failure_is_tolerated` |
+| 11 | Given a phase stuck in `EVIDENCE_REVIEW` (retrospective hook failed once) When `request_phase_review` is called again with the hook healthy Then `USER_GATE`, exactly one `request_review` and one `package_ready` transition in the ledger | `tests/orchestrator/test_request_phase_review_resume.py::test_review_resumes_from_evidence_review` |
+| 12 | Given `walk improvement retro PHASE-01 --json` Then exit 0 and JSON validates as `Retrospective`; given `PHASE-99` Then exit 1 | `tests/cli/test_cmd_improvement_retro.py::test_retro_cli_json_and_unknown_phase` |
+| 13 | Given any test in this story Then no `AGENT_RUN_STARTED` event is written | `tests/improvement/test_phase_retrospective.py::test_no_agent_run_started` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the fixture repo after a review: `cat .ai/phases/PHASE-01/retrospective.md` (Metrics table + Top Bottleneck + Top Defect); `walk improvement retro PHASE-01 --json | head -20`; `walk phase evidence PHASE-01 --json` showing `retrospective_id`.
+
+#### Notes
+- INTERFACES §1.15, §6 (`walk improvement retro` `[MVP skeleton]`); ARCHITECTURE §4.1 `ON_PHASE_REVIEW_START` default attachment, §8 layout (`phases/PHASE-01/retrospective.md`); §115 example fixes the display order.
+- WBS §3.9 reconciliation (E07-X01 step 5): `RETRO.md.j2` stays untouched here; E10-S07 owns narrative and the `.ai/improvements/RETRO-PHASE-NN.md` copy shown in ARCHITECTURE §8.
+- Bottleneck and defect definitions are planner choices (no requirement fixes them); they live in one module so E10 can replace them under a `BehaviorVersion`.
+- `BUG_CREATED.payload.parent_id` and `.severity` are assumed present from E03-S08/E03-S13 `(verify)`; if absent, X01 adds them to the write point rather than this story reading the `work_items` table.
+- `NEW NAME:` `RetrospectiveRepository`, `RETROSPECTIVE_SECTIONS`, `top_bottleneck`, `top_defect`, `render_retrospective` (`walk.improvement.retrospective`), hook `builtin.phase_retrospective`, retrospective id convention `RETRO-<PHASE-id>`.
+- Commit subject: `feat: add metrics-only phase retrospective (E07-S08)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E07-S09 — Phase report and `ON_PHASE_COMPLETE`
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §83, §70, §90, §84, §137 (Inv. 9, 14)
+**Depends on:** E07-S05
+**Effort:** LOW   **Risk:** LOW
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+When a phase reaches `COMPLETE` the `ON_PHASE_COMPLETE` MUST attachment writes `.ai/reports/phases/PHASE-NN.md` — a derived report of gate history, delivered scope, open issues, cost and links to the final evidence package and retrospective — through a basic `MemoryManager.write_report`, updates the phase document's `Status`/`Gate History`, and a kernel restart repairs a completed phase whose report is missing.
+
+#### Scope
+- In: `render_phase_report` + `PHASE_REPORT_SECTIONS`, `DefaultMemoryManager.write_report` (kind `phase` only), MUST hook `builtin.phase_complete_report`, phase document `Status`/`Gate History` update, startup repair `repair_phase_reports`.
+- Out: `ReportQuery`/`PhaseReportQuery`, other report kinds, secret refusal and `walk report --write` (E09-S01/S02 — they replace this renderer and extend `write_report`); `MemoryManager.promote_phase_learnings()` default attachment (ARCHITECTURE §4.1 names it, INTERFACES §1.8 does not define it — left to E10, see Notes).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/orchestrator/phase_report.py` | create | `render_phase_report`, `PHASE_REPORT_SECTIONS` |
+| `src/walk/orchestrator/service.py` | modify | `DefaultOrchestrator.repair_phase_reports` (called from the startup sequence after recovery) |
+| `src/walk/orchestrator/__init__.py` | modify | re-exports `render_phase_report`, `PHASE_REPORT_SECTIONS` |
+| `src/walk/memory/service.py` | modify | `DefaultMemoryManager.write_report` |
+| `src/walk/memory/paths.py` | modify | `report_path` |
+| `src/walk/hooks/builtins.py` | modify | `phase_complete_report` (hook `builtin.phase_complete_report`); `BuiltinHookDeps.retrospectives` |
+| `src/walk/cli/composition.py` | modify | — (hook deps wiring) |
+| `tests/orchestrator/test_phase_report.py` | create | — |
+| `tests/orchestrator/test_phase_report_recovery.py` | create | — |
+| `tests/memory/test_write_report_basic.py` | create | — |
+| `tests/hooks/test_builtins_phase_complete.py` | create | — |
+
+#### Interface contract
+`MemoryManager.write_report(kind, subject_id, markdown) -> str` per INTERFACES §1.8.
+```python
+# src/walk/orchestrator/phase_report.py
+PHASE_REPORT_SECTIONS = ("Summary", "Gate History", "Scope Delivered", "Open Issues", "Production Cost", "Retrospective", "Evidence Package")
+
+def render_phase_report(phase: Phase, decisions: list[LedgerEvent], package: PhaseEvidencePackage | None,
+                        retrospective: Retrospective | None, cost: dict[CostCategory, float], generated_at: datetime) -> str:
+    """'# Phase report <id> — <name>' then one '## <section>' per PHASE_REPORT_SECTIONS.
+    Summary: state, started_at, completed_at, gate rounds, last decision. Gate History: table round | decision | at | feedback excerpt (≤ 120 chars)
+    from PHASE_GATE_DECISION events. Scope Delivered / Open Issues: from package (stories_completed, stories_open, open_issues).
+    Production Cost: category | usd + total. Retrospective: §115 figures + top bottleneck/defect, or '_none_'.
+    Evidence Package: repo-relative link to phase_evidence_package_path(phase.id) and its gate_round, or '_none_'."""
+
+# src/walk/memory/paths.py
+def report_path(kind: str, subject_id: str) -> str: ...   # kind "phase" → "reports/phases/<subject_id>.md"
+
+# DefaultMemoryManager
+async def write_report(self, kind: str, subject_id: str, markdown: str) -> str:
+    """kind == "phase" only, else NotSupported("E09-S02"). Atomic overwrite at report_path; no front matter, no memory_index row,
+    no CONTEXT_UPDATED (derived artefact, E09-S02 contract). Returns repo-relative path."""
+
+# ON_PHASE_COMPLETE  builtin.phase_complete_report  prio 10  required=True  (MUST, ARCHITECTURE §4.1)
+#   decisions = ledger.query(kinds=[PHASE_GATE_DECISION], phase_id=…); package = read back from evidence-package.md (E07-S04 reader);
+#   retrospective = deps.retrospectives.get(f"RETRO-{phase_id}"); cost = deps.costs_reader.cost_of(phase_id=phase_id)
+#   → MemoryManager.write_report("phase", phase_id, render_phase_report(...))
+#   → MemoryManager.apply_updates([ContextUpdate(doc=phase_doc_path, section="Status", REPLACE, f"COMPLETE at {iso}"),
+#                                  ContextUpdate(doc=phase_doc_path, section="Gate History", REPLACE, <gate history table>)], actor=KERNEL)
+
+# DefaultOrchestrator
+async def repair_phase_reports(self) -> list[PhaseId]:
+    """Startup (ARCHITECTURE §3.4, after recovery): for every COMPLETE phase of the project whose report_path("phase", id) is missing,
+    re-fire ON_PHASE_COMPLETE hooks (no transition). Returns repaired ids."""
+```
+
+#### Behavior
+1. The report is derived from persisted facts only (ledger, `phases`, evidence-package document, `retrospectives`, `cost_records`); no agent run, no provider call (§83, Inv. 9).
+2. `render_phase_report` is deterministic for equal inputs; sections appear in `PHASE_REPORT_SECTIONS` order; empty inputs render `_none_`.
+3. Gate History lists every gate decision of the phase across all rounds (e.g. `1 REWORK`, `2 GO`), oldest first.
+4. Hook failure is `FAIL_CLOSED`: `decide(GO)` raises `HookFailed` after the decision and the `COMPLETE` transition are committed, the successor is not started (E07-S05 rule 4 ordering), and the CLI exits 2 naming the hook; the user may `walk phase start` the successor; the next kernel start repairs the missing report.
+5. `write_report` overwrites the same file on every call; a second `ON_PHASE_COMPLETE` (repair) produces byte-identical output when inputs are unchanged.
+6. The phase document `Status` becomes `COMPLETE at <iso>` and `Gate History` is replaced with the same table as the report; other sections are untouched (section-level update, E04 `apply_updates`).
+7. `repair_phase_reports` re-fires hooks only; it writes no `PHASE_TRANSITION` and no `PHASE_GATE_DECISION`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a phase with decisions REWORK (round 1) and GO (round 2), a package and a retrospective When `render_phase_report` Then 7 `## ` headings in order, Gate History rows `1 REWORK` then `2 GO`, Retrospective shows `First-pass success` | `tests/orchestrator/test_phase_report.py::test_render_sections_and_gate_history` |
+| 2 | Given no package and no retrospective When `render_phase_report` Then those sections read `_none_` | `tests/orchestrator/test_phase_report.py::test_render_missing_inputs` |
+| 3 | Given equal inputs When rendered twice Then identical strings | `tests/orchestrator/test_phase_report.py::test_render_deterministic` |
+| 4 | Given `write_report("phase", "PHASE-01", md)` twice Then one file `.ai/reports/phases/PHASE-01.md` without front matter, no `memory_index` row, no `CONTEXT_UPDATED` | `tests/memory/test_write_report_basic.py::test_write_report_phase_overwrite_plain` |
+| 5 | Given `write_report("cost", …)` Then `NotSupported` naming `E09-S02` | `tests/memory/test_write_report_basic.py::test_write_report_other_kinds_not_supported` |
+| 6 | Given PHASE-01 at USER_GATE When `decide(GO)` Then `.ai/reports/phases/PHASE-01.md` exists and the phase document `Status` starts with `COMPLETE at` | `tests/hooks/test_builtins_phase_complete.py::test_go_writes_phase_report_and_updates_doc` |
+| 7 | Given the report hook raising When `decide(GO)` Then `HookFailed`, PHASE-01 `COMPLETE`, PHASE-02 still `PLANNED` | `tests/hooks/test_builtins_phase_complete.py::test_report_failure_fails_closed` |
+| 8 | Given a COMPLETE phase without report file When the kernel starts Then `repair_phase_reports() == [PHASE-01]`, the file exists, and no new `PHASE_TRANSITION` | `tests/orchestrator/test_phase_report_recovery.py::test_startup_repairs_missing_report` |
+| 9 | Given a COMPLETE phase with its report When the kernel starts Then `repair_phase_reports() == []` | `tests/orchestrator/test_phase_report_recovery.py::test_startup_skips_existing_report` |
+
+#### Evidence required
+- Quality gate output.
+- Demo on the fixture repo at `USER_GATE`: `walk phase gate PHASE-01 --decision GO`; `cat .ai/reports/phases/PHASE-01.md`; `head -30 .ai/phases/PHASE-01.md` showing `Status` and `Gate History`.
+
+#### Notes
+- ARCHITECTURE §4.1 `ON_PHASE_COMPLETE` row, §8 `reports/phases/`; INTERFACES §1.8 `write_report`. WBS §3.5: no ledger event is written by this hook (it is not a §4.3 write point); `HOOK_EXECUTED` comes from `HookManager`.
+- E09-S02 replaces the hook body with `LedgerManager.report("phase", id)` + `write_report` and adds kind validation/secret refusal; keep `write_report`'s observable contract (plain overwrite, no index) identical to E09-S02 AC 7 so that story only extends it.
+- `promote_phase_learnings()` is named in ARCHITECTURE §4.1 but absent from INTERFACES §1.8; not implemented here — architect to define or drop (WBS §6 entry).
+- `NEW NAME:` `render_phase_report`, `PHASE_REPORT_SECTIONS` (`walk.orchestrator.phase_report`), `report_path`, `DefaultOrchestrator.repair_phase_reports`, hook `builtin.phase_complete_report`, `BuiltinHookDeps.retrospectives`; basic `DefaultMemoryManager.write_report` (extended by E09-S02).
+- Commit subject: `feat: add phase report on phase completion (E07-S09)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E07-S10 — Epic gate: §134 phase test (e2e)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §134, §136, §56, §60, §66–§72, §89, §90, §93, §115, §137 (Inv. 7, 14), §140
+**Depends on:** E07-S01, E07-S06, E07-S07, E07-S08, E07-S09
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** QC   **Reviewer role:** LeadDev
+
+#### Goal
+The §134 MVP Phase Test passes end-to-end with fakes: a small GDD compiled into one phase (E06) runs autonomously with `max_parallel_agents=3`, its stories go through review and QC with one fix loop, the kernel survives a crash mid-phase, the phase stops itself at the gate with `evidence-package.md` and `retrospective.md`, and the user exercises REWORK, CHANGE (denied), GO (report + next phase started) and STOP — every decision recorded and user-only.
+
+#### Scope
+- In: `tests/e2e/test_e07_gate.py`, `e07_scenario` fixture and `E07Scenario`, fake-adapter scripts for PO rework intake and LEAD_DEV/PO change analysis.
+- Out: production code changes (any defect found → `bugfix` story `E07-Bxx`); real providers, network, real Unity (CI and Unity are `tests/fakes`).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `tests/e2e/test_e07_gate.py` | create | — |
+| `tests/e2e/conftest.py` | modify | `e07_scenario` fixture, `E07Scenario` `(verify: builds on e06_scenario from E06-S08)` |
+| `tests/fakes/fake_model_adapter.py` | modify | — (script helpers `rework_intake_output(drafts)`, `change_analysis_output(findings, plan)`; per-run artificial latency on `FakeClock` to make concurrency observable) |
+
+#### Interface contract
+Fixture `e07_scenario(e06_scenario) -> E07Scenario` (`WalkModel` in conftest): `handle: KernelHandle`, `project_key: ProjectKey`, `phase_ids: list[PhaseId]` (`PHASE-01`, `PHASE-02` from the E06 small GDD), `story_ids: list[WorkItemId]` (PHASE-01 scope, ≥ 4 stories over ≥ 2 features), `qc_reject_story_id: WorkItemId`, `repo_path: Path`. Settings: `KernelSettings(max_parallel=3, …)`; overrides: `FakeModelAdapter` providers `fake-codex/sim` (SENIOR_DEV), `fake-claude/sim` (LEAD_DEV, QC, PRODUCT_OWNER), `FakeUnityProvider`, `LocalCiProvider` with scripted green jobs, `FakeCodeGraphProvider` (fixture graph), `LocalWorkProvider`, `FakeClock`, `SequentialIdFactory`; real temp git repo (`tests/conftest.py::tmp_game_repo`). Each step below is one test, executed in order on the fixture's cached state (E04-S15 pattern).
+
+#### Behavior
+Scenario steps:
+1. **Start.** `walk phase start PHASE-01` (offline) → `ACTIVE`, `PHASE_BASELINE` artifact, PHASE budgets (E07-S02).
+2. **Parallel execution.** `walk run` ticks until 3 runs are simultaneously `RUNNING`; peak concurrency == 3, never > 3; runs of one role never exceed its `max_parallel_runs`; concurrent runs use distinct worktrees and branches; no two dependent stories run together (E07-S01, §60).
+3. **QC fix loop.** QC rejects `qc_reject_story_id` once (`BUG` created, `fix_loops == 1`), the fix passes review and QC; every story reaches `COMPLETE`.
+4. **Crash and recovery.** Mid-step 2, the kernel is stopped with `Orchestrator.stop(drain=False)` while ≥ 2 runs are `RUNNING`; a new kernel instance starts; recovery resumes from checkpoints (`RECOVERY_RESUMED` per interrupted run), no item is scheduled twice (`schedule:` keys), the phase is still `ACTIVE` with the same `baseline_artifact_id` (§89–§90).
+5. **Autonomous stop at the gate.** When all scope features are terminal the tick requests the review: phase `USER_GATE`, `gate_round == 1`, `.ai/phases/PHASE-01/evidence-package.md` (14 sections) and `retrospective.md` (5 sections, `stories` equals completed stories) exist, `PhaseEvidencePackage.retrospective_id == "RETRO-PHASE-01"`; further ticks admit nothing (§68).
+6. **REWORK.** `walk phase gate PHASE-01 --decision REWORK --feedback "Shotgun feels weak"` → `REWORK`, intake task for PRODUCT_OWNER; the scripted PO output creates 2 tasks (`rework:design`, `rework:vfx`) inside scope; phase `ACTIVE`; the tasks complete; the gate is reached again with `gate_round == 2` and a new evidence package (`id` ends `EP2`).
+7. **CHANGE denied.** `walk phase gate PHASE-01 --decision CHANGE --feedback "Replace energy with stamina"` → `CHANGE_ANALYSIS`; LEAD_DEV then PO analysis runs; `change-plan-2.md` lists all ten `CHANGE_PLAN_SECTIONS` with graph-expanded `Affected Code`; `walk deny APV-NNNN` → `USER_GATE`, `gate_round == 2`.
+8. **GO.** `walk phase gate PHASE-01 --decision GO` → PHASE-01 `COMPLETE`, `.ai/reports/phases/PHASE-01.md` with Gate History `1 REWORK`, `2 CHANGE`, `2 GO`; PHASE-02 `ACTIVE` with its own baseline; `walk status --json` shows `current_phase.id == "PHASE-02"`.
+9. **STOP.** `walk phase stop PHASE-02 --reason "end of gate test"` → `STOPPED`, project paused, one `USER_OVERRIDE`.
+10. **Audit.** Ledger `PHASE_GATE_DECISION` events are exactly REWORK, CHANGE, GO in that order, each with actor role `USER`; no `PHASE_GATE_DECISION` or `phase_event("decide:*")` by a non-USER actor; every `WORK_ITEM_CREATED` during the phase is a descendant of PHASE-01 scope or a phase-intake task (Inv. 7); `walk ledger query --phase PHASE-01 --kind PHASE_TRANSITION` lists `start, request_review, package_ready, decide:REWORK, rework_planned, request_review, package_ready, decide:CHANGE, change_rejected, decide:GO`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given the E06 planned phase When `walk phase start PHASE-01` Then `ACTIVE` with baseline and PHASE budget | `tests/e2e/test_e07_gate.py::test_phase_starts_with_baseline_and_budget` |
+| 2 | Given the running kernel Then peak concurrent runs == 3, per-role limits respected, distinct worktrees, no dependent pair concurrent | `tests/e2e/test_e07_gate.py::test_parallel_execution_respects_limits` |
+| 3 | Given the QC-rejected story Then one bug, `fix_loops == 1`, story finally `COMPLETE`; all scope stories `COMPLETE` | `tests/e2e/test_e07_gate.py::test_qc_fix_loop_and_all_stories_complete` |
+| 4 | Given a crash with ≥ 2 running runs When the kernel restarts Then each interrupted run has `RECOVERY_RESUMED`, no duplicate scheduling, phase `ACTIVE` with unchanged baseline | `tests/e2e/test_e07_gate.py::test_phase_survives_kernel_crash` |
+| 5 | Given all features terminal Then phase `USER_GATE` round 1, both documents exist with the expected sections, `retrospective_id` set, and a further tick admits 0 | `tests/e2e/test_e07_gate.py::test_autonomous_stop_with_evidence_and_retrospective` |
+| 6 | Given REWORK feedback Then 2 in-scope rework tasks are created, completed, and the phase returns to `USER_GATE` round 2 with package `EP2` | `tests/e2e/test_e07_gate.py::test_rework_round_trip` |
+| 7 | Given CHANGE feedback Then a change plan with 10 sections and graph-expanded code is recorded, a `CHANGE_PLAN` approval is pending, and denying it returns to `USER_GATE` round 2 | `tests/e2e/test_e07_gate.py::test_change_analysis_and_denial` |
+| 8 | Given GO Then PHASE-01 `COMPLETE`, phase report Gate History has 3 rows, PHASE-02 `ACTIVE`, `status.current_phase.id == "PHASE-02"` | `tests/e2e/test_e07_gate.py::test_go_completes_reports_and_starts_next` |
+| 9 | Given `walk phase stop PHASE-02` Then `STOPPED`, `paused == true`, one `USER_OVERRIDE` | `tests/e2e/test_e07_gate.py::test_stop_phase_pauses_project` |
+| 10 | Given the ledger Then gate decisions REWORK, CHANGE, GO in order, all by USER, and the PHASE-01 transition sequence equals Behavior 10 | `tests/e2e/test_e07_gate.py::test_gate_decisions_user_only_and_ordered` |
+| 11 | Given all `WORK_ITEM_CREATED` events of the scenario Then each item is in PHASE-01 scope or a `phase-intake` task | `tests/e2e/test_e07_gate.py::test_no_work_outside_phase_scope` |
+
+#### Evidence required
+- Quality gate output including `tests/e2e/test_e07_gate.py` (11 passed).
+- Demo transcript on the fixture repo after the test: `walk phase list`, `walk phase evidence PHASE-01 | head -40`, `cat .ai/phases/PHASE-01/retrospective.md`, `cat .ai/reports/phases/PHASE-01.md`, `walk ledger query --phase PHASE-01 --kind PHASE_GATE_DECISION`, `walk status --json`.
+
+#### Notes
+- WBS §4 E07 epic gate and §9 row "Phase completes · Evidence package · Retrospective · GO/REWORK/CHANGE/STOP"; §134 flow (Small GDD → One Phase → Multiple Stories → Autonomous Execution → QC → Evidence → Phase Gate).
+- The crash step (4) proves the epic goal "phase survives a kernel crash" (§89–§90) with E01/E02 recovery; no E07 story adds recovery code beyond idempotency keys and E07-S08/S09 resume paths.
+- Gate uses only `tests/fakes` adapters and a real temp git repo with `LocalWorkProvider`; no network, no wall clock (`FakeClock`). Any production change needed to pass is a separate `bugfix` story; this commit touches tests only.
+- `e07_scenario` is reused by the E08/E09 gates (E09-S07 `e09_scenario(e07_scenario)`); keep its fields stable.
+- `NEW NAME:` `e07_scenario`, `E07Scenario`, fake script helpers `rework_intake_output`, `change_analysis_output`.
+- Commit subject: `feat: add epic 07 gate autonomous phase test (E07-S10)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
+### E07-R01 — Review E07
+
+**Status:** TODO
+**Type:** docs
+**Requirements:** §137 (Inv. 7, 14), §134, §69, §72, §83, §115
+**Depends on:** E07-S10
+**Effort:** MEDIUM   **Risk:** LOW
+**Owner role:** LeadDev   **Reviewer role:** QC
+
+#### Goal
+An independent agent instance (different model than the E07 implementer where possible, §23) verifies every E07 story against the Definition of Done and Invariants 7 and 14, confirms the phase guard payload producers and derived-document rules hold in code, and records defects as `bugfix` stories before E08/E09 start.
+
+#### Scope
+- In: stories E07-X01, E07-S01…S10 and their commits; `INTERFACES.md`/`DOMAIN-MODEL.md`/ADR-0009 deltas (D-5 container note, `ApprovalRequest.kind`, `ChangeImpact`, `PhaseEvidencePackage.known_limitations_sources`); WBS §6 register entries from this epic; `story/<ID>` branch merges (`--no-ff`).
+- Out: fixing defects (each becomes `E07-Bxx`).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `docs/02-work-breakdown/EPIC-07-autonomous-phase.md` | modify | — (review record appended; `E07-Bxx` stories appended if any) |
+| `docs/02-work-breakdown/WBS.md` | modify | — (status rows, §6 register) |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/adr/ADR-0009-runtime-topology-and-open-questions.md` | modify (only if drift found) | — |
+| `tests/architecture/test_phase_decision_user_only.py` | create | — |
+| `tests/architecture/test_phase_guard_payloads.py` | create | — |
+| `tests/architecture/test_phase_documents_derived.py` | create | — |
+
+#### Interface contract
+Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
+
+#### Behavior
+1. For each story: `git show <sha>`; Files table == changed files (extra files need commit-body justification); every acceptance-criterion test exists and passes; coverage ≥ 90 % for touched modules.
+2. Invariant 14: `phase_event(…, "decide:…")`, `"change_plan_approved"`, `"change_rejected"`, `"reopen"` and `"stop"` are raised only from `src/walk/orchestrator/phase_gate.py` (and `service.py` delegation), always with a USER actor resolved from the CLI/approval; `AgentOutput` has no field that can carry a `PhaseDecision`.
+3. Invariant 7: every work item created by a phase-intake run is inside `Phase.scope_epic_ids` or is itself the intake task; change-analysis runs create nothing (E07-S07 rule 3).
+4. Every guard of `phase_workflow v1.0` (INTERFACES §3.4, `src/walk/workflow/tables/phase_workflow.yaml`) reads a payload key that some non-test module under `src/walk/` writes (header `NEW NAME:` table of this epic).
+5. Derived documents: `evidence_packager.py`, `change_impact.py` (render part), `phase_report.py` and `improvement/retrospective.py` import nothing from `walk.agents`, `walk.runtime`, `walk.model_router` and start no agent run.
+6. ADR-0009 D-5 states the container decision taken in E07-S01; WBS §3.9 records the `ANALYSIS`/`RETRO` template split (E07-X01 step 5).
+7. `NEW NAME:` items of E07 (epic header table and story Notes) are present in WBS §6 or listed in the review note for the architect, including `promote_phase_learnings` (E07-S09 Notes).
+8. All `story/E07-*` branches are merged `--no-ff` into `main` after this review and the gate passes on `main`.
+9. Defects → `E07-Bxx` stories using the template; commit `docs: review epic 07 stories E07-S01..S10 (E07-R01)`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given each E07 story When the DoD checklist is applied Then every box is checked or an `E07-Bxx` story exists | manual checklist recorded in this story's Evidence |
+| 2 | Given `src/walk` When parsing calls that raise phase events `decide:*`, `change_plan_approved`, `change_rejected`, `reopen`, `stop` Then the only callers are in `walk/orchestrator/phase_gate.py` or `walk/orchestrator/service.py` | `tests/architecture/test_phase_decision_user_only.py::test_phase_decisions_raised_only_by_phase_gate` |
+| 3 | Given `phase_workflow.yaml` guards and the WBS §3.4 payload-key map When `src/walk` is scanned Then every key read by a phase guard is written by a non-test module | `tests/architecture/test_phase_guard_payloads.py::test_every_phase_guard_payload_key_produced` |
+| 4 | Given the four derived-document modules When their imports are parsed Then none imports `walk.agents`, `walk.runtime` or `walk.model_router` | `tests/architecture/test_phase_documents_derived.py::test_phase_document_builders_do_not_import_agents` |
+| 5 | Given the quality gate on `main` after the merges Then green with overall coverage ≥ 85 % and `tests/e2e/test_e07_gate.py` passing | gate output in Evidence |
+
+#### Evidence required
+- Checklist per story (ID → DoD items → OK/defect id), including Inv. 7/14 findings.
+- Quality gate output on `main` after the review commit and merges; `walk phase list` on the gate fixture repo as a sanity demo.
+- List of `E07-Bxx` stories created (or "none") and the architect note listing open `NEW NAME:` items.
+
+#### Notes
+- Tests 2–4 are architecture tests created by the reviewer (review tasks may add tests, never production code).
+- E08-X01 and E09-X01 depend on this review (WBS §5); a `BLOCKER` bugfix story stops both until fixed (WBS §2 rule 2).
+- Commit subject: `docs: review epic 07 stories E07-S01..S10 (E07-R01)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
