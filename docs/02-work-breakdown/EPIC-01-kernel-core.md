@@ -1993,7 +1993,7 @@ Also outside the Files table: `WBS.md` §6 gains the ADR-0019 register row that 
 
 ### E01-S15 — Permission policy core: `PermissionManager.decide/rules_for`
 
-**Status:** DONE (pending)
+**Status:** DONE (0a4983a)
 **Type:** feat
 **Requirements:** §31, §63, §91, §92, §137 (Inv. 4, 7)
 **Depends on:** E01-S14
@@ -2127,7 +2127,7 @@ Level-0 decisions:
 
 ### E01-S16 — Memory core: front matter, `MemoryDocument`, atomic `write`, `apply_updates`, handovers, index
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.2, §22, §34, §35, §41, §42 (stamping), §91 (secret isolation), §130, §137 (Inv. 2)
 **Depends on:** E01-S05, E01-S07
@@ -2252,7 +2252,46 @@ class DefaultMemoryManager:
 - Commit: `feat: add memory document core with atomic writes and index (E01-S16)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+157 files already formatted
+All checks passed!
+Success: no issues found in 155 source files
+Required test coverage of 85% reached. Total coverage: 99.93%
+552 passed in 25.60s
+```
+Touched modules: `memory/*` 100%, `cli/cmd_memory.py` 100%, `cli/app.py` 100%, `cli/composition.py` 100%.
+
+Demo (scratch repo: `walk db migrate`, project DEMO, one feature document on disk):
+```
+$ walk memory index --repo ./demo
+indexed 1 documents
+(exit 0)
+$ walk --json --repo ./demo memory index
+{
+  "indexed": 1
+}
+```
+
+Contract changes (small, additive; see commit body):
+- `DefaultMemoryManager.__init__` takes an extra keyword-only `project_key`, because `CONTEXT_UPDATED`, `HANDOVER_CREATED` and `ON_CONTEXT_UPDATED` need it. This is the same reason as E01-S13 and E01-S15.
+- `Freshness.pr`/`build` accept YAML numbers and keep them as text. The ARCHITECTURE §8.2 sample has `pr: 42`, which YAML reads as an int. Recorded in DOMAIN-MODEL §4.7.
+
+Outside the Files table: `cli/composition.py` gains `open_memory(db, repo, *, project_key, clock=None)`, which keeps wiring in the composition root as `open_workflow`/`open_costs` do.
+
+Level-0 decisions:
+- Rendering: front matter is `yaml.safe_dump(model_dump(mode="json"), sort_keys=True, allow_unicode=True, block style)`, with `None` fields kept so that the output is deterministic. Then comes an H1 `# <title>`. Then the sections: the type's `SECTION_ORDER` first, then unknown sections in their current order. Each is written `## <name>`, a blank line, and the body (stripped of surrounding newlines). Files are written with LF line endings.
+- Parsing: CRLF is normalised. `## ` lines inside fenced code blocks are content. Before the first H2 only blank lines and H1 lines are allowed, and the H1 is regenerated from `title`. These raise `ConfigError`: a duplicate heading, front matter that is missing, unterminated or invalid (an unknown `type` included), and an id that differs from the stem. `MemoryDocument.path` is relative to `.ai/` (POSIX); `raw_sha256` is the sha256 of the file text, empty for unwritten skeletons.
+- Paths (`doc_path_for`): `project` → `project/project.md` and `constitution` → `project/constitution.md` (fixed ids). Retrospectives, observations, candidates and patterns go to `improvements/`, and constitutions to `agents/roles/`. `EVIDENCE_PACKAGE` and `SKILL` have fixed file stems, so they are not id-addressable and raise `ConfigError`. Ids must be one safe path segment (`[A-Za-z0-9][A-Za-z0-9_.-]*`, no `..`). `write` always targets the canonical path and ignores the incoming `doc.path`.
+- `write`: refusal order is approved (needs a truthy `extra["change_request_decision"]`), then an invalid head or branch (`ConfigError`), then secrets (`SecretDetected` names the patterns). For an existing file, `created_at` is kept and `version` is `existing + 1`. A new document gets `created_at = updated_at = now`. The index upsert, `CONTEXT_UPDATED` and the file write (`<name>.tmp` then `Path.replace`; the tmp file is removed on any failure) run in one unit of work. A failed rename rolls back the index row and the event. `ON_CONTEXT_UPDATED` fires after commit.
+  - Ledger and hook facts: actor role, run and model from `actor`; `work_item_id` is the doc id for feature and bug documents. Payload: `{doc_id, type, version, path, sections_changed}`; a new document lists every section.
+  - The index's `freshness_status`/`checked_at` stay empty until E04-S03 assesses them.
+- `apply_updates` validates every update before writing anything. Updates are grouped per document in first-touch order. A missing document is created from `skeleton_for` (title = id) only for `FEAT-*`, `BUG-*` and `project`; any other missing id raises `ConfigError`. Sections must belong to the type's schema; types without a schema accept any name. Content is stripped of surrounding newlines, and APPEND joins with a blank line. `relevant_files` are merged in order without duplicates.
+- Handovers: the `HANDOVER_CREATED` payload `{handover_id, work_item_id, reason}` is read from `extra["work_item_id"]` and `extra["reason"]`, which is the convention `walk.agents.handover.to_document` (E01-S18) must follow. An invalid work-item id raises `ConfigError` before anything is written. `write_handover` and `write_report` return absolute paths.
+- `rebuild_index` skips `reports/`, `agents/skills/` and any `evidence/` folder. Files that do not parse are skipped with a structured warning (`doc_path`). Rows of vanished files are deleted. Everything runs in one transaction.
+- `write_report` validates `kind` and `subject_id` as safe segments and applies the secret scan (ARCHITECTURE §6: every `.ai/` write). It writes atomically, with no index row and no ledger event.
+- `walk memory index` requires an existing database: it opens read-only first (as the read commands do), then opens writable. It also needs exactly one project. Output is `indexed N documents`, or JSON `{"indexed": N}`.
+- Error bases: `DocumentNotFound(PermanentError)`, `SecretDetected(BoundaryViolation)`, `ApprovedWriteRefused(PermissionDenied)` (CLI exit 2).
 
 ---
 

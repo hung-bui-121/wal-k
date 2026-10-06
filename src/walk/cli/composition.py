@@ -13,7 +13,9 @@ from walk.budgets import (
     DefaultCostManager,
 )
 from walk.common.clock import Clock, SystemClock
+from walk.common.ids import ProjectKey
 from walk.hooks import DefaultHookManager, HookExecutionRepository
+from walk.memory import DefaultMemoryManager, MemoryIndexRepository
 from walk.persistence import Database, IdSequenceStore
 from walk.telemetry import DefaultLedgerManager, LedgerRepository
 from walk.workflow import (
@@ -83,3 +85,29 @@ def open_costs(db: Database, *, clock: Clock | None = None) -> DefaultCostManage
     hooks = DefaultHookManager(HookExecutionRepository(db), ledger, time)
     budgets = DefaultBudgetManager(db, BudgetRepository(db), ledger, hooks, time)
     return DefaultCostManager(db, CostRepository(db), ledger, budgets, WorkflowRepository(db))
+
+
+def open_memory(
+    db: Database, repo: Path, *, project_key: ProjectKey, clock: Clock | None = None
+) -> DefaultMemoryManager:
+    """Wire a `DefaultMemoryManager` for ``<repo>/.ai`` (with ledger and hooks) on ``db``.
+
+    Args:
+        db: An open project database.
+        repo: Game repository root.
+        project_key: Project of the database (stamped on ledger events and hook contexts).
+        clock: Time source; the system clock when ``None`` (tests inject a fake).
+    """
+    time = clock or SystemClock()
+    ids = IdSequenceStore(db)
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, time)
+    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, time)
+    return DefaultMemoryManager(
+        repo / _AI_DIR,
+        MemoryIndexRepository(db),
+        ledger,
+        hooks,
+        ids,
+        time,
+        project_key=project_key,
+    )

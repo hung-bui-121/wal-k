@@ -1473,7 +1473,7 @@ class Freshness(WalkModel):
     commit: Sha
     branch: str
     timestamp: datetime
-    pr: str | None = None
+    pr: str | None = None  # YAML numbers (e.g. `pr: 42` in ARCHITECTURE §8.2) are kept as text (E01-S16)
     build: str | None = None
 
 
