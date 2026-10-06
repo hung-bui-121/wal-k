@@ -199,7 +199,7 @@ async def test_ledger_rows_are_immutable(db: Database, ledger: DefaultLedgerMana
     with pytest.raises(sqlite3.IntegrityError):
         db.connect().execute("DELETE FROM ledger_events")
     public = {name for name in dir(LedgerRepository) if not name.startswith("_")}
-    assert public == {"insert", "query", "after"}
+    assert public == {"insert", "query", "after", "db"}  # reads only; no update/delete
 
 
 async def test_report_returns_subject_events(

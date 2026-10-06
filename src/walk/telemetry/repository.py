@@ -1,14 +1,16 @@
-"""SQLite access to ``ledger_events``: insert and read only (Invariant 9).
+"""SQLite access to ``ledger_events`` and ``evidence``: insert and read only (Invariant 9).
 
-There is deliberately no update or delete method; the table's triggers abort both.
+There is deliberately no update or delete method; the tables' triggers abort both.
 """
 
 import sqlite3
 from datetime import UTC, datetime
+from typing import ClassVar
 
-from walk.common.ids import PhaseId, RunId, WorkItemId
-from walk.persistence import Database
-from walk.telemetry.models import LedgerEvent, LedgerEventKind
+from walk.common.errors import ConfigError
+from walk.common.ids import PhaseId, ProjectKey, RunId, WorkItemId
+from walk.persistence import Database, Repository, UnitOfWork
+from walk.telemetry.models import Evidence, EvidenceKind, LedgerEvent, LedgerEventKind
 
 _MAX_QUERY_LIMIT = 10_000
 _INSERT_SQL = (
@@ -34,6 +36,11 @@ class LedgerRepository:
     def __init__(self, db: Database) -> None:
         """Bind the repository to ``db``."""
         self._db = db
+
+    @property
+    def db(self) -> Database:
+        """The database holding the ledger; metric queries read it (`compute_metrics`)."""
+        return self._db
 
     def insert(self, event: LedgerEvent, conn: sqlite3.Connection) -> LedgerEvent:
         """Insert ``event`` on ``conn`` (the caller's transaction) and return it with ``seq``."""
@@ -109,3 +116,49 @@ class LedgerRepository:
             .fetchall()
         )
         return [_from_row(row) for row in rows]
+
+
+class EvidenceRepository(Repository[Evidence]):
+    """``evidence`` rows: the `Evidence` JSON plus its indexed columns (append-only)."""
+
+    _table: ClassVar[str] = "evidence"
+    _model = Evidence
+
+    def projection(self, obj: Evidence) -> dict[str, object]:
+        """Indexed columns of the ``evidence`` table."""
+        return {
+            "kind": obj.kind,
+            "work_item_id": obj.work_item_id,
+            "phase_id": obj.phase_id,
+            "run_id": obj.produced_by.run_id,
+            "uri": obj.uri,
+            "sha256": obj.sha256,
+            "produced_at": obj.produced_at,
+        }
+
+    async def for_item(
+        self, work_item_id: WorkItemId, kinds: list[EvidenceKind] | None = None
+    ) -> list[Evidence]:
+        """Return the item's evidence by ``produced_at`` then id; ``kinds`` empty = all."""
+        where = "work_item_id = ?"
+        params: list[object] = [work_item_id]
+        if kinds:
+            where += f" AND kind IN ({', '.join('?' for _ in kinds)})"
+            params.extend(kind.value for kind in kinds)
+        return await self.list_where(where, params, order_by="produced_at, id")
+
+    async def for_phase(self, phase_id: PhaseId) -> list[Evidence]:
+        """Return the phase's evidence by ``produced_at`` then id."""
+        return await self.list_where("phase_id = ?", [phase_id], order_by="produced_at, id")
+
+    async def project_key(self, uow: UnitOfWork) -> ProjectKey:
+        """Return the key of the project this database belongs to (one DB per project).
+
+        Raises:
+            ConfigError: If the ``projects`` table does not hold exactly one project.
+        """
+        rows = uow.conn.execute("SELECT key FROM projects").fetchall()
+        if len(rows) != 1:
+            msg = "evidence needs exactly one project in the database"
+            raise ConfigError(msg, detail={"projects": [row[0] for row in rows]})
+        return str(rows[0][0])

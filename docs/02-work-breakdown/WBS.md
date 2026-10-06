@@ -391,8 +391,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E01-S02 | Provider CLI/SDK spike → ADR-0014 | docs | none | MEDIUM | BLOCKED |
 | E01-S03 | SQLite `Database`, `MigrationRunner`, `0001_init.sql`, `walk db migrate/backup` | feat | E01-S01 | HIGH | DONE (2edcc6c) |
 | E01-S04 | `UnitOfWork`, `Repository[T]`, `IdSequenceStore`, `IdempotencyStore` | feat | E01-S03 | MEDIUM | DONE (1513909) |
-| E01-S05 | Execution ledger: `LedgerManager`, `walk ledger tail/query` | feat | E01-S04 | MEDIUM | DONE (pending) |
-| E01-S06 | `TelemetryManager` and `EvidenceManager` | feat | E01-S05 | MEDIUM | TODO |
+| E01-S05 | Execution ledger: `LedgerManager`, `walk ledger tail/query` | feat | E01-S04 | MEDIUM | DONE (68e1158) |
+| E01-S06 | `TelemetryManager` and `EvidenceManager` | feat | E01-S05 | MEDIUM | DONE (pending) |
 | E01-S07 | Hooks runtime core: `HookManager` | feat | E01-S05 | MEDIUM | TODO |
 | E01-S08 | Work-item aggregates, repository, `WorkflowManager.create/get/query`, `walk work list/show` | feat | E01-S04, E01-S05 | HIGH | TODO |
 | E01-S09 | `StateMachine`, YAML tables, guard registry, `raise_event`, `story_workflow`, `walk work transition` | feat | E01-S07, E01-S08 | HIGH | TODO |

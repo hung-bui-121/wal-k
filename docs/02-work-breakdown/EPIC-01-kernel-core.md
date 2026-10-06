@@ -612,7 +612,7 @@ Level-0 decisions (no contract change):
 
 ### E01-S05 — Execution ledger: `LedgerManager`, `walk ledger tail/query`
 
-**Status:** DONE (pending)
+**Status:** DONE (68e1158)
 **Type:** feat
 **Requirements:** §6.11, §81, §82, §86, §88, §137 (Inv. 9)
 **Depends on:** E01-S04
@@ -743,7 +743,7 @@ Level-0 decisions:
 
 ### E01-S06 — `TelemetryManager` and `EvidenceManager`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §6.6, §47, §86, §116
 **Depends on:** E01-S05
@@ -843,7 +843,28 @@ class DefaultEvidenceManager:
 - Commit: `feat: add telemetry logging, ledger metrics and evidence manager (E01-S06)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Python 3.12.11, uv 0.7.21):
+```
+60 files already formatted
+All checks passed!
+Success: no issues found in 57 source files
+Required test coverage of 85% reached. Total coverage: 99.74%
+154 passed in 5.21s
+```
+Touched modules: `telemetry/service.py`, `repository.py`, `metrics.py`, `logging.py`, `protocols.py` each 100%.
+
+Additions outside the listed symbols (flagged for the owner; no listed signature changed):
+- `LedgerRepository.db` (read-only property). `metrics()` must run `METRIC_QUERIES` as SQL, but the contract constructor `DefaultTelemetryManager(repo_root, ledger: LedgerRepository, clock)` passes no `Database`, and `LedgerRepository` had no read path for arbitrary SELECTs. The property exposes the handle without adding any write method (Invariant 9). `tests/telemetry/test_ledger.py` (E01-S05) now allows `db` in its "no update/delete" surface check; that is the only file touched outside the Files table. E10-S09's `DefaultTelemetryManager.improvement_metrics` → `compute_improvement_metrics(db, …)` can use the same path.
+- `EvidenceRepository.project_key(uow)`. `EVIDENCE_RECORDED` needs `project_key`, and neither `DefaultEvidenceManager.__init__` nor `record()` supplies one. Because there is one DB per project (ADR-0002 D-1), the repository reads the single `projects` row inside the record transaction; zero or several rows raise `ConfigError`. Other E01 services take `*, project_key` in their constructor (e.g. `DefaultCheckpointManager`), and the owner may prefer that here.
+
+Cross-story gap, not fixed here: the `METRIC_QUERIES` definitions read payload keys that the planned writers do not list yet. These are `WORK_ITEM_TRANSITION.payload.kind`/`fix_loops` (E01-S09 lists `from, to, event, reason, resume_state?, state_version`) and `BUG_CREATED.payload.found_in_state` (DOMAIN-MODEL §4.12 payload table). Until the writers add them, `first_pass_success_rate` and `escaped_bugs` stay 0. Story kind falls back to the id prefix (DOMAIN-MODEL §2) when `payload.kind` is absent.
+
+Level-0 decisions:
+- `compute_metrics(db, *, phase_id=None, since=None) -> RetrospectiveMetrics` (async, the shape of E10's `compute_improvement_metrics`). Every query is a static SELECT with named parameters `:phase_id`/`:since` (NULL = unscoped). Phase scoping means `e.phase_id = :phase_id`. A completed item counts as first-pass when its `MAX(payload.fix_loops) = 0`; a missing value counts as not first-pass. `!=`/`=` conditions on a missing payload key do not match. `mean_task_duration_s` joins `AGENT_RUN_STARTED` per run and is rounded to milliseconds (`julianday` float error).
+- `JsonLineHandler(path)` is a `logging.FileHandler` (append, utf-8, delayed open, parent dir created) whose `format()` emits `{ts, level, msg, logger?, **fields}`. Fields come from `extra=` or from `DefaultTelemetryManager.log`, and a field never overrides `ts/level/msg/logger`. Unencodable values become `repr` (including cycles). `configure_logging(repo_root, *, level="INFO") -> None` replaces any earlier `JsonLineHandler` on the `walk` logger, matching E09-S06's planned keyword-extended signature. The module name `telemetry/logging.py` comes from the Files table; absolute imports keep stdlib `logging` unaffected.
+- `DefaultTelemetryManager.log` stamps `ts` from the injected clock and writes no `logger` key, so lines are exactly `ts, level, msg, **fields`. Unknown level names are written upper-cased at INFO severity. Counters/timers use keys `name{k=v,…}` (sorted labels); timers keep `count/total_s/max_s`. The 60 s flush is checked at the start of each `counter`/`timer`/`log` call (no background task). `close()` flushes whatever is pending and closes the file; an empty window writes nothing.
+- Evidence: repo-relative paths resolve against `ai_root.parent`. EPIC ids, or neither id given, raise `ConfigError` for local files (the folder rule has no entry); external URIs need no folder. Files are copied atomically (`.partial` + replace) under their basename. An existing target is reused only if it is the same file or has identical content, otherwise `ConfigError` (evidence is immutable). A failed transaction deletes a copy made by that call. The ledger payload is `{evidence_id, kind}`, and the event `at` equals `produced_at`. `for_item(kinds=[])` means no filter, as in `LedgerRepository.query`. `satisfies` de-duplicates `required` while keeping its order. Writing evidence binaries under `.ai/` is the story's own rule (ADR-0003 D-1/D-4 exempt `evidence/` folders from document writes).
+- `DefaultEvidenceManager.__init__` carries `# noqa: PLR0917`, because its six positional parameters are fixed by the contract.
 
 ---
 
