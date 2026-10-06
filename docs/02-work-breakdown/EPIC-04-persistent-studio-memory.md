@@ -72,27 +72,73 @@
 #### Interface contract
 ```python
 # src/walk/memory/contexts.py
-FEATURE_SECTIONS: tuple[str, ...] = ("Intent", "Design Goal", "Relevant GDD", "Current Status", "Architecture",
-    "Affected Systems", "Dependencies", "Relevant Files", "Important Decisions", "Implementation Notes",
-    "Known Risks", "QC Notes", "Evidence", "Remaining Work")                       # §37 order
-BUG_SECTIONS: tuple[str, ...] = ("Problem", "Reproduction", "Expected Behavior", "Observed Behavior", "Investigations",
-    "Hypotheses", "Failed Attempts", "Root Cause", "Affected Systems", "Fix", "Regression Risk", "Verification")  # §38
-PROJECT_SECTIONS: tuple[str, ...] = ("Goals", "Platforms", "Technical Constraints", "Performance Targets",
-    "Coding Conventions", "Architecture Overview", "Art Direction", "Product Constraints", "Major Decisions",
-    "Known Limitations")                                                            # §36
+FEATURE_SECTIONS: tuple[str, ...] = (
+    "Intent",
+    "Design Goal",
+    "Relevant GDD",
+    "Current Status",
+    "Architecture",
+    "Affected Systems",
+    "Dependencies",
+    "Relevant Files",
+    "Important Decisions",
+    "Implementation Notes",
+    "Known Risks",
+    "QC Notes",
+    "Evidence",
+    "Remaining Work",
+)  # §37 order
+BUG_SECTIONS: tuple[str, ...] = (
+    "Problem",
+    "Reproduction",
+    "Expected Behavior",
+    "Observed Behavior",
+    "Investigations",
+    "Hypotheses",
+    "Failed Attempts",
+    "Root Cause",
+    "Affected Systems",
+    "Fix",
+    "Regression Risk",
+    "Verification",
+)  # §38
+PROJECT_SECTIONS: tuple[str, ...] = (
+    "Goals",
+    "Platforms",
+    "Technical Constraints",
+    "Performance Targets",
+    "Coding Conventions",
+    "Architecture Overview",
+    "Art Direction",
+    "Product Constraints",
+    "Major Decisions",
+    "Known Limitations",
+)  # §36
+
 
 def feature_context_from_document(doc: MemoryDocument) -> FeatureContext: ...
-def feature_context_to_document(ctx: FeatureContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None) -> MemoryDocument: ...
+def feature_context_to_document(
+    ctx: FeatureContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None
+) -> MemoryDocument: ...
 def bug_context_from_document(doc: MemoryDocument) -> BugContext: ...
-def bug_context_to_document(ctx: BugContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None) -> MemoryDocument: ...
+def bug_context_to_document(
+    ctx: BugContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None
+) -> MemoryDocument: ...
 def project_context_from_document(doc: MemoryDocument) -> ProjectContext: ...
-def project_context_to_document(ctx: ProjectContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None) -> MemoryDocument: ...
+def project_context_to_document(
+    ctx: ProjectContext, front_matter: FrontMatter, *, extra_sections: dict[str, str] | None = None
+) -> MemoryDocument: ...
+
 
 # DefaultMemoryManager (additions; protocol methods see INTERFACES.md §1.8)
 async def read_feature_context(self, feature_id: FeatureId) -> FeatureContext: ...
 async def read_bug_context(self, bug_id: BugId) -> BugContext: ...
-async def ensure_feature_context(self, feature: Feature, *, actor: Actor, head: Sha, branch: str) -> MemoryDocument: ...
-async def ensure_bug_context(self, bug: Bug, *, actor: Actor, head: Sha, branch: str) -> MemoryDocument: ...
+async def ensure_feature_context(
+    self, feature: Feature, *, actor: Actor, head: Sha, branch: str
+) -> MemoryDocument: ...
+async def ensure_bug_context(
+    self, bug: Bug, *, actor: Actor, head: Sha, branch: str
+) -> MemoryDocument: ...
 ```
 
 #### Behavior
@@ -168,7 +214,13 @@ _pending_
 
 #### Interface contract
 ```python
-CONTEXT_PROJECT_SECTIONS: tuple[str, ...] = ("Goals", "Technical Constraints", "Coding Conventions", "Architecture Overview")
+CONTEXT_PROJECT_SECTIONS: tuple[str, ...] = (
+    "Goals",
+    "Technical Constraints",
+    "Coding Conventions",
+    "Architecture Overview",
+)
+
 
 async def read_project_context(self) -> ProjectContext: ...
 async def project_context_sections_for_context(self) -> dict[str, str]:
@@ -242,16 +294,24 @@ class FreshnessInputs(FrozenModel):
     stamp: Freshness | None
     relevant_files: list[str]
     head: Sha
-    stamp_is_ancestor: bool          # GitProvider.is_ancestor(stamp.commit, head) or stamp.commit == head
+    stamp_is_ancestor: bool  # GitProvider.is_ancestor(stamp.commit, head) or stamp.commit == head
     missing_files: list[str]
-    changed_files: list[str]         # GitProvider.changed_between(stamp.commit, head, paths=relevant_files)
+    changed_files: list[
+        str
+    ]  # GitProvider.changed_between(stamp.commit, head, paths=relevant_files)
     now: datetime
     max_age_days: int = 30
 
-def classify_freshness(inputs: FreshnessInputs) -> FreshnessAssessment: ...   # pure, INTERFACES §5.5 steps 1–6
+
+def classify_freshness(
+    inputs: FreshnessInputs,
+) -> FreshnessAssessment: ...  # pure, INTERFACES §5.5 steps 1–6
+
 
 # DefaultMemoryManager
-async def assess_freshness(self, doc: MemoryDocument, head: Sha) -> FreshnessAssessment: ...  # see INTERFACES.md §1.8
+async def assess_freshness(
+    self, doc: MemoryDocument, head: Sha
+) -> FreshnessAssessment: ...  # see INTERFACES.md §1.8
 ```
 `KernelSettings.memory_max_age_days: int = 30`. CLI: `walk memory freshness [DOC_ID] [--json]`.
 
@@ -329,7 +389,11 @@ Staleness is detected before every agent run, flagged on the bundle, recorded in
 ```python
 async def invalidate_for_paths(self, paths: list[str]) -> list[str]:
     """Sets memory_index.freshness_status=POSSIBLY_STALE for docs whose relevant_files intersect paths. Returns doc ids."""
-async def record_stale(self, doc_id: str, assessment: FreshnessAssessment, *, run_id: RunId | None) -> None:
+
+
+async def record_stale(
+    self, doc_id: str, assessment: FreshnessAssessment, *, run_id: RunId | None
+) -> None:
     """Ledger CONTEXT_FRESHNESS (write point ARCHITECTURE §4.3: memory.MemoryManager)."""
 ```
 Hook payloads: `ON_CONTEXT_STALE.payload = {"doc_id", "status", "reason", "item_id"}`; `ON_CODE_CHANGED.payload = {"paths": list[str]}`.
@@ -407,20 +471,44 @@ Accepted decisions are first-class, persisted in SQLite and `.ai/decisions/DEC-N
 #### Interface contract
 ```python
 # src/walk/decisions/protocols.py
-AuthorityResolver = Callable[[AgentRole], Authority]   # injected by composition root: lambda r: agent_manager.load_constitution(r).authority
+AuthorityResolver = Callable[
+    [AgentRole], Authority
+]  # injected by composition root: lambda r: agent_manager.load_constitution(r).authority
 
-class DecisionManager(Protocol): ...   # verbatim INTERFACES.md §1.9
+
+class DecisionManager(Protocol): ...  # verbatim INTERFACES.md §1.9
+
 
 # src/walk/decisions/errors.py
 class AuthorityViolation(PermissionDenied): ...
 
+
 # src/walk/decisions/service.py
 class DefaultDecisionManager:
-    def __init__(self, repo: DecisionRepository, memory: MemoryManager, ledger: LedgerManager, hooks: HookManager,
-                 ids: IdFactory, clock: Clock, authority_for: AuthorityResolver, workflow: WorkflowManager) -> None: ...
+    def __init__(
+        self,
+        repo: DecisionRepository,
+        memory: MemoryManager,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdFactory,
+        clock: Clock,
+        authority_for: AuthorityResolver,
+        workflow: WorkflowManager,
+    ) -> None: ...
 
-DECISION_SECTIONS = ("Topic", "Participants", "Positions", "Evidence", "Outcome", "Rationale", "Alternatives",
-                     "Affected Systems", "Related Work Items")
+
+DECISION_SECTIONS = (
+    "Topic",
+    "Participants",
+    "Positions",
+    "Evidence",
+    "Outcome",
+    "Rationale",
+    "Alternatives",
+    "Affected Systems",
+    "Related Work Items",
+)
 ```
 CLI: `walk decisions list [--status S] [--category C] [--json]`, `walk decisions show DEC_ID [--json]`.
 
@@ -494,9 +582,13 @@ Every handover reason produces a complete `.ai/handovers/HO-NNNN.md` built from 
 
 #### Interface contract
 ```python
-async def build_handover(self, run: AgentRun, reason: str, partial_output: AgentOutput | None) -> Handover: ...  # INTERFACES §1.13
+async def build_handover(
+    self, run: AgentRun, reason: str, partial_output: AgentOutput | None
+) -> Handover: ...  # INTERFACES §1.13
 async def open_handover_for(self, work_item_id: WorkItemId) -> Handover | None:
     """Latest handovers row with to_run_id IS NULL for the item, converted with walk.agents.handover.from_document."""
+
+
 async def close_handover(self, handover_id: HandoverId, to_run_id: RunId) -> None: ...
 ```
 CLI: `walk handover show (ITEM_ID | HO_ID) [--json]`; `walk handover create RUN_ID --reason {FALLBACK,PAUSE,BUDGET,PARTIAL,REASSIGN,RECOVERY}` (daemon required, exit 3 otherwise).
@@ -639,32 +731,54 @@ _pending_
 # src/walk/context/ranker.py
 RelevanceTag = Literal["DIRECT", "PARENT", "AFFECTED_SYSTEMS", "GRAPH", "KEYWORD"]
 
+
 class ContextCandidate(WalkModel):
-    item: ContextItem                    # score/mandatory filled by the ranker
+    item: ContextItem  # score/mandatory filled by the ranker
     relevance_tag: RelevanceTag
-    graph_distance: int | None = None    # for GRAPH
-    directly_linked: bool = False        # INVALID allowed only when True
+    graph_distance: int | None = None  # for GRAPH
+    directly_linked: bool = False  # INVALID allowed only when True
     updated_at: datetime
 
+
 class RankingConstants(FrozenModel):
-    relevance: dict[RelevanceTag, float] = {"DIRECT": 1.0, "PARENT": 0.8, "AFFECTED_SYSTEMS": 0.6, "GRAPH": 0.5, "KEYWORD": 0.3}
+    relevance: dict[RelevanceTag, float] = {
+        "DIRECT": 1.0,
+        "PARENT": 0.8,
+        "AFFECTED_SYSTEMS": 0.6,
+        "GRAPH": 0.5,
+        "KEYWORD": 0.3,
+    }
     freshness: dict[FreshnessStatus, float] = {CURRENT: 1.0, POSSIBLY_STALE: 0.7, INVALID: 0.0}
-    source_weight_dev: float = 1.2; source_weight_non_dev: float = 0.5
-    evidence_weight_review: float = 1.5; graph_weight_high_effort: float = 1.3
+    source_weight_dev: float = 1.2
+    source_weight_non_dev: float = 0.5
+    evidence_weight_review: float = 1.5
+    graph_weight_high_effort: float = 1.3
     chars_per_token: float = 3.5
     version: str = "1.0"
 
+
 RANKING_V1 = RankingConstants()
+
 
 class CandidateProducer(Protocol):
     kinds: tuple[ContextItemKind, ...]
-    async def produce(self, request: ContextRequest, item: WorkItem, feature: Feature | None, head: Sha) -> list[ContextCandidate]: ...
+
+    async def produce(
+        self, request: ContextRequest, item: WorkItem, feature: Feature | None, head: Sha
+    ) -> list[ContextCandidate]: ...
+
 
 class ContextRanker(Protocol):
     def score(self, candidate: ContextCandidate, request: ContextRequest) -> float: ...
-    def admit(self, candidates: list[ContextCandidate], budget_left: int, request: ContextRequest) -> tuple[list[ContextItem], int]:
+    def admit(
+        self, candidates: list[ContextCandidate], budget_left: int, request: ContextRequest
+    ) -> tuple[list[ContextItem], int]:
         """Greedy by score desc (ties: updated_at desc, id asc); returns (admitted, excluded_count)."""
-    def order(self, mandatory: list[ContextItem], admitted: list[ContextItem]) -> list[ContextItem]: ...
+
+    def order(
+        self, mandatory: list[ContextItem], admitted: list[ContextItem]
+    ) -> list[ContextItem]: ...
+
 
 # ContextBundle
 def fingerprint(self) -> str:
@@ -745,16 +859,27 @@ Source files enter the bundle as symbol-centred windows of at most 400 lines ins
 MAX_SLICE_LINES = 400
 MAX_SOURCE_BYTES = 1_048_576
 
+
 class SourceWindow(FrozenModel):
-    start_line: int; end_line: int; symbols: list[str]
+    start_line: int
+    end_line: int
+    symbols: list[str]
+
 
 def extract_symbols(contract: StoryContract | None, feature: FeatureContext | None) -> list[str]:
     """Identifiers matching r'\b[A-Z][A-Za-z0-9_]{2,}\b' in contract.goal, contract.acceptance_criteria and feature.affected_systems; de-duplicated, sorted."""
-def slice_source(path: str, text: str, symbols: list[str], *, max_lines: int = MAX_SLICE_LINES) -> tuple[str, list[SourceWindow]]:
+
+
+def slice_source(
+    path: str, text: str, symbols: list[str], *, max_lines: int = MAX_SLICE_LINES
+) -> tuple[str, list[SourceWindow]]:
     """Windows centred on symbol occurrences, merged when overlapping, total ≤ max_lines; header '// <path> lines a-b' per window."""
 
+
 class SourceFileProducer:  # CandidateProducer, kinds=(SOURCE_FILE,)
-    def __init__(self, repo_root_resolver: Callable[[], str], graph_available: Callable[[], bool]) -> None: ...
+    def __init__(
+        self, repo_root_resolver: Callable[[], str], graph_available: Callable[[], bool]
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -820,10 +945,14 @@ The ranked tier offers evidence, non-accepted decisions and sibling story contex
 
 #### Interface contract
 ```python
-class EvidenceProducer:        # kinds=(EVIDENCE,)
+class EvidenceProducer:  # kinds=(EVIDENCE,)
     def __init__(self, evidence: EvidenceManager) -> None: ...
-class DecisionProducer:        # kinds=(DECISION,)
+
+
+class DecisionProducer:  # kinds=(DECISION,)
     def __init__(self, decisions: DecisionManager, repo: DecisionRepository) -> None: ...
+
+
 class SiblingContextProducer:  # kinds=(FEATURE_CONTEXT,) — sibling STORY/TASK items rendered as short cards
     def __init__(self, workflow: WorkflowManager) -> None: ...
 ```
@@ -896,13 +1025,19 @@ A `CodeGraphProvider` backed by the `graphify` CLI answers neighbourhood and imp
 ```python
 # src/walk/integrations/graphify/graph_file.py — minimal shape assumed from graphify-out/graph.json
 class GraphFile(FrozenModel):
-    nodes: list[GraphNode]            # from json nodes[{id, type, path?, name}] ; type mapped to GraphNode.kind (unknown → "file")
-    edges: list[GraphEdge]            # from json edges[{source, target, type}]
-    communities: dict[str, list[str]] # community id → node ids (optional in file)
-def load_graph_file(path: str) -> GraphFile: ...   # ConfigError on missing/invalid file
+    nodes: list[
+        GraphNode
+    ]  # from json nodes[{id, type, path?, name}] ; type mapped to GraphNode.kind (unknown → "file")
+    edges: list[GraphEdge]  # from json edges[{source, target, type}]
+    communities: dict[str, list[str]]  # community id → node ids (optional in file)
+
+
+def load_graph_file(path: str) -> GraphFile: ...  # ConfigError on missing/invalid file
+
 
 class GraphifyProvider:  # CodeGraphProvider, provider = "graphify"
     def __init__(self, runner: SubprocessRunner, out_dir: str = "graphify-out") -> None: ...
+
     # methods verbatim INTERFACES.md §2.6
 ```
 
@@ -977,9 +1112,11 @@ Code-graph neighbourhoods are ranked context candidates, graph-derived files see
 ```python
 class BuildScratch(WalkModel):
     """Per-build shared state between producers (not persisted)."""
+
     graph_file_paths: list[str] = []
 
-class CodeGraphProducer:   # kinds=(CODE_GRAPH,)
+
+class CodeGraphProducer:  # kinds=(CODE_GRAPH,)
     def __init__(self, code_graph_resolver: Callable[[], CodeGraphProvider | None]) -> None: ...
 ```
 `ON_MERGED.payload = {"work_item_id", "pr_number", "diff_names": list[str]}` (from E03-S01).
@@ -1053,11 +1190,28 @@ Agents and the kernel can record improvement observations as project-scoped `.ai
 
 #### Interface contract
 ```python
-OBSERVATION_SECTIONS = ("Observed", "Potential Cause", "Possible Improvement", "Source Signal", "Evidence")
+OBSERVATION_SECTIONS = (
+    "Observed",
+    "Potential Cause",
+    "Possible Improvement",
+    "Source Signal",
+    "Evidence",
+)
+
 
 class DefaultImprovementManager:
-    def __init__(self, repo: ObservationRepository, memory: MemoryManager, ledger: LedgerManager, hooks: HookManager,
-                 ids: IdFactory, clock: Clock, versions: BehaviorVersionCatalog, project_key: ProjectKey) -> None: ...
+    def __init__(
+        self,
+        repo: ObservationRepository,
+        memory: MemoryManager,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdFactory,
+        clock: Clock,
+        versions: BehaviorVersionCatalog,
+        project_key: ProjectKey,
+    ) -> None: ...
+
     # observe(), pinned_versions() implemented; others raise NotSupported with the owning story id
 ```
 CLI: `walk improvement observations [--signal S] [--json]`.

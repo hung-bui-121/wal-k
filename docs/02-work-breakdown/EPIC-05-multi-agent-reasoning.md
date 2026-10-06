@@ -137,11 +137,27 @@ Agent decision proposals are classified into §51 autonomy levels bounded by the
 Protocol methods: `INTERFACES.md §1.9 DecisionManager.propose/escalate/override/classify_autonomy` verbatim. Deltas:
 ```python
 # src/walk/decisions/autonomy.py
-LEVEL3_CONDITIONS: tuple[str, ...] = ("core gameplay change", "monetization", "major feature removal", "large scope increase",
-                                      "major art direction change", "major schedule impact", "phase gate")      # §51 Level 3 list
+LEVEL3_CONDITIONS: tuple[str, ...] = (
+    "core gameplay change",
+    "monetization",
+    "major feature removal",
+    "large scope increase",
+    "major art direction change",
+    "major schedule impact",
+    "phase gate",
+)  # §51 Level 3 list
+
+
 def matches_condition(condition: str, *texts: str) -> bool:
     """True when every word of `condition` (lower-cased, len >= 3) occurs in the concatenation of `texts` (lower-cased)."""
-def classify(proposal: DecisionProposal, authority: Authority, rules: list[EscalationRule], project_max: AutonomyLevel) -> AutonomyLevel:
+
+
+def classify(
+    proposal: DecisionProposal,
+    authority: Authority,
+    rules: list[EscalationRule],
+    project_max: AutonomyLevel,
+) -> AutonomyLevel:
     """level = proposal.autonomy_level;
     for rule in rules: if (rule.category is None or rule.category == proposal.category) and matches_condition(rule.condition, topic, position): level = max(level, rule.to_level)
     if any(matches_condition(c, topic, position) for c in LEVEL3_CONDITIONS): level = USER
@@ -150,22 +166,41 @@ def classify(proposal: DecisionProposal, authority: Authority, rules: list[Escal
     if level > project_max and level < USER: level = USER                                   # Project.autonomy_level_max (§140)
     return level"""
 
+
 # src/walk/decisions/protocols.py
 class EscalationSink(Protocol):
     """Implemented by walk.orchestrator (handle_escalation); injected so decisions stays below orchestrator."""
+
     async def __call__(self, escalation: Escalation) -> None: ...
 
+
 # src/walk/decisions/repository.py
-class EscalationRepository(Repository[Escalation]):     # table escalations
-    async def open_for_item(self, work_item_id: WorkItemId) -> list[Escalation]: ...   # resolved_decision_id IS NULL
-    async def set_approval(self, escalation_id: str, approval_request_id: ApprovalRequestId) -> None: ...
+class EscalationRepository(Repository[Escalation]):  # table escalations
+    async def open_for_item(
+        self, work_item_id: WorkItemId
+    ) -> list[Escalation]: ...  # resolved_decision_id IS NULL
+    async def set_approval(
+        self, escalation_id: str, approval_request_id: ApprovalRequestId
+    ) -> None: ...
     async def resolve(self, escalation_id: str, decision_id: DecisionId) -> None: ...
+
 
 # src/walk/decisions/service.py
 class DefaultDecisionManager:
-    def __init__(self, repo: DecisionRepository, escalations: EscalationRepository, memory: MemoryManager, ledger: LedgerManager,
-                 hooks: HookManager, ids: IdFactory, clock: Clock, authority_for: AuthorityResolver, workflow: WorkflowManager,
-                 project_autonomy_max: Callable[[], AutonomyLevel], sink: EscalationSink | None) -> None: ...
+    def __init__(
+        self,
+        repo: DecisionRepository,
+        escalations: EscalationRepository,
+        memory: MemoryManager,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdFactory,
+        clock: Clock,
+        authority_for: AuthorityResolver,
+        workflow: WorkflowManager,
+        project_autonomy_max: Callable[[], AutonomyLevel],
+        sink: EscalationSink | None,
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -255,31 +290,59 @@ CATEGORY_COUNTERPART: dict[DecisionCategory, tuple[AgentRole, ...]] = {
     DecisionCategory.RELEASE: (AgentRole.UA_RELEASE, AgentRole.ORCHESTRATOR),
     DecisionCategory.PROCESS: (AgentRole.PROCESS_ARCHITECT, AgentRole.ORCHESTRATOR),
 }
-def select_participants(from_role: AgentRole, category: DecisionCategory, enabled_roles: list[AgentRole]) -> list[AgentRole]:
+
+
+def select_participants(
+    from_role: AgentRole, category: DecisionCategory, enabled_roles: list[AgentRole]
+) -> list[AgentRole]:
     """[from_role, first enabled counterpart != from_role]; if none enabled -> ORCHESTRATOR; if that equals from_role -> LEAD_DEV.
     Always two distinct roles, proposer first."""
+
 
 # src/walk/orchestrator/escalation.py
 class DebateOpener(Protocol):
     """Structural subset of walk.debate.protocols.DebateManager.open (E05-S03); keeps S02 independent of S03."""
-    async def open(self, topic: str, category: DecisionCategory, participants: list[AgentRole], *, opened_by: AgentRole,
-                   work_item_id: WorkItemId | None, max_rounds: int | None = None) -> Debate: ...
+
+    async def open(
+        self,
+        topic: str,
+        category: DecisionCategory,
+        participants: list[AgentRole],
+        *,
+        opened_by: AgentRole,
+        work_item_id: WorkItemId | None,
+        max_rounds: int | None = None,
+    ) -> Debate: ...
+
 
 class EscalationRouter:
     """Implements walk.decisions.protocols.EscalationSink."""
-    def __init__(self, escalations: EscalationRepository, decisions: DecisionManager, permissions: PermissionManager,
-                 workflow: WorkflowManager, enabled_roles: Callable[[], list[AgentRole]],
-                 debates: DebateOpener | None, clock: Clock) -> None: ...
-    async def __call__(self, escalation: Escalation) -> None: ...           # == route()
+
+    def __init__(
+        self,
+        escalations: EscalationRepository,
+        decisions: DecisionManager,
+        permissions: PermissionManager,
+        workflow: WorkflowManager,
+        enabled_roles: Callable[[], list[AgentRole]],
+        debates: DebateOpener | None,
+        clock: Clock,
+    ) -> None: ...
+    async def __call__(self, escalation: Escalation) -> None: ...  # == route()
     async def route(self, escalation: Escalation) -> None: ...
     async def on_approval_decided(self, approval: ApprovalRequest) -> Decision | None: ...
     async def on_resolved(self, escalation: Escalation, decision: Decision) -> None:
         """EscalationRepository.resolve; if the work item is BLOCKED -> raise_event('unblock', payload {'blocker_resolved': True},
         actor_role ORCHESTRATOR, source KERNEL)."""
 
+
 # DefaultOrchestrator
-async def handle_escalation(self, escalation: Escalation) -> None: ...                        # delegates to EscalationRouter.route
-async def resolve_escalation_approval(self, approval: ApprovalRequest) -> Decision | None: ...  # delegates to on_approval_decided
+async def handle_escalation(
+    self, escalation: Escalation
+) -> None: ...  # delegates to EscalationRouter.route
+async def resolve_escalation_approval(
+    self, approval: ApprovalRequest
+) -> Decision | None: ...  # delegates to on_approval_decided
 ```
 `ApprovalRequest.kind == "escalation"`; its stored request payload is `escalation.model_dump(mode="json")`.
 
@@ -371,45 +434,80 @@ A `Debate` aggregate with persisted positions runs through the `debate_workflow 
 Protocol: `INTERFACES.md §1.9 DebateManager` verbatim. Table: `INTERFACES.md §3.5` plus two arbitration rows (Behavior 3). Deltas:
 ```python
 # src/walk/debate/models.py
-class DebatePosition(WalkModel):            # DOMAIN-MODEL §4.8 fields +
-    agrees_with_role: AgentRole | None = Field(default=None, description="Participant whose position this one endorses; None = own distinct position")
+class DebatePosition(WalkModel):  # DOMAIN-MODEL §4.8 fields +
+    agrees_with_role: AgentRole | None = Field(
+        default=None,
+        description="Participant whose position this one endorses; None = own distinct position",
+    )
+
 
 class DebatePolicy(WalkModel):
     """Kernel defaults overridable by `.ai/agents/policies.yaml` top-level `debate:` block."""
+
     max_rounds: int = Field(default=3, ge=0, le=10)
     consensus_threshold: float = Field(default=0.75, ge=0.5, le=1.0)
     cost_usd: float = Field(default=5.0, gt=0)
 
+
 # src/walk/debate/consensus.py
 def leading_position(positions: list[DebatePosition]) -> DebatePosition | None:
     """Position with most endorsements (own + others' agrees_with_role == its role); ties → highest confidence, then earliest `at`."""
+
+
 def compute_agreement(positions: list[DebatePosition], participants: list[AgentRole]) -> float:
     """(1 + number of positions whose agrees_with_role == leader.role) / len(participants); 0.0 when no positions."""
+
 
 # src/walk/debate/guards.py — registered via walk.workflow.guards.register_guard; names used by debate_workflow.yaml
 # participants_at_least_two, budget_available (reused from E01-S09), role_in_participants, round_matches, all_positions_in,
 # agreement_at_threshold, round_below_max, round_at_max, po_enabled, po_disabled, arbitration_only,
 # po_output_completed_with_decision, budget_exhausted_or_user
 def register_debate_guards() -> None: ...
+
+
 # payload keys read: agreement (float), po_enabled (bool), role, round, positions_in (int), output_status, has_decision, budget_ok, by_user
 
 # src/walk/debate/state_machine.py
-DEBATE_TABLE_PATH: Path            # TABLES_DIR / "debate_workflow.yaml"
+DEBATE_TABLE_PATH: Path  # TABLES_DIR / "debate_workflow.yaml"
+
+
 def load_debate_table() -> TransitionTable: ...
-class DebateStateMachine:          # the E01-S11 generic engine instantiated with DebateState (constructor verified by E05-X01 item 5)
-    def transition_for(self, state: DebateState, event: str, debate: Debate, ctx: TransitionContext) -> Transition: ...
+
+
+class DebateStateMachine:  # the E01-S11 generic engine instantiated with DebateState (constructor verified by E05-X01 item 5)
+    def transition_for(
+        self, state: DebateState, event: str, debate: Debate, ctx: TransitionContext
+    ) -> Transition: ...
+
 
 # src/walk/debate/service.py
 class DefaultDebateManager:
-    def __init__(self, repo: DebateRepository, positions: DebatePositionRepository, decisions: DecisionManager,
-                 budgets: BudgetManager, ledger: LedgerManager, hooks: HookManager, ids: IdFactory, clock: Clock,
-                 policy: DebatePolicy, po_enabled: Callable[[], bool]) -> None: ...
+    def __init__(
+        self,
+        repo: DebateRepository,
+        positions: DebatePositionRepository,
+        decisions: DecisionManager,
+        budgets: BudgetManager,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdFactory,
+        clock: Clock,
+        policy: DebatePolicy,
+        po_enabled: Callable[[], bool],
+    ) -> None: ...
     async def get(self, debate_id: DebateId) -> Debate: ...
-    async def list(self, *, states: list[DebateState] | None = None, work_item_id: WorkItemId | None = None) -> list[Debate]: ...
-    async def positions_for(self, debate_id: DebateId, round: int | None = None) -> list[DebatePosition]: ...
+    async def list(
+        self, *, states: list[DebateState] | None = None, work_item_id: WorkItemId | None = None
+    ) -> list[Debate]: ...
+    async def positions_for(
+        self, debate_id: DebateId, round: int | None = None
+    ) -> list[DebatePosition]: ...
+
 
 # src/walk/agents/policy_loader.py
-def load_debate_policy(self) -> DebatePolicy: ...   # defaults block merged with project `debate:` block
+def load_debate_policy(
+    self,
+) -> DebatePolicy: ...  # defaults block merged with project `debate:` block
 ```
 `DebateRepository(Repository[Debate])` → table `debates` (columns + json); `DebatePositionRepository` → `debate_positions`; `by_state(states)`, `for_item(work_item_id)`, `for_round(debate_id, round)`.
 
@@ -509,18 +607,26 @@ class DebateTurn(FrozenModel):
     role: AgentRole
     work_item_id: WorkItemId
 
-def pending_turns(debate: Debate, submitted: list[DebatePosition], running_roles: set[AgentRole]) -> list[DebateTurn]:
+
+def pending_turns(
+    debate: Debate, submitted: list[DebatePosition], running_roles: set[AgentRole]
+) -> list[DebateTurn]:
     """Pure. [] unless debate.state == IN_ROUND and debate.work_item_id is not None.
     One turn per participant (in `participants` order) with no position for debate.round and not in running_roles."""
+
 
 def turn_idempotency_key(turn: DebateTurn) -> str:
     """f"debate:{debate_id}:{round}:{role}"."""
 
+
 # src/walk/debate/normalise.py
-def normalise_position(raw: DebatePosition, *, debate: Debate, run_id: RunId, role: AgentRole, model_id: ModelId) -> DebatePosition:
+def normalise_position(
+    raw: DebatePosition, *, debate: Debate, run_id: RunId, role: AgentRole, model_id: ModelId
+) -> DebatePosition:
     """Kernel-owned fields overwrite agent-supplied ones: debate_id, round=debate.round, role, model_id, run_id,
     changed_from_previous=False (recomputed by DebateManager), at=now. agrees_with_role == role -> None.
     agrees_with_role not in participants -> None. Text fields stripped; empty `position` -> MissingDebatePosition."""
+
 
 # src/walk/orchestrator/router.py
 class DefaultTaskRouter:
@@ -528,17 +634,26 @@ class DefaultTaskRouter:
         """purpose='DEBATE'; profile.required_capabilities=[PLANNING, LONG_CONTEXT_REASONING]; profile.risk from the work item;
         cross_model_review=False; role must be in debate.participants (PermissionDenied otherwise)."""
 
+
 # src/walk/orchestrator/scheduler.py
 class Scheduler:
     async def schedule_debate_turns(self, capacity: int) -> int:
         """Runs after INTERFACES §5.1 step 4; returns runs started (<= capacity)."""
 
+
 # src/walk/runtime/errors.py
 class MissingDebatePosition(OutputInvalid): ...
 
+
 # tests/fakes/fake_model_adapter.py
-def debate_output(position: str, *, agrees_with_role: AgentRole | None = None, confidence: float = 0.8,
-                  reasoning: str = "scripted", alternative: str = "") -> AgentOutput: ...
+def debate_output(
+    position: str,
+    *,
+    agrees_with_role: AgentRole | None = None,
+    confidence: float = 0.8,
+    reasoning: str = "scripted",
+    alternative: str = "",
+) -> AgentOutput: ...
 ```
 
 #### Behavior
@@ -736,13 +851,21 @@ The two optional early roles (§127) exist as complete ADR-0013 constitutions wi
 Constitution format: ADR-0013 D-2/D-3. `AgentManager.list_roles` (INTERFACES §1.2). Deltas:
 ```python
 # src/walk/agents/models.py
-class RuntimePolicy(WalkModel):                       # DOMAIN-MODEL §4.2 fields +
-    enabled: bool = Field(default=True, description="Optional roles (§127) are scheduled only when enabled for the project")
+class RuntimePolicy(WalkModel):  # DOMAIN-MODEL §4.2 fields +
+    enabled: bool = Field(
+        default=True,
+        description="Optional roles (§127) are scheduled only when enabled for the project",
+    )
+
 
 # src/walk/agents/service.py
 class DefaultAgentManager:
-    def list_roles(self) -> list[AgentRole]: ...       # roles with a default constitution AND load_runtime_policy(role).enabled
-    def is_enabled(self, role: AgentRole) -> bool: ... # False for roles without a constitution
+    def list_roles(
+        self,
+    ) -> list[
+        AgentRole
+    ]: ...  # roles with a default constitution AND load_runtime_policy(role).enabled
+    def is_enabled(self, role: AgentRole) -> bool: ...  # False for roles without a constitution
 ```
 Front matter fixed by this story:
 
@@ -840,33 +963,63 @@ ADR-0013 D-2 (fields), D-3 (body order), D-4 (merge), D-5 (lint); `Constitution`
 ```python
 # src/walk/agents/narrowing.py
 class NarrowingDirection(StrEnum):
-    REPLACE = "REPLACE"            # free scalar/list: override replaces
-    SUBSET = "SUBSET"              # override list must be a subset of default
-    SUPERSET = "SUPERSET"          # override list must contain every default element
-    NOT_HIGHER = "NOT_HIGHER"      # ordered value may only be lowered
+    REPLACE = "REPLACE"  # free scalar/list: override replaces
+    SUBSET = "SUBSET"  # override list must be a subset of default
+    SUPERSET = "SUPERSET"  # override list must contain every default element
+    NOT_HIGHER = "NOT_HIGHER"  # ordered value may only be lowered
     STRICTER_RULES = "STRICTER_RULES"  # PermissionRule list: see Behavior 3
     ESCALATION_RULES = "ESCALATION_RULES"  # see Behavior 4
 
+
 NARROWING_RULES: dict[str, NarrowingDirection] = {
-    "authority.decision_scope": SUBSET, "authority.max_autonomy_level": NOT_HIGHER, "authority.may_approve": SUBSET,
-    "authority.may_reject": SUBSET, "authority.may_create_work": SUBSET, "tool_permissions": STRICTER_RULES,
-    "forbidden_actions": SUPERSET, "escalation_rules": ESCALATION_RULES,
-}   # every other front-matter field: REPLACE; `role`, `id`, `type` may not change at all
+    "authority.decision_scope": SUBSET,
+    "authority.max_autonomy_level": NOT_HIGHER,
+    "authority.may_approve": SUBSET,
+    "authority.may_reject": SUBSET,
+    "authority.may_create_work": SUBSET,
+    "tool_permissions": STRICTER_RULES,
+    "forbidden_actions": SUPERSET,
+    "escalation_rules": ESCALATION_RULES,
+}  # every other front-matter field: REPLACE; `role`, `id`, `type` may not change at all
+
 
 def check_narrowing(default: Constitution, override: JsonDict) -> list[str]:
     """Returns violations as '<field>: <reason>' (empty = ok). Pure."""
-def merge_escalation_rules(default: list[EscalationRule], override: list[EscalationRule]) -> list[EscalationRule]: ...
+
+
+def merge_escalation_rules(
+    default: list[EscalationRule], override: list[EscalationRule]
+) -> list[EscalationRule]: ...
+
 
 # src/walk/agents/lint.py
-PROVIDER_NAME_PATTERN: re.Pattern[str]      # r"(?i)\b(claude|codex|gpt|anthropic|openai|gemini|fake-codex|fake-claude)\b"
-REQUIRED_BODY_SECTIONS: tuple[str, ...] = ("Identity", "Mission", "Responsibilities", "Authority", "Professional Bias",
-    "Core Beliefs", "Decision Principles", "Risk Tolerance", "Preferred Evidence", "Conflict Behavior",
-    "Escalation Rules", "Forbidden Actions")          # D-3; "Working Guidance" optional
-def provider_name_hits(text: str) -> list[str]: ...   # sorted unique lower-cased matches
+PROVIDER_NAME_PATTERN: re.Pattern[
+    str
+]  # r"(?i)\b(claude|codex|gpt|anthropic|openai|gemini|fake-codex|fake-claude)\b"
+REQUIRED_BODY_SECTIONS: tuple[str, ...] = (
+    "Identity",
+    "Mission",
+    "Responsibilities",
+    "Authority",
+    "Professional Bias",
+    "Core Beliefs",
+    "Decision Principles",
+    "Risk Tolerance",
+    "Preferred Evidence",
+    "Conflict Behavior",
+    "Escalation Rules",
+    "Forbidden Actions",
+)  # D-3; "Working Guidance" optional
+
+
+def provider_name_hits(text: str) -> list[str]: ...  # sorted unique lower-cased matches
 def missing_body_sections(constitution: Constitution) -> list[str]: ...
 
+
 # src/walk/cli/lints.py
-def lint_constitution_overrides(roles_dir: Path) -> list[str]: ...   # '<file>: <finding>' per raw-text hit / narrowing violation
+def lint_constitution_overrides(
+    roles_dir: Path,
+) -> list[str]: ...  # '<file>: <finding>' per raw-text hit / narrowing violation
 ```
 
 #### Behavior
@@ -949,30 +1102,48 @@ When a non-debate run challenges the work it was given — a LEAD_DEV design or 
 ```python
 # src/walk/debate/conflicts.py
 CONFLICT_CATEGORY_BY_PURPOSE: dict[str, DecisionCategory] = {
-    "DESIGN": DecisionCategory.DESIGN, "PLAN": DecisionCategory.PRODUCT, "REVIEW": DecisionCategory.TECH,
-    "IMPLEMENT": DecisionCategory.TECH, "QC": DecisionCategory.QUALITY, "TRIAGE": DecisionCategory.QUALITY,
+    "DESIGN": DecisionCategory.DESIGN,
+    "PLAN": DecisionCategory.PRODUCT,
+    "REVIEW": DecisionCategory.TECH,
+    "IMPLEMENT": DecisionCategory.TECH,
+    "QC": DecisionCategory.QUALITY,
+    "TRIAGE": DecisionCategory.QUALITY,
 }
+
 
 class Conflict(FrozenModel):
     work_item_id: WorkItemId
     challenger: AgentRole
     category: DecisionCategory
-    topic: str                       # f"{item.id} {item.title}: {position.position}" truncated to 200 chars
-    position: DebatePosition         # the challenger's raw position
+    topic: str  # f"{item.id} {item.title}: {position.position}" truncated to 200 chars
+    position: DebatePosition  # the challenger's raw position
 
-def detect_conflict(*, purpose: str, role: AgentRole, output: AgentOutput, item: WorkItem) -> Conflict | None:
+
+def detect_conflict(
+    *, purpose: str, role: AgentRole, output: AgentOutput, item: WorkItem
+) -> Conflict | None:
     """Pure. None when purpose == 'DEBATE', output.debate_position is None, or output.status not in
     {REJECTED, BLOCKED, NEEDS_INPUT, COMPLETED}. Category = first output.decisions[].category if any, else
     CONFLICT_CATEGORY_BY_PURPOSE[purpose] (PROCESS for unknown purposes)."""
 
+
 # src/walk/debate/models.py
-class DebatePolicy(WalkModel):                 # E05-S03 fields +
-    max_debates_per_item: int = Field(default=2, ge=1, le=10, description="§138 Infinite Debate: debates one work item may open")
+class DebatePolicy(WalkModel):  # E05-S03 fields +
+    max_debates_per_item: int = Field(
+        default=2, ge=1, le=10, description="§138 Infinite Debate: debates one work item may open"
+    )
+
 
 # src/walk/runtime/conflict_handler.py
 class ConflictHandler:
-    def __init__(self, debates: DebateManager, decisions: DecisionManager, workflow: WorkflowManager,
-                 enabled_roles: Callable[[], list[AgentRole]], policy: DebatePolicy) -> None: ...
+    def __init__(
+        self,
+        debates: DebateManager,
+        decisions: DecisionManager,
+        workflow: WorkflowManager,
+        enabled_roles: Callable[[], list[AgentRole]],
+        policy: DebatePolicy,
+    ) -> None: ...
     async def handle(self, run: AgentRun, item: WorkItem, conflict: Conflict) -> DebateId | None:
         """Returns the opened debate id, or None when deduplicated or escalated (Behavior 3-4)."""
 ```
@@ -1218,64 +1389,115 @@ Constitution schema ADR-0013 D-2/D-3; `AgentManager.is_enabled` / `RuntimePolicy
 ```python
 # src/walk/workflow/hygiene.py  (pure; no I/O)
 class HygieneFindingKind(StrEnum):
-    MISSING_OWNER = "MISSING_OWNER"                    # no owner, or owner role not enabled
-    DANGLING_DEPENDENCY = "DANGLING_DEPENDENCY"        # contract.dependencies names an unknown id
-    DEPENDENCY_CANCELLED = "DEPENDENCY_CANCELLED"      # a dependency is CANCELLED while the item is live
+    MISSING_OWNER = "MISSING_OWNER"  # no owner, or owner role not enabled
+    DANGLING_DEPENDENCY = "DANGLING_DEPENDENCY"  # contract.dependencies names an unknown id
+    DEPENDENCY_CANCELLED = (
+        "DEPENDENCY_CANCELLED"  # a dependency is CANCELLED while the item is live
+    )
     DEPENDENCY_CYCLE = "DEPENDENCY_CYCLE"
-    DEPENDENCY_NOT_COMPLETE = "DEPENDENCY_NOT_COMPLETE"  # item in IN_PROGRESS_STATES while a dependency is not COMPLETE
+    DEPENDENCY_NOT_COMPLETE = (
+        "DEPENDENCY_NOT_COMPLETE"  # item in IN_PROGRESS_STATES while a dependency is not COMPLETE
+    )
     BLOCKED_WITHOUT_REASON = "BLOCKED_WITHOUT_REASON"
-    DOR_FAILED = "DOR_FAILED"                          # READY item fails §58 checks (dependency progress ignored)
-    DOR_NOW_SATISFIED = "DOR_NOW_SATISFIED"            # BLOCKED by SM for DoR and the checks now pass (unblock is for USER/ORCHESTRATOR)
-    DOD_EVIDENCE_MISSING = "DOD_EVIDENCE_MISSING"      # COMPLETE item lacks required evidence / feature dimensions
+    DOR_FAILED = "DOR_FAILED"  # READY item fails §58 checks (dependency progress ignored)
+    DOR_NOW_SATISFIED = "DOR_NOW_SATISFIED"  # BLOCKED by SM for DoR and the checks now pass (unblock is for USER/ORCHESTRATOR)
+    DOD_EVIDENCE_MISSING = (
+        "DOD_EVIDENCE_MISSING"  # COMPLETE item lacks required evidence / feature dimensions
+    )
     STALE_IN_PROGRESS = "STALE_IN_PROGRESS"
+
 
 class HygieneFinding(FrozenModel):
     work_item_id: WorkItemId
     kind: HygieneFindingKind
-    detail: str                                        # one line, names the offending ids / checks / evidence kinds
-    owner_role: AgentRole | None                       # who should act (item owner), None when missing
+    detail: str  # one line, names the offending ids / checks / evidence kinds
+    owner_role: AgentRole | None  # who should act (item owner), None when missing
+
 
 class HygienePolicy(WalkModel):
     """Kernel defaults overridable by `.ai/agents/policies.yaml` top-level `hygiene:` block."""
+
     interval_s: int = Field(default=900, ge=60)
     stale_after_s: int = Field(default=86_400, ge=600)
-    dod_lookback_s: int = Field(default=604_800, ge=3_600)   # COMPLETE items with completed_at inside the window
+    dod_lookback_s: int = Field(
+        default=604_800, ge=3_600
+    )  # COMPLETE items with completed_at inside the window
     block_on_dor_failure: bool = True
-    max_provider_writes: int = Field(default=50, ge=1)       # comment + label calls per sweep (Jira rate limits)
+    max_provider_writes: int = Field(
+        default=50, ge=1
+    )  # comment + label calls per sweep (Jira rate limits)
 
-IN_PROGRESS_STATES: frozenset[WorkItemState]   # IMPLEMENTING, READY_FOR_REVIEW, LEAD_DEV_REVIEW, INTEGRATION, QC, REWORK
+
+IN_PROGRESS_STATES: frozenset[
+    WorkItemState
+]  # IMPLEMENTING, READY_FOR_REVIEW, LEAD_DEV_REVIEW, INTEGRATION, QC, REWORK
 HYGIENE_LABEL_PREFIX = "walk-hygiene:"
 HYGIENE_DOR_IGNORED_CHECKS: frozenset[str] = frozenset({"dependencies_resolved"})
-def hygiene_label(kind: HygieneFindingKind) -> str: ...            # "walk-hygiene:dor_failed"
-def kinds_from_labels(labels: list[str]) -> set[HygieneFindingKind]: ...   # unknown suffixes ignored
-def dor_failed_checks(result: GuardResult) -> list[str]: ...        # failing check names from the reason minus HYGIENE_DOR_IGNORED_CHECKS
-def check_hygiene(items: list[WorkItem], *, by_id: dict[WorkItemId, WorkItem], dor: dict[WorkItemId, GuardResult],
-                  evidence_missing: dict[WorkItemId, list[str]], running_item_ids: set[WorkItemId],
-                  enabled_roles: list[AgentRole], now: datetime, policy: HygienePolicy) -> list[HygieneFinding]:
+
+
+def hygiene_label(kind: HygieneFindingKind) -> str: ...  # "walk-hygiene:dor_failed"
+def kinds_from_labels(labels: list[str]) -> set[HygieneFindingKind]: ...  # unknown suffixes ignored
+def dor_failed_checks(
+    result: GuardResult,
+) -> list[str]: ...  # failing check names from the reason minus HYGIENE_DOR_IGNORED_CHECKS
+def check_hygiene(
+    items: list[WorkItem],
+    *,
+    by_id: dict[WorkItemId, WorkItem],
+    dor: dict[WorkItemId, GuardResult],
+    evidence_missing: dict[WorkItemId, list[str]],
+    running_item_ids: set[WorkItemId],
+    enabled_roles: list[AgentRole],
+    now: datetime,
+    policy: HygienePolicy,
+) -> list[HygieneFinding]:
     """Deterministic: sorted by (work_item_id, kind)."""
-def render_finding_comment(finding: HygieneFinding) -> str: ...     # Markdown, first line "[walk-hygiene] <KIND>: <detail>"
+
+
+def render_finding_comment(
+    finding: HygieneFinding,
+) -> str: ...  # Markdown, first line "[walk-hygiene] <KIND>: <detail>"
+
 
 # src/walk/workflow/guards.py
 # guard `dor_failed`: ok iff payload["dor_failed_checks"] is a non-empty list (written only by HygieneSweep)
 
+
 # src/walk/workflow/repository.py
 class WorkflowRepository:
-    async def set_labels(self, work_item_id: WorkItemId, labels: list[str]) -> None: ...   # no state_version / updated_at change
+    async def set_labels(
+        self, work_item_id: WorkItemId, labels: list[str]
+    ) -> None: ...  # no state_version / updated_at change
+
 
 # src/walk/orchestrator/hygiene.py
 class HygieneReport(FrozenModel):
     findings: list[HygieneFinding]
-    raised: list[HygieneFinding]                      # new this sweep (label added)
+    raised: list[HygieneFinding]  # new this sweep (label added)
     cleared: list[tuple[WorkItemId, HygieneFindingKind]]
     blocked: list[WorkItemId]
-    deferred: int                                     # findings left for the next sweep (max_provider_writes reached)
+    deferred: int  # findings left for the next sweep (max_provider_writes reached)
+
 
 class HygieneSweep:
-    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, evidence: EvidenceManager,
-                 integrations: IntegrationManager, ledger: LedgerManager, clock: Clock, *, policy: HygienePolicy,
-                 enabled: Callable[[], bool], enabled_roles: Callable[[], list[AgentRole]],
-                 running_item_ids: Callable[[], set[WorkItemId]], project_key: ProjectKey) -> None: ...
-    def due(self, now: datetime) -> bool: ...          # enabled() and (never ran or now - last_run >= interval_s)
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        repo: WorkflowRepository,
+        evidence: EvidenceManager,
+        integrations: IntegrationManager,
+        ledger: LedgerManager,
+        clock: Clock,
+        *,
+        policy: HygienePolicy,
+        enabled: Callable[[], bool],
+        enabled_roles: Callable[[], list[AgentRole]],
+        running_item_ids: Callable[[], set[WorkItemId]],
+        project_key: ProjectKey,
+    ) -> None: ...
+    def due(
+        self, now: datetime
+    ) -> bool: ...  # enabled() and (never ran or now - last_run >= interval_s)
     async def run(self) -> HygieneReport: ...
 ```
 `story_workflow.yaml` new row (INTERFACES §3.2 addition; table version stays `"1.0"`, see Notes): `{from: READY, event: block, to: BLOCKED, guards: [dor_failed], roles: [SCRUM_MASTER], hooks: [on_task_blocked]}`.

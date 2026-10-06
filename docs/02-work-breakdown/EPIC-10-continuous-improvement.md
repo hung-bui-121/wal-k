@@ -167,8 +167,13 @@ Project-scoped observations are complete §96 records: they link evidence and le
 `ImprovementManager.observe` per INTERFACES §1.15 (signature unchanged); `ImprovementObservation` per DOMAIN-MODEL §4.14 (unchanged).
 ```python
 # src/walk/agents/models.py — ObservationDraft, additive optional fields
-evidence_ids: list[EvidenceId] = Field(default_factory=list, description="§106 evidence supporting the observation")
-ledger_seq_refs: list[int] = Field(default_factory=list, description="ledger_events.seq rows the observation is based on")
+evidence_ids: list[EvidenceId] = Field(
+    default_factory=list, description="§106 evidence supporting the observation"
+)
+ledger_seq_refs: list[int] = Field(
+    default_factory=list, description="ledger_events.seq rows the observation is based on"
+)
+
 
 # src/walk/improvement/models.py
 class ObservationQuery(WalkModel):
@@ -178,22 +183,35 @@ class ObservationQuery(WalkModel):
     improvement_scope: ImprovementScope | None = None
     work_item_id: WorkItemId | None = None
     since: datetime | None = None
-    promoted: bool | None = None          # True → promoted_to set; False → not set
+    promoted: bool | None = None  # True → promoted_to set; False → not set
     limit: int = Field(default=100, ge=1, le=1000)
+
 
 # src/walk/improvement/repository.py
 class ObservationRepository:
-    async def query(self, q: ObservationQuery) -> list[ImprovementObservation]: ...      # created_at DESC, id DESC
-    async def exists(self, source_signal: str, work_item_id: WorkItemId | None,
-                     improvement_scope: ImprovementScope, since: datetime) -> ObservationId | None: ...
-    async def mark_promoted(self, observation_id: ObservationId, promoted_to: ObservationId) -> None: ...
+    async def query(
+        self, q: ObservationQuery
+    ) -> list[ImprovementObservation]: ...  # created_at DESC, id DESC
+    async def exists(
+        self,
+        source_signal: str,
+        work_item_id: WorkItemId | None,
+        improvement_scope: ImprovementScope,
+        since: datetime,
+    ) -> ObservationId | None: ...
+    async def mark_promoted(
+        self, observation_id: ObservationId, promoted_to: ObservationId
+    ) -> None: ...
+
 
 # src/walk/improvement/documents.py
 def observation_document(obs: ImprovementObservation) -> MemoryDocument: ...
 def observation_from_document(doc: MemoryDocument) -> ImprovementObservation: ...
 
+
 # src/walk/improvement/protocols.py — ImprovementManager addition
 async def list_observations(self, query: ObservationQuery) -> list[ImprovementObservation]: ...
+
 
 # src/walk/improvement/service.py
 OBSERVATION_DEDUPE_WINDOW_S: int = 86_400
@@ -283,37 +301,49 @@ The §99 improvement sources that are visible in the ledger are declared as data
 `ImprovementManager.detect_signals(since)` per INTERFACES §1.15.
 ```python
 # src/walk/improvement/signals.py
-SIGNAL_RULES_PATH: str = "improvement/defaults/signals.yaml"     # package-relative
+SIGNAL_RULES_PATH: str = "improvement/defaults/signals.yaml"  # package-relative
+
 
 class SignalRule(FrozenModel):
-    name: str = Field(description="becomes ImprovementObservation.source_signal; snake_case, unique")
+    name: str = Field(
+        description="becomes ImprovementObservation.source_signal; snake_case, unique"
+    )
     requirement: str = Field(description="§99/§118 bullet this rule implements")
     improvement_scope: ImprovementScope
     event_kinds: list[LedgerEventKind]
-    where: dict[str, str | int | bool | list[str]] = Field(default_factory=dict, description="payload key → value or allowed values")
-    group_by: str = Field(description="'work_item_id' | 'run_id' | 'phase_id' | 'role' | 'payload.<key>' | 'none'")
+    where: dict[str, str | int | bool | list[str]] = Field(
+        default_factory=dict, description="payload key → value or allowed values"
+    )
+    group_by: str = Field(
+        description="'work_item_id' | 'run_id' | 'phase_id' | 'role' | 'payload.<key>' | 'none'"
+    )
     aggregate: Literal["count", "sum"] = "count"
-    field: str | None = Field(default=None, description="for sum: 'cost_usd' | 'duration_ms' | 'payload.<key>'")
+    field: str | None = Field(
+        default=None, description="for sum: 'cost_usd' | 'duration_ms' | 'payload.<key>'"
+    )
     threshold: float
     window_s: int | None = None
-    observed: str               # str.format template; placeholders {group}, {value}, {threshold}, {window_s}
+    observed: str  # str.format template; placeholders {group}, {value}, {threshold}, {window_s}
     potential_cause: str
     possible_improvement: str
+
 
 class SignalMatch(FrozenModel):
     rule: str
     group: str | None
     value: float
-    seqs: list[int]             # ascending, capped at 50
+    seqs: list[int]  # ascending, capped at 50
     work_item_id: WorkItemId | None
     run_id: RunId | None
     phase_id: PhaseId | None
+
 
 class SignalDetector:
     def __init__(self, db: Database, rules: list[SignalRule]) -> None: ...
     @property
     def rules(self) -> list[SignalRule]: ...
     async def scan(self, since: datetime, until: datetime | None = None) -> list[SignalMatch]: ...
+
 
 def load_signal_rules(path: Path | None = None) -> list[SignalRule]: ...
 ```
@@ -560,47 +590,84 @@ Improvement candidates follow the §97 lifecycle as a data table, carry every §
 ```python
 # src/walk/improvement/candidates.py
 class CandidateEvent(StrEnum):
-    HYPOTHESIZE = "hypothesize"   # OBSERVATION  → HYPOTHESIS
-    PROPOSE = "propose"           # HYPOTHESIS   → CANDIDATE     (all §98 fields non-empty)
-    SUBMIT = "submit"             # CANDIDATE    → UNDER_REVIEW  (evidence level ≥ MIN_EVIDENCE_FOR_RISK[risk])
-    APPROVE = "approve"           # UNDER_REVIEW → APPROVED      (review_candidate only)
-    REJECT = "reject"             # UNDER_REVIEW → REJECTED      (review_candidate only)
-    REVISE = "revise"             # REJECTED     → HYPOTHESIS
+    HYPOTHESIZE = "hypothesize"  # OBSERVATION  → HYPOTHESIS
+    PROPOSE = "propose"  # HYPOTHESIS   → CANDIDATE     (all §98 fields non-empty)
+    SUBMIT = "submit"  # CANDIDATE    → UNDER_REVIEW  (evidence level ≥ MIN_EVIDENCE_FOR_RISK[risk])
+    APPROVE = "approve"  # UNDER_REVIEW → APPROVED      (review_candidate only)
+    REJECT = "reject"  # UNDER_REVIEW → REJECTED      (review_candidate only)
+    REVISE = "revise"  # REJECTED     → HYPOTHESIS
+
 
 CANDIDATE_TRANSITIONS: dict[tuple[CandidateState, CandidateEvent], CandidateState]
 
 APPROVER_TIERS: dict[ImprovementRisk, frozenset[AgentRole]] = {
-    ImprovementRisk.LOW: frozenset({AgentRole.ORCHESTRATOR, AgentRole.PRODUCT_OWNER, AgentRole.USER}),
+    ImprovementRisk.LOW: frozenset(
+        {AgentRole.ORCHESTRATOR, AgentRole.PRODUCT_OWNER, AgentRole.USER}
+    ),
     ImprovementRisk.MEDIUM: frozenset({AgentRole.PRODUCT_OWNER, AgentRole.USER}),
     ImprovementRisk.HIGH: frozenset({AgentRole.USER}),
 }
 RISK_FLOOR: dict[ImprovementScope, ImprovementRisk] = {
-    PROMPT: LOW, CONTEXT_FORMAT: MEDIUM, HOOK: MEDIUM, SKILL: MEDIUM, MODEL_ROUTING: MEDIUM, EFFORT_POLICY: MEDIUM,
-    WORKFLOW: MEDIUM, STORY_TEMPLATE: MEDIUM, CONSTITUTION: HIGH, QUALITY_GATE: HIGH, TOOL_USAGE: HIGH,
-}   # §104: skills/routing/workflow step/DoR = MEDIUM; agent authority/phase gate/permissions = HIGH
+    PROMPT: LOW,
+    CONTEXT_FORMAT: MEDIUM,
+    HOOK: MEDIUM,
+    SKILL: MEDIUM,
+    MODEL_ROUTING: MEDIUM,
+    EFFORT_POLICY: MEDIUM,
+    WORKFLOW: MEDIUM,
+    STORY_TEMPLATE: MEDIUM,
+    CONSTITUTION: HIGH,
+    QUALITY_GATE: HIGH,
+    TOOL_USAGE: HIGH,
+}  # §104: skills/routing/workflow step/DoR = MEDIUM; agent authority/phase gate/permissions = HIGH
 
-class CandidateEvidenceLevel(IntEnum):     # §102 order, higher = stronger
+
+class CandidateEvidenceLevel(IntEnum):  # §102 order, higher = stronger
     PREFERENCE = 0
     AGENT_RECOMMENDATION = 1
     SINGLE_PROJECT = 2
     CONTROLLED_COMPARISON = 3
     REPEATED_PRODUCTION = 4
 
+
 MIN_EVIDENCE_FOR_RISK: dict[ImprovementRisk, CandidateEvidenceLevel] = {
-    LOW: AGENT_RECOMMENDATION, MEDIUM: SINGLE_PROJECT, HIGH: CONTROLLED_COMPARISON,
+    LOW: AGENT_RECOMMENDATION,
+    MEDIUM: SINGLE_PROJECT,
+    HIGH: CONTROLLED_COMPARISON,
 }
 
-def effective_risk(declared: ImprovementRisk, components: list[ImprovementScope]) -> ImprovementRisk: ...
-def evidence_level(candidate: ImprovementCandidate, observations: list[ImprovementObservation],
-                   experiment: Experiment | None) -> CandidateEvidenceLevel: ...
-def can_approve(risk: ImprovementRisk, by: Actor, scope: LearningScope, config: KernelConfig) -> bool: ...
-def candidate_from_observations(observations: list[ImprovementObservation], *, risk: ImprovementRisk, problem: str | None,
-                                proposed_change: str, expected_benefit: str, validation_method: str,
-                                scope: LearningScope) -> ImprovementCandidate: ...   # id="IMP-00" placeholder, state HYPOTHESIS
+
+def effective_risk(
+    declared: ImprovementRisk, components: list[ImprovementScope]
+) -> ImprovementRisk: ...
+def evidence_level(
+    candidate: ImprovementCandidate,
+    observations: list[ImprovementObservation],
+    experiment: Experiment | None,
+) -> CandidateEvidenceLevel: ...
+def can_approve(
+    risk: ImprovementRisk, by: Actor, scope: LearningScope, config: KernelConfig
+) -> bool: ...
+def candidate_from_observations(
+    observations: list[ImprovementObservation],
+    *,
+    risk: ImprovementRisk,
+    problem: str | None,
+    proposed_change: str,
+    expected_benefit: str,
+    validation_method: str,
+    scope: LearningScope,
+) -> ImprovementCandidate: ...  # id="IMP-00" placeholder, state HYPOTHESIS
+
 
 class ImprovementApprovalSink(Protocol):
-    async def request(self, candidate: ImprovementCandidate, approver: Approver) -> ApprovalRequestId: ...
-    async def resolve_for(self, candidate_id: ImprovementId, approve: bool, *, by: str, note: str) -> None: ...
+    async def request(
+        self, candidate: ImprovementCandidate, approver: Approver
+    ) -> ApprovalRequestId: ...
+    async def resolve_for(
+        self, candidate_id: ImprovementId, approve: bool, *, by: str, note: str
+    ) -> None: ...
+
 
 # src/walk/improvement/models.py
 class CandidateQuery(WalkModel):
@@ -610,17 +677,36 @@ class CandidateQuery(WalkModel):
     risk: ImprovementRisk | None = None
     limit: int = Field(default=100, ge=1, le=1000)
 
+
 # src/walk/memory/sections.py
-CANDIDATE_SECTIONS = ("Problem", "Evidence", "Frequency", "Impact", "Suspected Cause", "Proposed Change",
-                      "Expected Benefit", "Risk", "Affected Components", "Validation Method")    # §98 verbatim order
+CANDIDATE_SECTIONS = (
+    "Problem",
+    "Evidence",
+    "Frequency",
+    "Impact",
+    "Suspected Cause",
+    "Proposed Change",
+    "Expected Benefit",
+    "Risk",
+    "Affected Components",
+    "Validation Method",
+)  # §98 verbatim order
+
 
 # src/walk/improvement/protocols.py — additions
-async def candidate_event(self, candidate_id: ImprovementId, event: CandidateEvent, *, by: Actor, note: str = "") -> ImprovementCandidate: ...
+async def candidate_event(
+    self, candidate_id: ImprovementId, event: CandidateEvent, *, by: Actor, note: str = ""
+) -> ImprovementCandidate: ...
 async def list_candidates(self, query: CandidateQuery) -> list[ImprovementCandidate]: ...
 
+
 # src/walk/orchestrator/improvement_tools.py
-def improvement_tool_handlers(improvement: ImprovementManager) -> dict[ToolName, KernelToolHandler]: ...
-class PermissionApprovalSink:      # implements ImprovementApprovalSink over PermissionManager
+def improvement_tool_handlers(
+    improvement: ImprovementManager,
+) -> dict[ToolName, KernelToolHandler]: ...
+
+
+class PermissionApprovalSink:  # implements ImprovementApprovalSink over PermissionManager
     def __init__(self, permissions: PermissionManager) -> None: ...
 ```
 Tool arguments: `improvement.candidate {observation_ids: [..], risk, problem?, proposed_change, expected_benefit, validation_method, scope?}` → `{id, state}`; `improvement.review {candidate_id, approve: bool, note}` → `{id, state, decision_id}`.
@@ -746,51 +832,105 @@ Payload keys (`TransitionContext.payload`, built by `rollout_payload`): `candida
 ROLLOUT_GUARDS: dict[str, Callable[[BehaviorVersion, TransitionContext], GuardResult]]
 METRICS_TOLERANCE: float = 0.10
 
-def rollout_event_for(current: RolloutStage, target: RolloutStage) -> str: ...      # undefined pair → GuardRejected
+
+def rollout_event_for(
+    current: RolloutStage, target: RolloutStage
+) -> str: ...  # undefined pair → GuardRejected
+
 
 class VersionMetricsCheck(Protocol):
-    async def not_worse(self, version: BehaviorVersion) -> tuple[bool, str]: ...    # (verdict, reason)
+    async def not_worse(
+        self, version: BehaviorVersion
+    ) -> tuple[bool, str]: ...  # (verdict, reason)
+
 
 class RetrospectiveMetricsCheck:
     def __init__(self, telemetry: TelemetryManager, ledger: LedgerManager) -> None: ...
     async def not_worse(self, version: BehaviorVersion) -> tuple[bool, str]: ...
 
-async def rollout_payload(version: BehaviorVersion, *, by: Actor, candidates: CandidateRepository, experiments: ExperimentRepository,
-                          changelog: ChangelogRepository, ledger: LedgerManager, metrics: VersionMetricsCheck,
-                          catalog: BehaviorVersionCatalog) -> JsonDict: ...
+
+async def rollout_payload(
+    version: BehaviorVersion,
+    *,
+    by: Actor,
+    candidates: CandidateRepository,
+    experiments: ExperimentRepository,
+    changelog: ChangelogRepository,
+    ledger: LedgerManager,
+    metrics: VersionMetricsCheck,
+    catalog: BehaviorVersionCatalog,
+) -> JsonDict: ...
+
 
 class RolloutStateMachine:
-    def __init__(self, table: TransitionTable, guards: dict[str, Callable[..., GuardResult]] = ROLLOUT_GUARDS) -> None: ...
-    def fire(self, version: BehaviorVersion, event: str, ctx: TransitionContext) -> BehaviorVersion: ...   # pure; GuardRejected lists failing guards
+    def __init__(
+        self, table: TransitionTable, guards: dict[str, Callable[..., GuardResult]] = ROLLOUT_GUARDS
+    ) -> None: ...
+    def fire(
+        self, version: BehaviorVersion, event: str, ctx: TransitionContext
+    ) -> BehaviorVersion: ...  # pure; GuardRejected lists failing guards
+
 
 # src/walk/improvement/changelog.py
 class ChangelogEntry(FrozenModel):
-    release: str              # kernel release, e.g. "0.9.0" (walk.__version__)
+    release: str  # kernel release, e.g. "0.9.0" (walk.__version__)
     entry_seq: int
-    key: str                  # "<KIND>/<name>"
+    key: str  # "<KIND>/<name>"
     version: str
     stage: RolloutStage
     changed: str
     reason: ImprovementId
-    evidence: str             # summary + evidence ids
+    evidence: str  # summary + evidence ids
     at: datetime
-def render_changelog(release: str, entries: list[ChangelogEntry]) -> str: ...   # §120 layout: "Kernel <release>", then per entry Changed / Reason / Evidence
-def changelog_path(home: KernelHome, release: str) -> Path: ...                 # .improvement/changelog/<release>.md
+
+
+def render_changelog(
+    release: str, entries: list[ChangelogEntry]
+) -> str: ...  # §120 layout: "Kernel <release>", then per entry Changed / Reason / Evidence
+def changelog_path(
+    home: KernelHome, release: str
+) -> Path: ...  # .improvement/changelog/<release>.md
+
 
 # src/walk/improvement/errors.py
 class ChangelogRequired(PermanentError): ...
 
+
 # src/walk/improvement/versions.py
-PIN_RISK_BY_KIND: dict[ImprovementScope, ImprovementRisk]   # WORKFLOW, CONSTITUTION, TOOL_USAGE, QUALITY_GATE → HIGH; all others → MEDIUM (ADR-0008 D-4)
+PIN_RISK_BY_KIND: dict[
+    ImprovementScope, ImprovementRisk
+]  # WORKFLOW, CONSTITUTION, TOOL_USAGE, QUALITY_GATE → HIGH; all others → MEDIUM (ADR-0008 D-4)
+
+
 class BehaviorVersionCatalog:
-    def entries(self) -> list[BehaviorVersion]: ...                               # builtin (DEFAULT) + registered (kernel DB stage)
-    def resolve(self, key: str, version: str) -> tuple[BehaviorVersion, Path]: ...  # ConfigError when unknown
+    def entries(
+        self,
+    ) -> list[BehaviorVersion]: ...  # builtin (DEFAULT) + registered (kernel DB stage)
+    def resolve(
+        self, key: str, version: str
+    ) -> tuple[BehaviorVersion, Path]: ...  # ConfigError when unknown
+
 
 # src/walk/improvement/protocols.py — ImprovementManager changes/additions
-async def set_stage(self, kind: ImprovementScope, name: str, version: str, stage: RolloutStage, *, by: Actor, changed: str = "") -> BehaviorVersion: ...
-async def rollback(self, kind: ImprovementScope, name: str, version: str, *, by: Actor, reason: str) -> BehaviorVersion: ...
-async def list_versions(self, kind: ImprovementScope | None = None, name: str | None = None) -> list[BehaviorVersion]: ...
-async def pin_version(self, kind: ImprovementScope, name: str, version: str, *, by: Actor, note: str) -> KernelVersionPins: ...
+async def set_stage(
+    self,
+    kind: ImprovementScope,
+    name: str,
+    version: str,
+    stage: RolloutStage,
+    *,
+    by: Actor,
+    changed: str = "",
+) -> BehaviorVersion: ...
+async def rollback(
+    self, kind: ImprovementScope, name: str, version: str, *, by: Actor, reason: str
+) -> BehaviorVersion: ...
+async def list_versions(
+    self, kind: ImprovementScope | None = None, name: str | None = None
+) -> list[BehaviorVersion]: ...
+async def pin_version(
+    self, kind: ImprovementScope, name: str, version: str, *, by: Actor, note: str
+) -> KernelVersionPins: ...
 ```
 CLI: `walk improvement versions [--kind K] [--name N] [--json]`; `walk improvement register KIND/NAME VERSION --source PATH --candidate IMP_ID [--stage STAGE] [--changed TEXT]`; `walk improvement stage KIND/NAME VERSION STAGE [--changed TEXT]`; `walk improvement pin KIND/NAME VERSION --note TEXT`; `walk improvement rollback KIND/NAME VERSION --reason TEXT`.
 
@@ -887,26 +1027,53 @@ Project learning reaches kernel scope only through an explicit `walk improvement
 `promote(observation_id)` per INTERFACES §1.15; `Pattern`, `AntiPattern` per DOMAIN-MODEL §4.14; ids `PATTERN-NNN`/`ANTI-NNN` from the kernel `id_sequences` (DOMAIN-MODEL §2); kernel layout ARCHITECTURE §9 (`patterns/`, `anti-patterns/`); project documents flat under `.ai/improvements/`.
 ```python
 # src/walk/memory/sections.py
-PATTERN_SECTIONS = ("Description", "Observed Benefits", "Applies To", "Evidence", "Source")       # §112 example fields
-ANTI_PATTERN_SECTIONS = ("Pattern", "Observed Harm", "Replacement", "Evidence", "Source")         # §113 example fields
+PATTERN_SECTIONS = (
+    "Description",
+    "Observed Benefits",
+    "Applies To",
+    "Evidence",
+    "Source",
+)  # §112 example fields
+ANTI_PATTERN_SECTIONS = (
+    "Pattern",
+    "Observed Harm",
+    "Replacement",
+    "Evidence",
+    "Source",
+)  # §113 example fields
 
 # src/walk/improvement/patterns.py
 BUILTIN_ANTI_PATTERNS_PATH: str = "improvement/defaults/anti_patterns.yaml"
-MIN_PROJECTS_FOR_KERNEL_PATTERN: int = 2                       # ADR-0008 D-2 "from ≥ 2 projects' observations"
+MIN_PROJECTS_FOR_KERNEL_PATTERN: int = 2  # ADR-0008 D-2 "from ≥ 2 projects' observations"
 PATTERN_REGISTRARS: dict[LearningScope, frozenset[AgentRole]] = {
-    LearningScope.PROJECT: frozenset({AgentRole.USER, AgentRole.PROCESS_ARCHITECT, AgentRole.ORCHESTRATOR}),
+    LearningScope.PROJECT: frozenset(
+        {AgentRole.USER, AgentRole.PROCESS_ARCHITECT, AgentRole.ORCHESTRATOR}
+    ),
     LearningScope.KERNEL: frozenset({AgentRole.USER, AgentRole.PROCESS_ARCHITECT}),
 }
+
+
 def pattern_document(p: Pattern, observation_ids: list[ObservationId]) -> MemoryDocument: ...
-def anti_pattern_document(a: AntiPattern, observation_ids: list[ObservationId]) -> MemoryDocument: ...
+def anti_pattern_document(
+    a: AntiPattern, observation_ids: list[ObservationId]
+) -> MemoryDocument: ...
 def pattern_from_document(doc: MemoryDocument) -> Pattern: ...
 def anti_pattern_from_document(doc: MemoryDocument) -> AntiPattern: ...
-def load_builtin_anti_patterns(path: Path | None = None) -> list[AntiPattern]: ...   # ids placeholder "ANTI-000"; scope KERNEL
+def load_builtin_anti_patterns(
+    path: Path | None = None,
+) -> list[AntiPattern]: ...  # ids placeholder "ANTI-000"; scope KERNEL
+
 
 # src/walk/improvement/protocols.py — additions
-async def register_pattern(self, pattern: Pattern, *, observation_ids: list[ObservationId], by: Actor) -> Pattern: ...
-async def register_anti_pattern(self, anti: AntiPattern, *, observation_ids: list[ObservationId], by: Actor) -> AntiPattern: ...
-async def list_patterns(self, kind: Literal["PATTERN", "ANTI"] | None = None, scope: LearningScope | None = None) -> list[Pattern | AntiPattern]: ...
+async def register_pattern(
+    self, pattern: Pattern, *, observation_ids: list[ObservationId], by: Actor
+) -> Pattern: ...
+async def register_anti_pattern(
+    self, anti: AntiPattern, *, observation_ids: list[ObservationId], by: Actor
+) -> AntiPattern: ...
+async def list_patterns(
+    self, kind: Literal["PATTERN", "ANTI"] | None = None, scope: LearningScope | None = None
+) -> list[Pattern | AntiPattern]: ...
 ```
 Builtin anti-pattern seeds (`anti_patterns.yaml`):
 
@@ -1011,28 +1178,57 @@ The §101 Process Architect exists as a kernel-default role (constitution, polic
 ```python
 # src/walk/workflow/analysis.py
 class AnalysisStep(StrEnum):
-    RETRO = "retro"                                   # Process Architect narrative for a retrospective
-ANALYSIS_LABEL_PREFIX = "walk-analysis:"              # + RetrospectiveId
-ANALYSIS_STEP_LABEL_PREFIX = "walk-analysis-step:"    # + AnalysisStep value
+    RETRO = "retro"  # Process Architect narrative for a retrospective
+
+
+ANALYSIS_LABEL_PREFIX = "walk-analysis:"  # + RetrospectiveId
+ANALYSIS_STEP_LABEL_PREFIX = "walk-analysis-step:"  # + AnalysisStep value
+
+
 def analysis_labels(subject: str, step: AnalysisStep) -> list[str]: ...
 def analysis_subject_of(item: WorkItem) -> str | None: ...
-def analysis_step_of(item: WorkItem) -> AnalysisStep | None: ...    # one label without the other → ConfigError
+def analysis_step_of(
+    item: WorkItem,
+) -> AnalysisStep | None: ...  # one label without the other → ConfigError
+
 
 # src/walk/orchestrator/router.py
-ANALYSIS_ROUTES: dict[AnalysisStep, tuple[AgentRole, str]] = {AnalysisStep.RETRO: (AgentRole.PROCESS_ARCHITECT, "RETRO")}
+ANALYSIS_ROUTES: dict[AnalysisStep, tuple[AgentRole, str]] = {
+    AnalysisStep.RETRO: (AgentRole.PROCESS_ARCHITECT, "RETRO")
+}
 
 # src/walk/runtime/output_applier.py — DefaultOutputApplier constructor addition
 on_analysis_output: Callable[[WorkItem, AgentOutput], Awaitable[None]] | None = None
 
 # src/walk/improvement/retrospectives.py
-NARRATIVE_LEVELS: frozenset[str] = frozenset({"PHASE", "PROJECT"})      # §114: no LLM retrospective for small tasks
-def retrospective_id_for(level: Literal["TASK", "FEATURE", "PHASE", "PROJECT"], subject_id: str) -> RetrospectiveId: ...
+NARRATIVE_LEVELS: frozenset[str] = frozenset(
+    {"PHASE", "PROJECT"}
+)  # §114: no LLM retrospective for small tasks
+
+
+def retrospective_id_for(
+    level: Literal["TASK", "FEATURE", "PHASE", "PROJECT"], subject_id: str
+) -> RetrospectiveId:
+    ...
     # "RETRO-" + subject_id for TASK/FEATURE/PHASE (RETRO-STORY-0001, RETRO-FEAT-0012, RETRO-PHASE-03); "RETRO-PROJECT-<key>"
-def metrics_from_report(report: Report) -> RetrospectiveMetrics: ...    # maps E09-S01 task/feature report data `(verify keys)`
-def narrative_from_output(output: AgentOutput) -> str: ...              # summary + findings rendered as Markdown; secrets refused
+
+
+def metrics_from_report(
+    report: Report,
+) -> RetrospectiveMetrics: ...  # maps E09-S01 task/feature report data `(verify keys)`
+def narrative_from_output(
+    output: AgentOutput,
+) -> str: ...  # summary + findings rendered as Markdown; secrets refused
+
 
 # src/walk/improvement/protocols.py — additions
-async def retrospective(self, level: Literal["TASK", "FEATURE", "PHASE", "PROJECT"], subject_id: str, *, with_narrative: bool = False) -> Retrospective: ...
+async def retrospective(
+    self,
+    level: Literal["TASK", "FEATURE", "PHASE", "PROJECT"],
+    subject_id: str,
+    *,
+    with_narrative: bool = False,
+) -> Retrospective: ...
 async def attach_narrative(self, item: WorkItem, output: AgentOutput) -> Retrospective: ...
 ```
 No story-workflow change: carrier tasks are created with labels `analysis_labels(...)` **plus** `analysis-only` (E06-S02) and complete through the existing INTERFACES §3.2 row `IMPLEMENTING --analysis_done--> COMPLETE` (guards `output_status_is_completed`, `analysis_only_task`).
@@ -1148,23 +1344,38 @@ A candidate's versioned change can be measured before rollout by the two ADR-000
 `Experiment` per DOMAIN-MODEL §4.14; method definitions ADR-0008 D-9; folder `$WALK_HOME/.improvement/experiments/EXP-NNNN.md` (ARCHITECTURE §9).
 ```python
 # src/walk/improvement/experiments.py
-EXPERIMENT_METRICS: tuple[str, ...] = ("duration_s", "rework", "qc_defects", "tokens", "cost_usd", "escalations")   # §107
-MIN_ARM_SIZE: int = 20                  # ADR-0008 D-9
-IMPROVEMENT_THRESHOLD: float = 0.05     # ≥ 5 % better mean on at least one selected metric
-REGRESSION_TOLERANCE: float = 0.10      # no selected metric > 10 % worse
+EXPERIMENT_METRICS: tuple[str, ...] = (
+    "duration_s",
+    "rework",
+    "qc_defects",
+    "tokens",
+    "cost_usd",
+    "escalations",
+)  # §107
+MIN_ARM_SIZE: int = 20  # ADR-0008 D-9
+IMPROVEMENT_THRESHOLD: float = 0.05  # ≥ 5 % better mean on at least one selected metric
+REGRESSION_TOLERANCE: float = 0.10  # no selected metric > 10 % worse
 AB_KINDS: frozenset[ImprovementScope] = frozenset({ImprovementScope.WORKFLOW})
-SHADOW_KINDS: frozenset[ImprovementScope] = frozenset({ImprovementScope.MODEL_ROUTING, ImprovementScope.EFFORT_POLICY})
+SHADOW_KINDS: frozenset[ImprovementScope] = frozenset(
+    {ImprovementScope.MODEL_ROUTING, ImprovementScope.EFFORT_POLICY}
+)
+
 
 class ExperimentArm(StrEnum):
     CONTROL = "control"
     TREATMENT = "treatment"
 
-def arm_for(work_item_id: WorkItemId) -> ExperimentArm: ...        # int(sha1(id).hexdigest(), 16) % 2 == 1 → TREATMENT
+
+def arm_for(
+    work_item_id: WorkItemId,
+) -> ExperimentArm: ...  # int(sha1(id).hexdigest(), 16) % 2 == 1 → TREATMENT
+
 
 class ArmMetrics(FrozenModel):
     arm: ExperimentArm
     items: int
-    means: dict[str, float]            # keys ⊆ EXPERIMENT_METRICS
+    means: dict[str, float]  # keys ⊆ EXPERIMENT_METRICS
+
 
 class ExperimentVerdict(StrEnum):
     IMPROVED = "IMPROVED"
@@ -1172,43 +1383,77 @@ class ExperimentVerdict(StrEnum):
     REGRESSED = "REGRESSED"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
+
 class ExperimentResult(FrozenModel):
     experiment_id: ExperimentId
     verdict: ExperimentVerdict
     control: ArmMetrics | None
     treatment: ArmMetrics | None
-    relative_change: dict[str, float]   # (treatment − control) / control per metric; lower is better for all six
-    shadow_agreement: float | None      # SHADOW only: share of evaluations where would_have == actual
+    relative_change: dict[
+        str, float
+    ]  # (treatment − control) / control per metric; lower is better for all six
+    shadow_agreement: float | None  # SHADOW only: share of evaluations where would_have == actual
     shadow_evaluations: int
     summary: str
 
-def compare_arms(control: ArmMetrics, treatment: ArmMetrics, metrics: list[str]) -> ExperimentResult: ...
+
+def compare_arms(
+    control: ArmMetrics, treatment: ArmMetrics, metrics: list[str]
+) -> ExperimentResult: ...
+
 
 class ExperimentAssigner:
-    def __init__(self, active: list[tuple[Experiment, str]], pins: dict[str, str]) -> None: ...    # (experiment, "<KIND>/<name>")
-    def versions_for(self, work_item_id: WorkItemId) -> dict[str, str]: ...    # pins with treatment versions for TREATMENT items
+    def __init__(
+        self, active: list[tuple[Experiment, str]], pins: dict[str, str]
+    ) -> None: ...  # (experiment, "<KIND>/<name>")
+    def versions_for(
+        self, work_item_id: WorkItemId
+    ) -> dict[str, str]: ...  # pins with treatment versions for TREATMENT items
+
 
 class ShadowEvaluator(Protocol):
     kind: ImprovementScope
-    async def evaluate(self, version_path: Path, ctx: HookContext) -> tuple[JsonDict, JsonDict]: ...    # (would_have, actual)
-class RoutingShadowEvaluator: ...      # treatment models.yaml → ModelRouter selection for the run's role/effort `(verify loader, E01-S20)`
-class EffortShadowEvaluator: ...       # treatment policies.yaml effort_policy → EffortManager.resolve `(verify, E01-S13)`
+
+    async def evaluate(
+        self, version_path: Path, ctx: HookContext
+    ) -> tuple[JsonDict, JsonDict]: ...  # (would_have, actual)
+
+
+class RoutingShadowEvaluator: ...  # treatment models.yaml → ModelRouter selection for the run's role/effort `(verify loader, E01-S20)`
+
+
+class EffortShadowEvaluator: ...  # treatment policies.yaml effort_policy → EffortManager.resolve `(verify, E01-S13)`
+
 
 def experiment_document(e: Experiment, result: ExperimentResult | None) -> MemoryDocument: ...
+
 
 # src/walk/memory/sections.py
 EXPERIMENT_SECTIONS = ("Design", "Arms", "Metrics", "Results")
 
+
 # src/walk/improvement/versions.py
 class KernelVersionPins(WalkModel):
-    experiments: list[ExperimentId] = Field(default_factory=list, description="experiments this project opted into (§107)")
+    experiments: list[ExperimentId] = Field(
+        default_factory=list, description="experiments this project opted into (§107)"
+    )
+
 
 # src/walk/improvement/protocols.py — additions
-async def start_experiment(self, candidate_id: ImprovementId, *, key: str, treatment_version: str,
-                           assignment: Literal["AB_BY_WORK_ITEM_HASH", "SHADOW"], metrics: list[str], by: Actor) -> Experiment: ...
+async def start_experiment(
+    self,
+    candidate_id: ImprovementId,
+    *,
+    key: str,
+    treatment_version: str,
+    assignment: Literal["AB_BY_WORK_ITEM_HASH", "SHADOW"],
+    metrics: list[str],
+    by: Actor,
+) -> Experiment: ...
 async def end_experiment(self, experiment_id: ExperimentId, *, by: Actor) -> ExperimentResult: ...
 async def shadow_evaluate(self, ctx: HookContext) -> list[LedgerEvent]: ...
 def experiment_versions_for(self, work_item_id: WorkItemId) -> dict[str, str]: ...
+
 
 # src/walk/runtime/executor.py — DefaultAgentExecutor constructor addition
 versions_for_item: Callable[[WorkItemId], dict[str, str]] | None = None
@@ -1308,54 +1553,86 @@ All eighteen §116 improvement metrics are computed from the ledger alone (per p
 # src/walk/telemetry/models.py
 class ImprovementMetrics(WalkModel):
     """§116, computed only from ledger_events (+ cost_records)."""
+
     period_start: datetime | None
     period_end: datetime | None
     phase_id: PhaseId | None
-    version_filter: str | None = Field(description="'<KIND>/<name>@<version>' when restricted to events stamped with that version")
-    first_pass_completion_rate: float      # COMPLETE items with fix_loops == 0 / COMPLETE items
-    rework_rate: float                     # items that entered REWORK / items that entered READY_FOR_REVIEW
-    bug_density: float                     # BUG_CREATED / COMPLETE stories+tasks
-    escaped_defect_rate: float             # bugs created against items already COMPLETE / BUG_CREATED
-    fix_loops: float                       # mean fix_loops of COMPLETE items
-    debate_rounds: float                   # mean rounds per DEBATE_RESOLVED
-    user_escalation_rate: float            # ESCALATION_RAISED level 3 / DECISION_RECORDED
-    human_intervention_rate: float         # (USER_OVERRIDE + APPROVAL_DECIDED by USER) / COMPLETE items
-    context_hit_rate: float                # runs without CONTEXT_FRESHNESS stale/invalid / AGENT_RUN_STARTED
-    context_stale_rate: float              # 1 − context_hit_rate
-    handoff_success: float                 # RECOVERY_RESUMED runs ending COMPLETED / RECOVERY_RESUMED
-    fallback_success: float                # runs with MODEL_FALLBACK ending COMPLETED / runs with MODEL_FALLBACK
-    build_success: float                   # BUILD_RESULT ok / BUILD_RESULT
-    task_duration_s: float                 # mean Σ AGENT_RUN_ENDED.duration_ms per COMPLETE item / 1000
-    token_usage: int                       # Σ tokens of COST_RECORDED
-    cost_per_task: float                   # Σ cost_usd / COMPLETE stories+tasks
-    cost_per_feature: float                # Σ cost_usd / COMPLETE features
-    agent_blocked_time_s: float            # Σ time between → BLOCKED and the next transition out of BLOCKED
+    version_filter: str | None = Field(
+        description="'<KIND>/<name>@<version>' when restricted to events stamped with that version"
+    )
+    first_pass_completion_rate: float  # COMPLETE items with fix_loops == 0 / COMPLETE items
+    rework_rate: float  # items that entered REWORK / items that entered READY_FOR_REVIEW
+    bug_density: float  # BUG_CREATED / COMPLETE stories+tasks
+    escaped_defect_rate: float  # bugs created against items already COMPLETE / BUG_CREATED
+    fix_loops: float  # mean fix_loops of COMPLETE items
+    debate_rounds: float  # mean rounds per DEBATE_RESOLVED
+    user_escalation_rate: float  # ESCALATION_RAISED level 3 / DECISION_RECORDED
+    human_intervention_rate: float  # (USER_OVERRIDE + APPROVAL_DECIDED by USER) / COMPLETE items
+    context_hit_rate: float  # runs without CONTEXT_FRESHNESS stale/invalid / AGENT_RUN_STARTED
+    context_stale_rate: float  # 1 − context_hit_rate
+    handoff_success: float  # RECOVERY_RESUMED runs ending COMPLETED / RECOVERY_RESUMED
+    fallback_success: float  # runs with MODEL_FALLBACK ending COMPLETED / runs with MODEL_FALLBACK
+    build_success: float  # BUILD_RESULT ok / BUILD_RESULT
+    task_duration_s: float  # mean Σ AGENT_RUN_ENDED.duration_ms per COMPLETE item / 1000
+    token_usage: int  # Σ tokens of COST_RECORDED
+    cost_per_task: float  # Σ cost_usd / COMPLETE stories+tasks
+    cost_per_feature: float  # Σ cost_usd / COMPLETE features
+    agent_blocked_time_s: float  # Σ time between → BLOCKED and the next transition out of BLOCKED
+
 
 # src/walk/telemetry/metrics.py
-IMPROVEMENT_METRIC_QUERIES: dict[str, str]           # one read-only SQL per ImprovementMetrics metric field (18)
-AUTONOMY_QUALITY_FIELDS: tuple[str, ...] = ("human_intervention_rate", "first_pass_completion_rate",
-                                            "escaped_defect_rate", "user_escalation_rate")    # §117: shown together
-async def compute_improvement_metrics(db: Database, *, phase_id: PhaseId | None = None, since: datetime | None = None,
-                                      until: datetime | None = None, version: tuple[str, str] | None = None) -> ImprovementMetrics: ...
+IMPROVEMENT_METRIC_QUERIES: dict[
+    str, str
+]  # one read-only SQL per ImprovementMetrics metric field (18)
+AUTONOMY_QUALITY_FIELDS: tuple[str, ...] = (
+    "human_intervention_rate",
+    "first_pass_completion_rate",
+    "escaped_defect_rate",
+    "user_escalation_rate",
+)  # §117: shown together
+
+
+async def compute_improvement_metrics(
+    db: Database,
+    *,
+    phase_id: PhaseId | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    version: tuple[str, str] | None = None,
+) -> ImprovementMetrics: ...
+
 
 # src/walk/telemetry/protocols.py — additions
 # TelemetryManager
-async def improvement_metrics(self, *, phase_id: PhaseId | None = None, since: datetime | None = None,
-                              until: datetime | None = None, version: tuple[str, str] | None = None) -> ImprovementMetrics: ...
+async def improvement_metrics(
+    self,
+    *,
+    phase_id: PhaseId | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    version: tuple[str, str] | None = None,
+) -> ImprovementMetrics: ...
+
+
 # LedgerManager.report gains: since: datetime | None = None   (used by kind "improvement" only; ignored otherwise)
+
 
 # src/walk/improvement/models.py
 class VersionOutcome(WalkModel):
     """§106 'Measured Outcome' of one behaviour version."""
+
     key: str
     version: str
     baseline_version: str | None
     metrics: ImprovementMetrics
     baseline_metrics: ImprovementMetrics | None
-    deltas: dict[str, float]          # metric − baseline metric, for the 18 metric fields
+    deltas: dict[str, float]  # metric − baseline metric, for the 18 metric fields
+
 
 # src/walk/improvement/protocols.py — addition
-async def measure_version(self, key: str, version: str, *, since: datetime | None = None) -> VersionOutcome: ...
+async def measure_version(
+    self, key: str, version: str, *, since: datetime | None = None
+) -> VersionOutcome: ...
 ```
 CLI: `walk improvement metrics [--phase ID] [--since ISO] [--until ISO] [--version KIND/NAME@VERSION] [--json]`; `walk report improvement SUBJECT_ID [--since ISO] [--write] [--json]`.
 

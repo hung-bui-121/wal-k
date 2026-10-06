@@ -167,12 +167,12 @@ Cycle check: every ✔ lies strictly left of the row's own diagonal, so the rela
 |---|---|
 | `claude_agent_sdk` | `walk/model_router/adapters/claude/` |
 | `codex` CLI subprocess (`codex exec`) | `walk/model_router/adapters/codex/` |
-| `httpx` (Jira REST; asset-provider HTTP APIs and asset downloads `[Stage 8]`) | `walk/integrations/jira/`, `walk/integrations/assets/` (shared download helper and `<provider>/` subpackages) |
+| `httpx` (Jira REST; asset-provider HTTP APIs and asset downloads `[Stage 8]`; MCP OAuth transport `[Stage 8]`) | `walk/integrations/jira/`, `walk/integrations/assets/` (shared download helper and `<provider>/` subpackages), `walk/integrations/mcp/` (ADR-0017) |
 | `git` subprocess | `walk/integrations/git/` |
 | Unity executable subprocess | `walk/integrations/unity/` |
 | Graphify CLI / library | `walk/integrations/graphify/` |
 | Meshy / OpenArt / Blender | `walk/integrations/assets/<provider>/` `[Stage 8]` |
-| Unity MCP server process and MCP client (stdio JSON-RPC) | `walk/integrations/unity_mcp/` `[Stage 8]` (ADR-0015) |
+| `mcp` (official MCP Python SDK: streamable HTTP client, OAuth client provider) | `walk/integrations/mcp/` (generic client, OAuth token storage, server registry) and `walk/integrations/assets/openart/` (adapter) `[Stage 8]` (ADR-0017) |
 | `sqlite3` | `walk/persistence/` (repositories in other packages receive a `Database` handle; they write SQL, they do not open connections) |
 | `typer` | `walk/cli/` |
 | `keyring` | `walk/integrations/credentials.py` (the `CredentialStore`) |
@@ -600,4 +600,4 @@ Promotion (§111) is explicit: `walk improvement promote OBS-0001` copies a proj
 | Workflow | feature lifecycle §131 incl. fix loop; phase lifecycle data model present, gate CLI minimal | autonomous phase scheduler `[Stage 7]`, RC `[Stage 11]` |
 | Debate | minimal path for §133 (open → positions → decision) | PO/user escalation `[Stage 5]` |
 | Improvement | observations + phase retrospective skeleton | candidates, experiments, versioning `[Stage 10]` |
-| Unity | batchmode compile + EditMode/PlayMode tests (§62) | builds, asset validation, MCP `[Stage 8]` |
+| Unity | batchmode compile + EditMode/PlayMode tests (§62) | builds, asset validation, screenshot/console/asset inspection via batchmode CLI `[Stage 8]` (ADR-0015) |

@@ -28,6 +28,7 @@ E02-S08 planned these callables in `src/walk/hooks/builtins.py`, which would mak
 # src/walk/orchestrator/builtin_hooks.py
 class BuiltinHookDeps(WalkModel):
     """Protocol-typed service handles (arbitrary_types_allowed); stories add fields additively."""
+
     hooks: HookManager
     checkpoints: CheckpointManager
     memory: MemoryManager
@@ -36,6 +37,7 @@ class BuiltinHookDeps(WalkModel):
     budgets: BudgetManager
     permissions: PermissionManager
     telemetry: TelemetryManager
+
 
 def builtin_hooks(deps: BuiltinHookDeps) -> list[tuple[Hook, HookCallable]]: ...
 def register_builtins(manager: HookManager, deps: BuiltinHookDeps) -> None: ...

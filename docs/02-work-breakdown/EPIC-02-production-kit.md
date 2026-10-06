@@ -70,28 +70,50 @@ Secrets are resolved only through `CredentialStore` (environment → OS keyring 
 ```python
 # src/walk/integrations/credentials.py
 CREDENTIAL_NAMES: tuple[str, ...] = (
-    "ANTHROPIC_API_KEY", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN",
-    "WALK_WEBHOOK_SECRET", "MESHY_API_KEY", "OPENART_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "JIRA_BASE_URL",
+    "JIRA_EMAIL",
+    "JIRA_API_TOKEN",
+    "WALK_WEBHOOK_SECRET",
+    "MESHY_API_KEY",
+    "OPENART_OAUTH_CLIENT",
+    "OPENART_OAUTH_REFRESH_TOKEN",
 )
 KEYRING_SERVICE: str = "walk"
+
 
 class KeyringBackend(Protocol):
     def get_password(self, service: str, username: str) -> str | None: ...
 
+
 class SystemKeyringBackend:
     """Adapter over the `keyring` package (the only module importing `keyring`)."""
+
     def get_password(self, service: str, username: str) -> str | None: ...
+
 
 class CredentialStore:
     def __init__(self, env: Mapping[str, str], backend: KeyringBackend | None) -> None: ...
     def get(self, name: str) -> SecretStr | None:
         """env[name] if set and non-empty, else backend.get_password(KEYRING_SERVICE, name), else None."""
+
     def present(self, name: str) -> bool: ...
     def presence(self) -> dict[str, ReadinessState]:
         """READY / MISSING for every CREDENTIAL_NAMES entry; never values."""
 
+
 # src/walk/runtime/sandbox.py
-AGENT_ENV_ALLOWLIST: tuple[str, ...] = ("PATH", "HOME", "TMP", "TEMP", "USERPROFILE", "SYSTEMROOT", "UNITY_*")
+AGENT_ENV_ALLOWLIST: tuple[str, ...] = (
+    "PATH",
+    "HOME",
+    "TMP",
+    "TEMP",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "UNITY_*",
+)
+
+
 def scrubbed_env(os_env: Mapping[str, str]) -> dict[str, str]:
     """Keys equal to an allowlist entry or matching a trailing-`*` glob; values copied verbatim."""
 ```
@@ -166,30 +188,52 @@ _pending_
 See INTERFACES.md §1.12 `IntegrationManager.preflight`. Deltas:
 ```python
 # src/walk/integrations/preflight.py
-REQUIRED_DEFAULT: tuple[str, ...] = ("git", "work_provider")        # keys that make doctor exit 4 when MISSING
-async def detect_git(runner: SubprocessRunner) -> ComponentStatus: ...            # `git --version`
-async def detect_unity(runner: SubprocessRunner, unity_path: str | None, project_path: str) -> ComponentStatus: ...  # `<unity> -version`; reads ProjectSettings/ProjectVersion.txt
-async def detect_codex_cli(runner: SubprocessRunner) -> ComponentStatus: ...      # `codex --version`
-def detect_claude_sdk() -> ComponentStatus: ...                                   # importlib.metadata.version("claude-agent-sdk")
-async def detect_graphify(runner: SubprocessRunner) -> ComponentStatus: ...       # `graphify --version`
-async def detect_dotnet(runner: SubprocessRunner) -> ComponentStatus: ...         # `dotnet --version`
+REQUIRED_DEFAULT: tuple[str, ...] = (
+    "git",
+    "work_provider",
+)  # keys that make doctor exit 4 when MISSING
+
+
+async def detect_git(runner: SubprocessRunner) -> ComponentStatus: ...  # `git --version`
+async def detect_unity(
+    runner: SubprocessRunner, unity_path: str | None, project_path: str
+) -> ComponentStatus: ...  # `<unity> -version`; reads ProjectSettings/ProjectVersion.txt
+async def detect_codex_cli(runner: SubprocessRunner) -> ComponentStatus: ...  # `codex --version`
+def detect_claude_sdk() -> ComponentStatus: ...  # importlib.metadata.version("claude-agent-sdk")
+async def detect_graphify(runner: SubprocessRunner) -> ComponentStatus: ...  # `graphify --version`
+async def detect_dotnet(runner: SubprocessRunner) -> ComponentStatus: ...  # `dotnet --version`
 def detect_credentials(store: CredentialStore) -> dict[str, ReadinessState]: ...
-def detect_required_skills(required: list[SkillName], available: list[SkillName]) -> dict[SkillName, ReadinessState]: ...
+def detect_required_skills(
+    required: list[SkillName], available: list[SkillName]
+) -> dict[SkillName, ReadinessState]: ...
+
 
 # src/walk/integrations/manifest.py
 class ManifestStore:
     def __init__(self, ai_root: Path, clock: Clock) -> None: ...
-    def path(self) -> Path: ...                                  # <ai_root>/project/environment.yaml
+    def path(self) -> Path: ...  # <ai_root>/project/environment.yaml
     def read(self) -> EnvironmentManifest | None: ...
-    def write(self, manifest: EnvironmentManifest) -> Path: ...   # atomic tmp + rename
+    def write(self, manifest: EnvironmentManifest) -> Path: ...  # atomic tmp + rename
     def diff(self, previous: EnvironmentManifest, current: EnvironmentManifest) -> list[str]:
         """'<section>.<key>: <old state/version> -> <new state/version>' for every changed component."""
 
+
 # src/walk/integrations/service.py
 class DefaultIntegrationManager:
-    def __init__(self, *, runner: SubprocessRunner, credentials: CredentialStore, manifest_store: ManifestStore,
-                 tools: ToolRegistry, clock: Clock, machine_id: str, unity_path: str | None, project_path: str,
-                 required_skills: list[SkillName], available_skills: list[SkillName]) -> None: ...
+    def __init__(
+        self,
+        *,
+        runner: SubprocessRunner,
+        credentials: CredentialStore,
+        manifest_store: ManifestStore,
+        tools: ToolRegistry,
+        clock: Clock,
+        machine_id: str,
+        unity_path: str | None,
+        project_path: str,
+        required_skills: list[SkillName],
+        available_skills: list[SkillName],
+    ) -> None: ...
     async def preflight(self, required: list[str]) -> EnvironmentManifest: ...
 ```
 
@@ -270,10 +314,13 @@ class BootstrapOptions(WalkModel):
     repo_path: str
     project_key: ProjectKey
     name: str
-    gdd_paths: list[str] = Field(default_factory=list, description="Relative to repo root; default: every *.md under GDD/")
+    gdd_paths: list[str] = Field(
+        default_factory=list, description="Relative to repo root; default: every *.md under GDD/"
+    )
     provider: Literal["local", "jira"] = "local"
     unity_path: str | None = None
     yes: bool = False
+
 
 class BootstrapResult(WalkModel):
     kit: ProductionKit
@@ -281,15 +328,37 @@ class BootstrapResult(WalkModel):
     created_paths: list[str]
     unchanged_paths: list[str]
 
+
 class Bootstrapper:
-    def __init__(self, *, integrations: IntegrationManager, memory: MemoryManager, database: Database,
-                 migrations: MigrationRunner, work_repo: WorkflowRepository, clock: Clock, kit_version: str) -> None: ...
+    def __init__(
+        self,
+        *,
+        integrations: IntegrationManager,
+        memory: MemoryManager,
+        database: Database,
+        migrations: MigrationRunner,
+        work_repo: WorkflowRepository,
+        clock: Clock,
+        kit_version: str,
+    ) -> None: ...
     async def run(self, options: BootstrapOptions) -> BootstrapResult: ...
 
+
 # src/walk/memory/skeletons.py
-def project_skeleton(project_key: ProjectKey, name: str, gdd_paths: list[str], gdd_headings: list[str], actor: Actor, now: datetime) -> MemoryDocument:
+def project_skeleton(
+    project_key: ProjectKey,
+    name: str,
+    gdd_paths: list[str],
+    gdd_headings: list[str],
+    actor: Actor,
+    now: datetime,
+) -> MemoryDocument:
     """type=project, id='project', all §36 H2 sections present; 'Goals' holds one bullet per top-level GDD heading; related.gdd = gdd_paths."""
-def project_constitution_skeleton(project_key: ProjectKey, name: str, actor: Actor, now: datetime) -> MemoryDocument:
+
+
+def project_constitution_skeleton(
+    project_key: ProjectKey, name: str, actor: Actor, now: datetime
+) -> MemoryDocument:
     """type=project_constitution, id='constitution', sections: Product Authority, Constraints, Quality Bar, Forbidden."""
 ```
 CLI: `walk bootstrap [--gdd PATH]... --provider local|jira --name NAME --key KEY [--unity-path PATH] --yes` (INTERFACES §6).
@@ -367,20 +436,25 @@ Every builtin behaviour artifact is catalogued as a `BehaviorVersion`; bootstrap
 Models: DOMAIN-MODEL §3 (`RolloutStage`, `ImprovementRisk`, `CandidateState`) and §4.14 `BehaviorVersion`, verbatim.
 ```python
 # src/walk/improvement/versions.py
-PINS_PATH: str = "project/kernel-versions.yaml"      # relative to .ai/
+PINS_PATH: str = "project/kernel-versions.yaml"  # relative to .ai/
+
 
 class BehaviorVersionCatalog:
     """Scans builtin behaviour files and yields one BehaviorVersion per artifact (stage=DEFAULT)."""
+
     def __init__(self, package_root: Path, clock: Clock) -> None: ...
     def scan(self) -> list[BehaviorVersion]:
         """WORKFLOW: walk/workflow/tables/*.yaml (`version`); CONSTITUTION: walk/agents/defaults/*.md (front matter `version`);
         SKILL: walk/skills/builtin/*/SKILL.md; PROMPT: walk/agents/templates/*.md.j2 (first-line comment `{# version: X.Y #}`);
         MODEL_ROUTING: walk/model_router/defaults/models.yaml; EFFORT_POLICY: walk/agents/defaults/policies.yaml;
         TOOL_USAGE: walk/tools/defaults/tools.yaml; CONTEXT_FORMAT: walk/context/ranking.yaml (if present)."""
-    def key(self, v: BehaviorVersion) -> str: ...     # f"{v.kind.value}/{v.name}"
+
+    def key(self, v: BehaviorVersion) -> str: ...  # f"{v.kind.value}/{v.name}"
+
 
 class KernelVersionPins(WalkModel):
     pins: dict[str, str] = Field(description="'<KIND>/<name>' -> 'MAJOR.MINOR'")
+
     @classmethod
     def from_catalog(cls, catalog: list[BehaviorVersion]) -> "KernelVersionPins": ...
     @classmethod
@@ -475,12 +549,21 @@ class SkillFrontMatter(WalkModel):
     requires_tools: list[ToolName] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
-def discover_skill_dirs(root: Path) -> list[Path]: ...        # <root>/<kebab-name>/SKILL.md present
-def parse_skill_file(path: Path) -> Skill: ...                 # front matter + body; content_sha256 over file bytes
+
+def discover_skill_dirs(root: Path) -> list[Path]: ...  # <root>/<kebab-name>/SKILL.md present
+def parse_skill_file(
+    path: Path,
+) -> Skill: ...  # front matter + body; content_sha256 over file bytes
+
 
 # src/walk/skills/service.py
 class DefaultSkillRegistry:
-    def __init__(self, builtin_root: Path, project_root: Path | None, role_defaults: Mapping[AgentRole, list[SkillName]]) -> None: ...
+    def __init__(
+        self,
+        builtin_root: Path,
+        project_root: Path | None,
+        role_defaults: Mapping[AgentRole, list[SkillName]],
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -567,24 +650,42 @@ See INTERFACES.md §1.11 `SkillProjector.project`, `SkillRegistry.project_all`; 
 AGENTS_MD_START = "<!-- walk:skills:start -->"
 AGENTS_MD_END = "<!-- walk:skills:end -->"
 INLINE_LIMIT_BYTES = 4096
+
+
 class CodexSkillProjector:
     provider = "codex"
-    def project(self, skill: Skill, worktree_path: str) -> SkillProjection: ...   # target_path = <worktree>/AGENTS.md (section) ; body > limit → also <worktree>/.walk/skills/<name>/SKILL.md
-    def render_section(self, skills: list[Skill], worktree_path: str) -> str: ...  # full managed section text
+
+    def project(
+        self, skill: Skill, worktree_path: str
+    ) -> SkillProjection: ...  # target_path = <worktree>/AGENTS.md (section) ; body > limit → also <worktree>/.walk/skills/<name>/SKILL.md
+    def render_section(
+        self, skills: list[Skill], worktree_path: str
+    ) -> str: ...  # full managed section text
+
 
 # claude/projector.py
 class ClaudeSkillProjector:
     provider = "claude"
-    def project(self, skill: Skill, worktree_path: str) -> SkillProjection: ...   # target_path = <worktree>/.claude/skills/<name>/SKILL.md ; copies references/ scripts/
+
+    def project(
+        self, skill: Skill, worktree_path: str
+    ) -> (
+        SkillProjection
+    ): ...  # target_path = <worktree>/.claude/skills/<name>/SKILL.md ; copies references/ scripts/
+
 
 # src/walk/skills/lockfile.py
 LOCK_PATH = "agents/projections.lock.yaml"
+
+
 class ProjectionLock(WalkModel):
     projections: list[SkillProjection]
+
     @classmethod
     def load(cls, ai_root: Path) -> "ProjectionLock": ...
     def write(self, ai_root: Path) -> Path: ...
     def for_provider(self, provider: str) -> list[SkillProjection]: ...
+
 
 # src/walk/skills/repository.py
 class SkillProjectionRepository:
@@ -665,16 +766,23 @@ _pending_
 See INTERFACES.md §1.11 `SkillRegistry.check_drift`; DOMAIN-MODEL §4.6 `DriftReport`.
 ```python
 # src/walk/skills/drift.py
-def compute_drift(canonical: list[Skill], lock: list[SkillProjection], on_disk: Mapping[str, str | None]) -> DriftReport:
+def compute_drift(
+    canonical: list[Skill], lock: list[SkillProjection], on_disk: Mapping[str, str | None]
+) -> DriftReport:
     """on_disk: target_path -> sha256 of current file content (None if absent).
     missing  = canonical skills with no lock entry for the provider, or lock entry whose file is absent;
     modified = lock entries whose on-disk sha != recorded content_sha256, or whose generated_from_sha256 != canonical sha;
     orphaned = lock entries (or managed-section skills) with no canonical skill.
     ok = all three lists empty."""
 
+
 class DefaultSkillRegistry:
-    async def check_drift(self, projectors: list[SkillProjector], worktree_path: str) -> DriftReport: ...
-    async def regenerate(self, projectors: list[SkillProjector], worktree_path: str, report: DriftReport) -> list[SkillProjection]:
+    async def check_drift(
+        self, projectors: list[SkillProjector], worktree_path: str
+    ) -> DriftReport: ...
+    async def regenerate(
+        self, projectors: list[SkillProjector], worktree_path: str, report: DriftReport
+    ) -> list[SkillProjection]:
         """project_all for affected skills; ledger CONTEXT_UPDATED payload {'skills_drift': report}."""
 ```
 CLI: `walk skills check-drift [--strict] [--worktree PATH]` → exit 0 when `ok`; with drift: `--strict` → exit 1 after printing the report; without → regenerate, print `regenerated N projections`, exit 0.
@@ -745,7 +853,8 @@ Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is r
 # src/walk/orchestrator/builtin_hooks.py  (ADR-0016)
 class BuiltinHookDeps(WalkModel):
     """Protocol-typed service handles the builtin hooks call (arbitrary_types_allowed)."""
-    hooks: HookManager                     # nested fire (ON_MODEL_FALLBACK → ON_AGENT_HANDOFF, ON_AGENT_START → ON_CONTEXT_STALE)
+
+    hooks: HookManager  # nested fire (ON_MODEL_FALLBACK → ON_AGENT_HANDOFF, ON_AGENT_START → ON_CONTEXT_STALE)
     checkpoints: CheckpointManager
     memory: MemoryManager
     git: GitProvider
@@ -754,7 +863,10 @@ class BuiltinHookDeps(WalkModel):
     permissions: PermissionManager
     telemetry: TelemetryManager
 
-def builtin_hooks(deps: BuiltinHookDeps) -> list[tuple[Hook, Callable[[HookContext], Awaitable[None]]]]: ...
+
+def builtin_hooks(
+    deps: BuiltinHookDeps,
+) -> list[tuple[Hook, Callable[[HookContext], Awaitable[None]]]]: ...
 def register_builtins(manager: HookManager, deps: BuiltinHookDeps) -> None: ...
 ```
 Registered MUST hooks (id → behaviour; all `required=True`, `kind="builtin"`, `fail_policy=FAIL_CLOSED`, priority as given):
@@ -852,6 +964,7 @@ See INTERFACES.md §1.11 `HookManager.load_project_hooks`, `HookManager.fire`; D
 HOOK_ENV_PREFIX = "WALK_HOOK_"
 KERNEL_ACTIONS: tuple[str, ...] = ("memory.rebuild_index", "skills.sync", "telemetry.counter")
 
+
 class ProjectHookSpec(WalkModel):
     name: HookName
     id: str = Field(pattern=r"^project\.[a-z0-9-]+$")
@@ -863,18 +976,24 @@ class ProjectHookSpec(WalkModel):
     enabled: bool = True
     # exactly one of command / kernel_action (model_validator)
 
+
 class ProjectHooksFile(WalkModel):
     hooks: list[ProjectHookSpec] = Field(default_factory=list)
+
     @classmethod
     def load(cls, path: Path) -> "ProjectHooksFile": ...
     def to_hooks(self) -> list[Hook]: ...
+
 
 def hook_env(ctx: HookContext, base_env: Mapping[str, str]) -> dict[str, str]:
     """base_env + WALK_HOOK_NAME, WALK_HOOK_PROJECT_KEY, WALK_HOOK_WORK_ITEM_ID, WALK_HOOK_RUN_ID, WALK_HOOK_PHASE_ID,
     WALK_HOOK_ROLE, WALK_HOOK_AT, WALK_HOOK_PAYLOAD (JSON)."""
 
+
 class DefaultHookManager:
-    def set_kernel_actions(self, actions: Mapping[str, Callable[[HookContext], Awaitable[None]]]) -> None: ...
+    def set_kernel_actions(
+        self, actions: Mapping[str, Callable[[HookContext], Awaitable[None]]]
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -948,13 +1067,25 @@ See INTERFACES.md §1.10 `PermissionManager`; DOMAIN-MODEL §4.5 `PermissionRule
 # src/walk/permissions/loader.py
 class PermissionsFile(WalkModel):
     rules: list[PermissionRule] = Field(default_factory=list)
-    protected_actions: list[ProtectedAction] = Field(default_factory=list)   # project may ADD, never remove
+    protected_actions: list[ProtectedAction] = Field(
+        default_factory=list
+    )  # project may ADD, never remove
 
-DEFAULT_PROTECTED_ACTIONS: tuple[str, ...] = ("git.merge_protected", "git.delete_branch_protected", "repo.delete_data",
-    "store.publish", "credentials.change", "monetization.change", "jira.delete", "permissions.alter")
 
-def load_defaults() -> PermissionsFile: ...                       # package resource defaults.yaml
-def load_project_rules(path: Path) -> PermissionsFile: ...        # [] when absent
+DEFAULT_PROTECTED_ACTIONS: tuple[str, ...] = (
+    "git.merge_protected",
+    "git.delete_branch_protected",
+    "repo.delete_data",
+    "store.publish",
+    "credentials.change",
+    "monetization.change",
+    "jira.delete",
+    "permissions.alter",
+)
+
+
+def load_defaults() -> PermissionsFile: ...  # package resource defaults.yaml
+def load_project_rules(path: Path) -> PermissionsFile: ...  # [] when absent
 def merge_narrowing(defaults: PermissionsFile, project: PermissionsFile) -> PermissionsFile:
     """Project rule with effect DENY/REQUIRE_APPROVAL: added. Project rule with effect ALLOW: accepted only if an identical
     (role, tool) ALLOW exists in defaults (acts as a restatement, may remove command/path patterns = narrowing) — otherwise ConfigError.
@@ -1060,12 +1191,15 @@ class DefaultPermissionManager:
     async def expire_due(self, now: datetime) -> list[ApprovalRequest]:
         """PENDING with expires_at <= now → EXPIRED; ledger APPROVAL_DECIDED outcome=DENIED payload {'reason': 'expired'}."""
 
+
 # src/walk/runtime/approvals.py
 class EventApprovalWaiter:  # implements ApprovalWaiter protocol (E01-S26)
     """In-process registry of asyncio.Events keyed by ApprovalRequestId; resolved by decide_approval through a callback."""
+
     def register(self, approval_id: ApprovalRequestId) -> None: ...
     async def wait(self, approval_id: ApprovalRequestId, timeout_s: int) -> ApprovalState:
         """Returns APPROVED/DENIED/EXPIRED; timeout → EXPIRED (and the request is expired in the DB)."""
+
     def resolve(self, approval_id: ApprovalRequestId, state: ApprovalState) -> None: ...
 ```
 CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `walk approvals [--pending] [--json]`.
@@ -1144,16 +1278,23 @@ See INTERFACES.md §1.8 `MemoryManager.approve_artifact`, `verify_approved_artif
 ```python
 # src/walk/memory/approved.py
 APPROVED_DIR = "approved"
+
+
 def hash_payload(root: Path, payload_paths: list[str]) -> str:
     """SHA-256 over sorted (relative path, file bytes) pairs; raises ConfigError if a path is missing."""
+
+
 def approved_doc(artifact: ApprovedArtifact, actor: Actor, now: datetime) -> MemoryDocument:
     """type=approved, id=artifact.id, sections: Summary, Scope, Related Requirements, Payload, Change History;
     front_matter.extra = {kind, scope, approved_by, content_sha256, supersedes, change_request_decision}."""
 
+
 class ApprovedArtifactRepository:
     async def upsert(self, uow: UnitOfWork, artifact: ApprovedArtifact) -> None: ...
     async def get(self, artifact_id: ApprovedArtifactId) -> ApprovedArtifact: ...
-    async def list(self, *, status: ApprovalStatus | None = None, scope: str | None = None) -> list[ApprovedArtifact]: ...
+    async def list(
+        self, *, status: ApprovalStatus | None = None, scope: str | None = None
+    ) -> list[ApprovedArtifact]: ...
 ```
 CLI: `walk artifacts list [--json]`; `walk artifacts approve PATH... --kind KIND --title TITLE --scope SCOPE [--supersedes APR_ID]` (actor USER; copies payload files into `.ai/approved/APR-NNNN/`); `walk artifacts verify` (exit 0 ok / 2 drift).
 
@@ -1229,16 +1370,24 @@ The user can pause/resume the project or one agent, cancel a work item, change p
 See INTERFACES.md §1.1 `Orchestrator.pause/resume/cancel_work_item`. Deltas:
 ```python
 class DefaultOrchestrator:
-    async def set_priority(self, work_item_id: WorkItemId, priority: Priority, *, actor: str) -> WorkItem: ...
+    async def set_priority(
+        self, work_item_id: WorkItemId, priority: Priority, *, actor: str
+    ) -> WorkItem: ...
     async def set_autonomy(self, level: AutonomyLevel, *, actor: str) -> Project: ...
+
 
 # src/walk/agents/policy_file.py
 class PoliciesFile(WalkModel):
     roles: dict[AgentRole, RuntimePolicy]
+
     @classmethod
     def load(cls, path: Path) -> "PoliciesFile": ...
     def write(self, path: Path) -> Path: ...
-def update_model_policy(path: Path, role: AgentRole, preferred: list[ModelId], fallback: list[ModelId]) -> RuntimePolicy: ...
+
+
+def update_model_policy(
+    path: Path, role: AgentRole, preferred: list[ModelId], fallback: list[ModelId]
+) -> RuntimePolicy: ...
 ```
 CLI (INTERFACES §6): `walk pause [--agent RUN_ID]`, `walk resume [--agent RUN_ID]`, `walk work cancel ID --reason TEXT`, `walk work priority ID P0|P1|P2|P3`, `walk policy set-model ROLE --preferred M... [--fallback M...]`, `walk policy set-autonomy 0|1|2|3`.
 
@@ -1315,22 +1464,51 @@ Repository boundary, protected branches, secret isolation and command restrictio
 See INTERFACES.md §1.13 `BoundaryAuditor.audit`, §2.3 `GitProvider.install_guard_hooks`, `GitProvider.push`.
 ```python
 # src/walk/runtime/boundary.py
-DEFAULT_FORBIDDEN_PATHS: tuple[str, ...] = (".ai/**", ".walk/**", "**/*.env", "ProjectSettings/*Secrets*", ".ai/agents/**", ".ai/approved/**")
+DEFAULT_FORBIDDEN_PATHS: tuple[str, ...] = (
+    ".ai/**",
+    ".walk/**",
+    "**/*.env",
+    "ProjectSettings/*Secrets*",
+    ".ai/agents/**",
+    ".ai/approved/**",
+)
 EVIDENCE_EXCEPTIONS: tuple[str, ...] = (".ai/features/*/evidence/**", ".ai/bugs/*/evidence/**")
+
+
 class DefaultBoundaryAuditor:
-    def __init__(self, *, forbidden: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS, exceptions: tuple[str, ...] = EVIDENCE_EXCEPTIONS) -> None: ...
-    def audit(self, worktree_path: str, changed_files: list[str], allowed_paths: list[str], forbidden_paths: list[str]) -> list[str]:
+    def __init__(
+        self,
+        *,
+        forbidden: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS,
+        exceptions: tuple[str, ...] = EVIDENCE_EXCEPTIONS,
+    ) -> None: ...
+    def audit(
+        self,
+        worktree_path: str,
+        changed_files: list[str],
+        allowed_paths: list[str],
+        forbidden_paths: list[str],
+    ) -> list[str]:
         """violations: path outside worktree (absolute/..), path matching forbidden (unless matching an exception),
         path not matching any allowed glob, or 'SECRET:<path>' when contains_secret(file) for added/modified files."""
 
+
 # src/walk/memory/secrets.py
 SECRET_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("anthropic_key", r"sk-ant-[A-Za-z0-9_-]{20,}"), ("openai_key", r"sk-[A-Za-z0-9]{32,}"),
-    ("aws_access_key", r"AKIA[0-9A-Z]{16}"), ("github_token", r"gh[pousr]_[A-Za-z0-9]{36,}"),
-    ("jira_token", r"ATATT3[A-Za-z0-9_-]{20,}"), ("private_key", r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    ("generic_assignment", r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"][^'\"\s]{12,}['\"]"),
+    ("anthropic_key", r"sk-ant-[A-Za-z0-9_-]{20,}"),
+    ("openai_key", r"sk-[A-Za-z0-9]{32,}"),
+    ("aws_access_key", r"AKIA[0-9A-Z]{16}"),
+    ("github_token", r"gh[pousr]_[A-Za-z0-9]{36,}"),
+    ("jira_token", r"ATATT3[A-Za-z0-9_-]{20,}"),
+    ("private_key", r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    (
+        "generic_assignment",
+        r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"][^'\"\s]{12,}['\"]",
+    ),
 )
-def contains_secret(text: str) -> str | None: ...   # pattern name or None
+
+
+def contains_secret(text: str) -> str | None: ...  # pattern name or None
 ```
 Guard hook scripts: `pre-commit.sh` aborts when current branch matches any protected pattern (`main`, `release/*` expanded from `WALK_PROTECTED_BRANCHES` written into the script at install time); `pre-push.sh` aborts when any pushed ref matches a protected pattern. Both exit 1 with message `walk: protected branch <name>`.
 
@@ -1406,15 +1584,22 @@ class DoctorReport(WalkModel):
     skills: DriftReport
     approved_drift: list[ApprovedArtifactId]
     version_pins_ok: bool
-    lints: list[str]            # empty when clean
+    lints: list[str]  # empty when clean
     fixes_applied: list[str]
     exit_code: int
 
+
 # src/walk/cli/lints.py
 PROVIDER_NAME_PATTERN = r"(?i)\b(claude|anthropic|codex|openai|gpt|sonnet|opus)\b"
-def lint_constitutions_provider_names(constitutions: list[Constitution]) -> list[str]: ...   # ADR-0013 D-5
+
+
+def lint_constitutions_provider_names(
+    constitutions: list[Constitution],
+) -> list[str]: ...  # ADR-0013 D-5
 def lint_models_yaml(registry: CapabilityRegistry) -> list[str]:
     """every enabled model: prices > 0, supports_effort_levels non-empty, context_window_tokens > max_output_tokens > 0."""
+
+
 async def run_import_linter(runner: SubprocessRunner, repo_root: Path) -> list[str]:
     """`lint-imports --config pyproject.toml`; returns broken contract lines; [] if clean; ConfigError if tool missing."""
 ```
@@ -1483,6 +1668,8 @@ One end-to-end test module proves the Production Kit: a fresh repository is boot
 @pytest.fixture
 def bootstrapped_repo(tmp_game_repo: Path) -> Path:
     """tmp_game_repo (E01) + GDD/combat.md + `walk bootstrap --provider local --key DEMO --name Demo --yes` executed."""
+
+
 @pytest.fixture
 def kernel_with_fakes(bootstrapped_repo: Path) -> KernelHandle:
     """build_kernel(KernelSettings(repo_path=…), overrides=KernelOverrides(adapters={'fake-codex': FakeModelAdapter(...), 'fake-claude': FakeModelAdapter(...)}, keyring_backend=FakeKeyringBackend()))."""

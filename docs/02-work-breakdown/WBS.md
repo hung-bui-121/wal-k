@@ -112,7 +112,7 @@ Ledger events are written **only** at the ARCHITECTURE §4.3 write points, insid
 `src/walk/cli/app.py` (typer root `app`, global `--repo/--json/--verbose`, `version` command), `src/walk/cli/composition.py`, `src/walk/cli/output.py` (table/JSON rendering, exit-code mapping per INTERFACES §6), `src/walk/cli/ipc.py` (`NEW NAME: CommandClient` — inserts `commands` rows, polls `command_results` every 250 ms, ADR-0009 D-3), and one `src/walk/cli/cmd_<group>.py` per command group (`db`, `ledger`, `work`, `phase`, `run`, `status`, `cost`, `memory`, `skills`, `approvals`, `policy`, `handover`, `runs`, `decisions`, `debates`, `report`, `bootstrap`, `doctor`, `feature`, `artifacts`, `improvement`, `rc`). `CommandConsumer` (daemon side) lives in `src/walk/orchestrator/commands.py` (`NEW NAME:` placement — ARCHITECTURE §3.1 names it without a package). The kernel lock lives in `src/walk/persistence/lock.py::KernelLock` (`NEW NAME:`).
 
 ### 3.8 Dependencies (pyproject, E01-S01)
-Runtime: `pydantic>=2`, `typer`, `pyyaml`, `httpx`, `python-ulid`, `keyring`, `jinja2` (`NEW NAME:` dependency — ADR-0004 D-4 prescribes `.md.j2` templates but ADR-0001 omits jinja2; story E01-S01 records it in ADR-0014 together with the spike results), `claude-agent-sdk` (optional extra `claude`). Dev: `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`, `import-linter`, `types-PyYAML`. No other dependency without an ADR.
+Runtime: `pydantic>=2`, `typer`, `pyyaml`, `httpx`, `python-ulid`, `keyring`, `jinja2` (`NEW NAME:` dependency — ADR-0004 D-4 prescribes `.md.j2` templates but ADR-0001 omits jinja2; story E01-S01 records it in ADR-0014 together with the spike results), `claude-agent-sdk` (optional extra `claude`), `mcp` (official MCP Python SDK, added by E08-S10 per ADR-0017). Dev: `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy`, `import-linter`, `types-PyYAML`. No other dependency without an ADR.
 
 ### 3.9 Templates and purposes
 `src/walk/agents/templates/<purpose>.md.j2` for every `AgentRun.purpose` value: `IMPLEMENT, DESIGN, REVIEW, QC, TRIAGE, DEBATE, PLAN, ANALYSIS, RETRO`. E01-S18 creates all nine with the common §40-ordered skeleton; E03-S06 enriches `IMPLEMENT, REVIEW, QC, PLAN, DESIGN, TRIAGE`; E04-S14 adds the context-first/stale-verification/context-update instructions; E05 enriches `DEBATE`; E07 `ANALYSIS`/`RETRO`.
@@ -305,7 +305,7 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E07-R01 | Review E07 | |
 
 ### E08 — Art / Design (§135 Stage 8)
-**Goal.** Design Leader and Art Director roles, asset generation providers with provenance and validation, Unity MCP tool kind.
+**Goal.** Design Leader and Art Director roles, asset generation providers with provenance and validation (OpenArt through its remote MCP server, ADR-0017), Unity inspection tools over the batchmode CLI (ADR-0015).
 **Requirements.** §10.4–§10.5, §33 (art kinds), §78–§80, §6.5 (ART/DESIGN dimensions).
 **Epic gate.** `tests/e2e/test_e08_gate.py`: a feature requiring an asset triggers `asset.generate` via a fake `AssetProvider`, the asset is validated by `FakeUnityProvider.validate_assets`, provenance file + evidence recorded, fake ART_DIRECTOR rejects then approves, `ART_COMPLETE` dimension set, asset registered as `ApprovedArtifact(kind=ASSET)`.
 
@@ -314,13 +314,14 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E08-X01 | Refine E08 against codebase | |
 | E08-S01 | ART_DIRECTOR constitution and design/art routing | §10.5 role |
 | E08-S02 | `AssetProvider` implementation: Meshy | §78 |
-| E08-S03 | `AssetProvider` implementation: OpenArt | §78 |
+| E08-S03 | `AssetProvider` implementation: OpenArt over remote MCP | §78, ADR-0017 |
 | E08-S04 | `asset.generate` kernel tool, idempotency, `EXTERNAL_CREDITS` cost | §84 assets cost |
 | E08-S05 | `AssetProvenance` files and evidence | §80 |
 | E08-S06 | Asset validation via `UnityProvider.validate_assets` and `com.walk.ci` | §79 |
 | E08-S07 | Art Director review flow and ART/DESIGN done dimensions | §6.5 |
-| E08-S08 | Unity MCP provider (`ToolKind.MCP`) | ADR-0009 D-6 deferred item |
+| E08-S08 | Unity inspection tools via batchmode CLI (screenshot, console, asset inspection) | ADR-0015 |
 | E08-S09 | Epic gate: asset generation → validation → approval (e2e) | Gate scenario above |
+| E08-S10 | MCP streamable-HTTP client and OAuth login (`walk auth login`) | ADR-0017 |
 | E08-R01 | Review E08 | |
 
 ### E09 — Production Intelligence (§135 Stage 9)
@@ -511,13 +512,14 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E08-X01 | Refine E08 against codebase | docs | E07-R01 | LOW | TODO |
 | E08-S01 | ART_DIRECTOR constitution and design/art routing | feat | E08-X01, E05-S06 | MEDIUM | TODO |
 | E08-S02 | `AssetProvider` implementation: Meshy | feat | E08-X01, E02-S01 | HIGH | TODO |
-| E08-S03 | `AssetProvider` implementation: OpenArt | feat | E08-S02 | MEDIUM | BLOCKED |
+| E08-S03 | `AssetProvider` implementation: OpenArt over remote MCP | feat | E08-S04, E08-S10 | MEDIUM | TODO |
 | E08-S04 | `asset.generate` kernel tool, idempotency, `EXTERNAL_CREDITS` cost | feat | E08-S02, E01-S26 | MEDIUM | TODO |
 | E08-S05 | `AssetProvenance` files and evidence | feat | E08-S04 | MEDIUM | TODO |
 | E08-S06 | Asset validation via `UnityProvider.validate_assets` and `com.walk.ci` | feat | E08-S04, E03-S10 | MEDIUM | TODO |
 | E08-S07 | Art Director review flow and ART/DESIGN done dimensions | feat | E08-S01, E08-S06, E03-S17 | MEDIUM | TODO |
-| E08-S08 | Unity MCP provider (`ToolKind.MCP`) | feat | E08-X01, E01-S14 | HIGH | TODO |
+| E08-S08 | Unity inspection tools via batchmode CLI (screenshot, console, asset inspection) | feat | E08-S06, E01-S14 | HIGH | TODO |
 | E08-S09 | Epic gate: asset generation → validation → approval (e2e) | feat | E08-S05, E08-S07 | MEDIUM | TODO |
+| E08-S10 | MCP streamable-HTTP client and OAuth login (`walk auth login`) | feat | E08-X01, E02-S01 | HIGH | TODO |
 | E08-R01 | Review E08 | docs | E08-S09 | MEDIUM | TODO |
 | E09-X01 | Refine E09 against codebase | docs | E07-R01 | LOW | TODO |
 | E09-S01 | `ReportQuery` and task/feature reports | feat | E09-X01 | MEDIUM | TODO |
@@ -551,7 +553,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E11-S08 | Epic gate: RC1 reject → RC2 release (e2e) | feat | E11-S04, E11-S06, E11-S07 | MEDIUM | TODO |
 | E11-R01 | Review E11 | docs | E11-S08 | MEDIUM | TODO |
 
-Totals: E01 31 stories + 1 review · E02 16 + 1 · E03 20 + 1 · E04 15 + 1 · E05 1 refine + 10 + 1 · E06 1 + 8 + 1 · E07 1 + 10 + 1 · E08 1 + 9 + 1 · E09 1 + 7 + 1 · E10 1 + 10 + 1 · E11 1 + 8 + 1.
+Totals: E01 31 stories + 1 review · E02 16 + 1 · E03 20 + 1 · E04 15 + 1 · E05 1 refine + 10 + 1 · E06 1 + 8 + 1 · E07 1 + 10 + 1 · E08 1 + 10 + 1 · E09 1 + 7 + 1 · E10 1 + 10 + 1 · E11 1 + 8 + 1.
 
 ---
 
@@ -645,7 +647,7 @@ Rule: two stories may run concurrently only when their Files tables are disjoint
 | E05 | {S01→S02} ∥ {S06→S07}; {S03→S04→S05} ∥ {S09}; S11 → S12 sequential; S11 not concurrent with S03/S06/S08, S12 not with S08 (shared `policies.yaml`, `policy_loader.py`, `composition.py`, `output_applier.py`) |
 | E06 | {S01→S02} ∥ {S03→S05→S06}; {S04} ∥ {S05} |
 | E07 | {S01} ∥ {S02→S03→S04→S05}; {S06} ∥ {S07} ∥ {S08} ∥ {S09} |
-| E08 | {S01} ∥ {S02→S03} ∥ {S08}; {S05} ∥ {S06} |
+| E08 | {S01} ∥ {S02→S04} ∥ {S10}; {S05} ∥ {S06} after S04; S03 after S04 and S10; S08 after S06 |
 | E09 | {S01→S02} ∥ {S03→S04} ∥ {S06} |
 | E10 | {S01→S02} ∥ {S03→S06}; {S07} ∥ {S08} ∥ {S09} |
 | E11 | {S01→S05} ∥ {S02→S03→S04} ∥ {S07} |

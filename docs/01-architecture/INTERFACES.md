@@ -41,7 +41,9 @@ class Orchestrator(Protocol):
     async def request_phase_review(self, phase_id: PhaseId) -> PhaseEvidencePackage:
         """ACTIVE → EVIDENCE_REVIEW → USER_GATE. Builds evidence package (§69), retrospective (§115)."""
 
-    async def decide_phase(self, phase_id: PhaseId, decision: PhaseDecision, feedback: str | None, actor: str) -> Phase:
+    async def decide_phase(
+        self, phase_id: PhaseId, decision: PhaseDecision, feedback: str | None, actor: str
+    ) -> Phase:
         """§70. USER only. GO→COMPLETE(+ next ACTIVE); REWORK→REWORK (feedback → work items §71);
         CHANGE→CHANGE_ANALYSIS (impact analysis §72); STOP→STOPPED + project paused. Ledger PHASE_GATE_DECISION."""
 
@@ -78,7 +80,9 @@ class TaskRouter(Protocol):
 ```python
 class RouteDecision(FrozenModel):
     role: AgentRole
-    purpose: Literal["IMPLEMENT", "DESIGN", "REVIEW", "QC", "TRIAGE", "DEBATE", "PLAN", "ANALYSIS", "RETRO"]
+    purpose: Literal[
+        "IMPLEMENT", "DESIGN", "REVIEW", "QC", "TRIAGE", "DEBATE", "PLAN", "ANALYSIS", "RETRO"
+    ]
     profile: TaskProfile
     cross_model_review: bool
 
@@ -112,8 +116,15 @@ class AgentManager(Protocol):
     def load_runtime_policy(self, role: AgentRole) -> RuntimePolicy:
         """Kernel default merged with `.ai/agents/policies.yaml`."""
 
-    async def instantiate(self, role: AgentRole, item: WorkItem, model_id: ModelId, effort: Effort, budget_ids: list[str],
-                          available_env_keys: set[str]) -> AgentInstance:
+    async def instantiate(
+        self,
+        role: AgentRole,
+        item: WorkItem,
+        model_id: ModelId,
+        effort: Effort,
+        budget_ids: list[str],
+        available_env_keys: set[str],
+    ) -> AgentInstance:
         """§9 assembly (the caller passes RoutingDecision.model_id/effort so agents stays below model_router).
         Merges constitution.tool_permissions into PermissionManager.rules_for(role, extra=…). Validates required skills/tools
         available (§29) else raises ConfigError."""
@@ -150,13 +161,14 @@ class Transition(FrozenModel):
     from_state: WorkItemState
     event: str
     to_state: WorkItemState
-    guards: tuple[str, ...]                      # guard names (registered callables)
+    guards: tuple[str, ...]  # guard names (registered callables)
     allowed_roles: tuple[AgentRole, ...]
-    hooks: tuple[HookName, ...]                  # fired after commit, in order
+    hooks: tuple[HookName, ...]  # fired after commit, in order
 
 
 class TransitionTable(FrozenModel):
     """BehaviorVersion kind=WORKFLOW, name in {'feature_workflow','story_workflow','bug_workflow','phase_workflow','rc_workflow'}."""
+
     name: str
     version: str
     transitions: tuple[Transition, ...]
@@ -167,20 +179,32 @@ class WorkflowManager(Protocol):
 
     def table_for(self, kind: WorkItemKind) -> TransitionTable: ...
 
-    async def create(self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None) -> WorkItem:
+    async def create(
+        self, draft: WorkItemDraft | BugDraft, *, actor: AgentRole, phase_id: PhaseId | None
+    ) -> WorkItem:
         """Allocates id (id_sequences), persists, ledger WORK_ITEM_CREATED; does NOT call WorkProvider (OutputApplier does)."""
 
     async def get(self, work_item_id: WorkItemId) -> WorkItem: ...
 
-    async def query(self, *, states: list[WorkItemState] | None = None, kinds: list[WorkItemKind] | None = None,
-                    phase_id: PhaseId | None = None, parent_id: WorkItemId | None = None) -> list[WorkItem]: ...
+    async def query(
+        self,
+        *,
+        states: list[WorkItemState] | None = None,
+        kinds: list[WorkItemKind] | None = None,
+        phase_id: PhaseId | None = None,
+        parent_id: WorkItemId | None = None,
+    ) -> list[WorkItem]: ...
 
-    async def raise_event(self, work_item_id: WorkItemId, event: str, ctx: TransitionContext) -> WorkItemTransition:
+    async def raise_event(
+        self, work_item_id: WorkItemId, event: str, ctx: TransitionContext
+    ) -> WorkItemTransition:
         """Finds the Transition for (item.state, event); evaluates guards; checks actor_role ∈ allowed_roles;
         in ONE transaction: update state + state_version, insert work_item_transitions row, ledger WORK_ITEM_TRANSITION;
         then fires ON_STATE_TRANSITION and the transition's hooks. Raises GuardRejected / PermissionDenied."""
 
-    async def apply_external_transition(self, external_ref: str, external_status: str, event: WorkProviderEvent) -> WorkItemTransition | None:
+    async def apply_external_transition(
+        self, external_ref: str, external_status: str, event: WorkProviderEvent
+    ) -> WorkItemTransition | None:
         """ARCHITECTURE.md §3.3. Maps status → state → event via provider status map; rejected → EXTERNAL_REJECTED + resync."""
 
     async def ready_items(self, phase_id: PhaseId | None) -> list[WorkItem]:
@@ -190,7 +214,13 @@ class WorkflowManager(Protocol):
         """§58 checks: contract.goal, acceptance_criteria non-empty, dependencies COMPLETE, design approved if DESIGN required,
         required assets available, constraints known. Failing → BLOCKED with reason."""
 
-    async def set_done_dimension(self, feature_id: FeatureId, dimension: DoneDimension, done: bool, evidence_id: EvidenceId | None) -> Feature:
+    async def set_done_dimension(
+        self,
+        feature_id: FeatureId,
+        dimension: DoneDimension,
+        done: bool,
+        evidence_id: EvidenceId | None,
+    ) -> Feature:
         """§6.5."""
 
     async def children_states(self, feature_id: FeatureId) -> dict[WorkItemId, WorkItemState]:
@@ -203,7 +233,9 @@ class WorkflowManager(Protocol):
 
     # phases / RC
     async def phase_event(self, phase_id: PhaseId, event: str, ctx: TransitionContext) -> Phase: ...
-    async def rc_event(self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext) -> ReleaseCandidate: ...
+    async def rc_event(
+        self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext
+    ) -> ReleaseCandidate: ...
     async def gdd_coverage(self, project_key: ProjectKey) -> dict[str, float]:
         """§74: derived from traceability: COMPLETE stories with gdd_refs / all stories with gdd_refs, per GDD area."""
 ```
@@ -218,8 +250,16 @@ class ModelRouter(Protocol):
 
     def adapter_for(self, model_id: ModelId) -> "ModelAdapter": ...
 
-    async def select(self, role: AgentRole, policy: ModelPolicy, profile: TaskProfile, effort: Effort,
-                     *, exclude: list[ModelId] = (), task_override: ModelId | None = None) -> RoutingDecision:
+    async def select(
+        self,
+        role: AgentRole,
+        policy: ModelPolicy,
+        profile: TaskProfile,
+        effort: Effort,
+        *,
+        exclude: list[ModelId] = (),
+        task_override: ModelId | None = None,
+    ) -> RoutingDecision:
         """INTERFACES §5.3 steps 1–4: ordered candidates (override, preferred, fallback) minus restricted/disabled/excluded;
         reject on capability (§16), context window, effort support, health; first survivor wins. Ledger MODEL_SELECTED by caller."""
 
@@ -241,11 +281,24 @@ class ModelRouter(Protocol):
 class EffortManager(Protocol):
     """§17–§19. Hosted by walk.effort."""
 
-    def resolve(self, policy: EffortPolicy, item: WorkItem, state: WorkItemState, escalation_bump: int, budget_headroom: dict[BudgetDimension, float]) -> EffortResolution:
+    def resolve(
+        self,
+        policy: EffortPolicy,
+        item: WorkItem,
+        state: WorkItemState,
+        escalation_bump: int,
+        budget_headroom: dict[BudgetDimension, float],
+    ) -> EffortResolution:
         """INTERFACES §5.2 algorithm. Pure."""
 
-    async def request_change(self, run_id: RunId, current: Effort, request: EffortRequest, policy: EffortPolicy,
-                             headroom: dict[BudgetDimension, float]) -> Effort:
+    async def request_change(
+        self,
+        run_id: RunId,
+        current: Effort,
+        request: EffortRequest,
+        policy: EffortPolicy,
+        headroom: dict[BudgetDimension, float],
+    ) -> Effort:
         """§19: auto-approve if within [min,max] and budget headroom allows (upgrade) else ApprovalRequest(ORCHESTRATOR).
         Fires ON_EFFORT_CHANGE; ledger EFFORT_CHANGED. Returns effective effort for the *next* run (effort is fixed per run)."""
 ```
@@ -256,20 +309,30 @@ class EffortManager(Protocol):
 class BudgetManager(Protocol):
     """§20. Hosted by walk.budgets."""
 
-    async def ensure(self, scope: BudgetScope, scope_id: str, policy: BudgetPolicy | None, limits: dict[BudgetDimension, float] | None) -> list[Budget]:
+    async def ensure(
+        self,
+        scope: BudgetScope,
+        scope_id: str,
+        policy: BudgetPolicy | None,
+        limits: dict[BudgetDimension, float] | None,
+    ) -> list[Budget]:
         """Create missing Budget rows for a scope (idempotent)."""
 
     async def applicable(self, subject: BudgetSubject) -> list[Budget]:
         """All budgets whose scope covers the subject: GLOBAL, PROJECT, PHASE(subject.phase_id), ROLE(subject.role), TASK(subject.work_item_id)."""
 
-    async def meter(self, subject: BudgetSubject, dimension: BudgetDimension, quantity: float) -> "BudgetVerdict":
+    async def meter(
+        self, subject: BudgetSubject, dimension: BudgetDimension, quantity: float
+    ) -> "BudgetVerdict":
         """Adds quantity to every applicable budget in one transaction. Returns verdict: OK | SOFT_THRESHOLD | EXHAUSTED(hard_action).
         Fires ON_BUDGET_THRESHOLD once per budget; ON_BUDGET_EXHAUSTED on hard limit. Ledger BUDGET_EVENT."""
 
     async def headroom(self, subject: BudgetSubject) -> dict[BudgetDimension, float]:
         """min over applicable budgets of (limit - consumed) per dimension."""
 
-    async def can_afford(self, scope_ids: list[str], dimension: BudgetDimension, quantity: float) -> bool: ...
+    async def can_afford(
+        self, scope_ids: list[str], dimension: BudgetDimension, quantity: float
+    ) -> bool: ...
 
 
 class BudgetVerdict(FrozenModel):
@@ -286,8 +349,13 @@ class CostManager(Protocol):
         Token→USD conversion happens in `walk.model_router.costing.usage_to_cost_record(usage, descriptor, subject)`
         (model_router may import budgets; not vice versa) and is called by runtime.AgentExecutor on USAGE events."""
 
-    async def cost_of(self, *, work_item_id: WorkItemId | None = None, phase_id: PhaseId | None = None,
-                      project_key: ProjectKey | None = None) -> dict[CostCategory, float]:
+    async def cost_of(
+        self,
+        *,
+        work_item_id: WorkItemId | None = None,
+        phase_id: PhaseId | None = None,
+        project_key: ProjectKey | None = None,
+    ) -> dict[CostCategory, float]:
         """§85 Cost per Task/Story/Feature (roll-up through parent_id)/Phase/Project."""
 ```
 
@@ -300,7 +368,9 @@ class ContextManager(Protocol):
     async def build(self, request: ContextRequest) -> ContextBundle:
         """INTERFACES §5.4 algorithm. Fires ON_CONTEXT_STALE for any POSSIBLY_STALE/INVALID item included."""
 
-    def token_budget_for(self, effort: Effort, context_window_tokens: int, max_output_tokens: int) -> int:
+    def token_budget_for(
+        self, effort: Effort, context_window_tokens: int, max_output_tokens: int
+    ) -> int:
         """LOW 20%, MEDIUM 35%, HIGH 50%, VERY_HIGH 60% of context_window_tokens minus max_output_tokens (ADR-0012).
         Caller passes the numbers from ModelDescriptor (context stays below model_router)."""
 ```
@@ -321,15 +391,21 @@ class MemoryManager(Protocol):
     async def read_handover(self, handover_id: HandoverId) -> MemoryDocument:
         """Raw document; `walk.agents.handover.from_document()` converts it to the typed Handover (agents is above memory)."""
 
-    async def write(self, doc: MemoryDocument, *, actor: Actor, head: Sha, branch: str) -> MemoryDocument:
+    async def write(
+        self, doc: MemoryDocument, *, actor: Actor, head: Sha, branch: str
+    ) -> MemoryDocument:
         """Validates front matter, bumps version, stamps freshness (commit=head, timestamp=now), refuses secrets
         (ARCHITECTURE.md §6), refuses writes under approved/ without change authorisation (Invariant 10),
         writes atomically (tmp + rename), updates memory_index, fires ON_CONTEXT_UPDATED, ledger CONTEXT_UPDATED."""
 
-    async def apply_updates(self, updates: list[ContextUpdate], *, actor: Actor, head: Sha, branch: str) -> list[MemoryDocument]:
+    async def apply_updates(
+        self, updates: list[ContextUpdate], *, actor: Actor, head: Sha, branch: str
+    ) -> list[MemoryDocument]:
         """Section-level REPLACE/APPEND from AgentOutput.context_updates; creates FeatureContext/BugContext skeleton if missing."""
 
-    async def write_handover(self, doc: MemoryDocument, *, actor: Actor, head: Sha, branch: str) -> str:
+    async def write_handover(
+        self, doc: MemoryDocument, *, actor: Actor, head: Sha, branch: str
+    ) -> str:
         """Writes `.ai/handovers/HO-NNNN.md` (doc built by `walk.agents.handover.to_document(handover)`); ledger HANDOVER_CREATED.
         The `handovers` table row is written by runtime.CheckpointManager. Returns path."""
 
@@ -339,7 +415,9 @@ class MemoryManager(Protocol):
     async def rebuild_index(self) -> int:
         """Scan `.ai/**/*.md`, parse front matter, upsert memory_index. Returns doc count."""
 
-    async def approve_artifact(self, artifact: ApprovedArtifact, *, actor: Actor) -> ApprovedArtifact:
+    async def approve_artifact(
+        self, artifact: ApprovedArtifact, *, actor: Actor
+    ) -> ApprovedArtifact:
         """§33. Requires actor role ∈ authority.may_approve[kind] or USER. Ledger ARTIFACT_APPROVED."""
 
     async def verify_approved_artifacts(self) -> list[ApprovedArtifactId]:
@@ -355,7 +433,9 @@ class MemoryManager(Protocol):
 class DecisionManager(Protocol):
     """§44, §50–§51, Invariant 5, 8. Hosted by walk.decisions."""
 
-    async def propose(self, proposal: DecisionProposal, *, by: Actor, work_item_id: WorkItemId | None) -> Decision:
+    async def propose(
+        self, proposal: DecisionProposal, *, by: Actor, work_item_id: WorkItemId | None
+    ) -> Decision:
         """Persist as PROPOSED. If proposal.autonomy_level <= proposer authority.max_autonomy_level and category ∈ decision_scope
         → immediately `record()` (Level 0). Else → `escalate()`."""
 
@@ -363,7 +443,14 @@ class DecisionManager(Protocol):
         """Sets ACCEPTED; requires by.role ∈ authority(by.role).decision_scope for category, or USER, or a resolved Debate.
         Writes `.ai/decisions/DEC-NNNN.md`; fires ON_DECISION_RECORDED; ledger DECISION_RECORDED."""
 
-    async def escalate(self, request: EscalationRequest, *, from_role: AgentRole, work_item_id: WorkItemId | None, run_id: RunId | None) -> Escalation:
+    async def escalate(
+        self,
+        request: EscalationRequest,
+        *,
+        from_role: AgentRole,
+        work_item_id: WorkItemId | None,
+        run_id: RunId | None,
+    ) -> Escalation:
         """Creates Escalation; fires ON_ESCALATION; Orchestrator.handle_escalation routes it."""
 
     async def override(self, decision_id: DecisionId, outcome: str, rationale: str) -> Decision:
@@ -372,15 +459,28 @@ class DecisionManager(Protocol):
     async def relevant_for(self, item: WorkItem, affected_systems: list[str]) -> list[Decision]:
         """ACCEPTED decisions linked to the item, its ancestors, or overlapping affected_systems (for context §40 step 3)."""
 
-    def classify_autonomy(self, proposal: DecisionProposal, authority: Authority, escalation_rules: list[EscalationRule]) -> AutonomyLevel:
+    def classify_autonomy(
+        self,
+        proposal: DecisionProposal,
+        authority: Authority,
+        escalation_rules: list[EscalationRule],
+    ) -> AutonomyLevel:
         """§51 classification using the role's escalation_rules + the Level 3 list, bounded by authority.max_autonomy_level."""
 
 
 class DebateManager(Protocol):
     """§45–§46, §133. Hosted by walk.debate."""
 
-    async def open(self, topic: str, category: DecisionCategory, participants: list[AgentRole], *, opened_by: AgentRole,
-                   work_item_id: WorkItemId | None, max_rounds: int | None = None) -> Debate:
+    async def open(
+        self,
+        topic: str,
+        category: DecisionCategory,
+        participants: list[AgentRole],
+        *,
+        opened_by: AgentRole,
+        work_item_id: WorkItemId | None,
+        max_rounds: int | None = None,
+    ) -> Debate:
         """OPEN; allocates budget (REVIEW_LOOPS/COST) ; fires ON_DEBATE_OPENED."""
 
     async def submit_position(self, position: DebatePosition) -> Debate:
@@ -392,7 +492,9 @@ class DebateManager(Protocol):
         (adapter-structured field `agrees_with_role`); ≥ threshold → `resolve()`; else round+1 (≤ max_rounds) → IN_ROUND
         or → ESCALATED_PO (then ESCALATED_USER if no PO) (§46). Fires ON_DEBATE_ROUND_COMPLETE."""
 
-    async def resolve(self, debate_id: DebateId, outcome: str, *, by: Actor, rationale: str) -> Decision:
+    async def resolve(
+        self, debate_id: DebateId, outcome: str, *, by: Actor, rationale: str
+    ) -> Decision:
         """RESOLVED; builds Decision from final positions + evidence; DecisionManager.record; fires ON_DEBATE_RESOLVED."""
 
     async def abandon(self, debate_id: DebateId, reason: str) -> Debate: ...
@@ -412,11 +514,21 @@ class PermissionManager(Protocol):
         """Pure. Most-specific `tool` pattern wins; tie → DENY > REQUIRE_APPROVAL > ALLOW. Shell: command must match an ALLOW
         command_pattern and no DENY pattern. Paths outside worktree → DENY. Protected action → REQUIRE_APPROVAL(approver)."""
 
-    async def request_approval(self, request: ToolCallRequest | Escalation | JsonDict, *, kind: str, approver: Approver,
-                               requested_by: AgentRole, run_id: RunId | None, work_item_id: WorkItemId | None) -> ApprovalRequest:
+    async def request_approval(
+        self,
+        request: ToolCallRequest | Escalation | JsonDict,
+        *,
+        kind: str,
+        approver: Approver,
+        requested_by: AgentRole,
+        run_id: RunId | None,
+        work_item_id: WorkItemId | None,
+    ) -> ApprovalRequest:
         """Persists PENDING; fires ON_PROTECTED_ACTION_REQUESTED; ledger APPROVAL_REQUESTED."""
 
-    async def decide_approval(self, approval_id: ApprovalRequestId, approve: bool, *, by: str, note: str | None) -> ApprovalRequest:
+    async def decide_approval(
+        self, approval_id: ApprovalRequestId, approve: bool, *, by: str, note: str | None
+    ) -> ApprovalRequest:
         """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run."""
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]: ...
@@ -444,10 +556,14 @@ class SkillRegistry(Protocol):
     def for_role(self, role: AgentRole, required: list[SkillName]) -> list[Skill]:
         """role defaults ∪ required; missing required → ConfigError (§29)."""
 
-    async def project_all(self, projectors: list[SkillProjector], worktree_path: str, skills: list[Skill]) -> list[SkillProjection]:
+    async def project_all(
+        self, projectors: list[SkillProjector], worktree_path: str, skills: list[Skill]
+    ) -> list[SkillProjection]:
         """Writes projections into the worktree, records skill_projections rows and `.ai/agents/projections.lock.yaml`."""
 
-    async def check_drift(self, projectors: list[SkillProjector], worktree_path: str) -> DriftReport:
+    async def check_drift(
+        self, projectors: list[SkillProjector], worktree_path: str
+    ) -> DriftReport:
         """Compares on-disk projection hashes to lock; modified = someone edited a projection directly."""
 
 
@@ -458,8 +574,12 @@ class ToolRegistry(Protocol):
     def get(self, name: ToolName) -> ToolSpec: ...
     def available(self, ready_env_keys: set[str]) -> list[ToolSpec]:
         """Tools whose requires_env ⊆ ready_env_keys (keys of EnvironmentManifest components in state READY; passed by caller)."""
-    def for_role(self, allowed: list[ToolName], ready_env_keys: set[str], required: list[ToolName]) -> list[ToolSpec]:
+
+    def for_role(
+        self, allowed: list[ToolName], ready_env_keys: set[str], required: list[ToolName]
+    ) -> list[ToolSpec]:
         """(allowed ∪ required) ∩ available; missing required → ConfigError (§29). `allowed` = RuntimePolicy.allowed_tools."""
+
     def identify(self, command: str) -> ToolSpec | None:
         """Match a shell command to a CLI ToolSpec by command_patterns (for permission + cost attribution)."""
 
@@ -505,7 +625,9 @@ class IntegrationManager(Protocol):
     async def reconcile(self, since: datetime | None) -> int:
         """Poll `work.changes_since(since)` and ingest each; update work_provider_sync. Returns count."""
 
-    async def with_idempotency(self, key: str, operation: str, fn: "Callable[[], Awaitable[str]]") -> str:
+    async def with_idempotency(
+        self, key: str, operation: str, fn: "Callable[[], Awaitable[str]]"
+    ) -> str:
         """If key exists → return stored result_ref; else run fn, store (key, result_ref) in the caller's transaction."""
 ```
 
@@ -515,14 +637,18 @@ class IntegrationManager(Protocol):
 class CheckpointManager(Protocol):
     """§41, §54, §89; ADR-0002. Hosted by walk.runtime."""
 
-    async def checkpoint(self, run: AgentRun, kind: CheckpointKind, *, handover: Handover | None = None) -> Checkpoint:
+    async def checkpoint(
+        self, run: AgentRun, kind: CheckpointKind, *, handover: Handover | None = None
+    ) -> Checkpoint:
         """1) WIP commit on run.branch (`wip(<work_item>): checkpoint <seq>`; skipped if clean) via GitProvider (idempotent key);
         2) insert checkpoints row; 3) if handover given → MemoryManager.write_handover; 4) fire ON_AGENT_CHECKPOINT; ledger CHECKPOINT_CREATED."""
 
     async def latest(self, run_id: RunId) -> Checkpoint | None: ...
     async def latest_for_item(self, work_item_id: WorkItemId) -> Checkpoint | None: ...
 
-    async def build_handover(self, run: AgentRun, reason: str, partial_output: AgentOutput | None) -> Handover:
+    async def build_handover(
+        self, run: AgentRun, reason: str, partial_output: AgentOutput | None
+    ) -> Handover:
         """From run's accumulated findings/changes/decisions + git diff names; never from model transcript (§22)."""
 
     async def interrupted_runs(self, current_instance: str) -> list[AgentRun]: ...
@@ -531,8 +657,16 @@ class CheckpointManager(Protocol):
 class AgentExecutor(Protocol):
     """Runs AgentRun tasks. Hosted by walk.runtime (not a §125 service; the engine behind Orchestrator)."""
 
-    async def start(self, agent: AgentInstance, item: WorkItem, purpose: str, *, handover: Handover | None = None,
-                    parent_run_id: RunId | None = None, debate: Debate | None = None) -> AgentRun:
+    async def start(
+        self,
+        agent: AgentInstance,
+        item: WorkItem,
+        purpose: str,
+        *,
+        handover: Handover | None = None,
+        parent_run_id: RunId | None = None,
+        debate: Debate | None = None,
+    ) -> AgentRun:
         """ARCHITECTURE.md §3.2 steps 3–7. Returns immediately with RUNNING run; completion wakes the orchestrator."""
 
     async def resume_native(self, checkpoint: Checkpoint) -> AgentRun:
@@ -585,7 +719,13 @@ class SandboxManager(Protocol):
 
 
 class BoundaryAuditor(Protocol):
-    def audit(self, worktree_path: str, changed_files: list[str], allowed_paths: list[str], forbidden_paths: list[str]) -> list[str]:
+    def audit(
+        self,
+        worktree_path: str,
+        changed_files: list[str],
+        allowed_paths: list[str],
+        forbidden_paths: list[str],
+    ) -> list[str]:
         """Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .)."""
 ```
 
@@ -598,12 +738,25 @@ class LedgerManager(Protocol):
     async def append(self, event: LedgerEvent) -> LedgerEvent:
         """Insert; returns event with seq. Participates in the caller's UnitOfWork when provided."""
 
-    async def query(self, *, kinds: list[LedgerEventKind] | None = None, work_item_id: WorkItemId | None = None, run_id: RunId | None = None,
-                    phase_id: PhaseId | None = None, since: datetime | None = None, until: datetime | None = None, limit: int = 1000) -> list[LedgerEvent]: ...
+    async def query(
+        self,
+        *,
+        kinds: list[LedgerEventKind] | None = None,
+        work_item_id: WorkItemId | None = None,
+        run_id: RunId | None = None,
+        phase_id: PhaseId | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 1000,
+    ) -> list[LedgerEvent]: ...
 
     async def tail(self, after_seq: int) -> AsyncIterator[LedgerEvent]: ...
 
-    async def report(self, kind: Literal["task", "feature", "phase", "project", "cost", "improvement"], subject_id: str) -> "Report":
+    async def report(
+        self,
+        kind: Literal["task", "feature", "phase", "project", "cost", "improvement"],
+        subject_id: str,
+    ) -> "Report":
         """§83 generated from events only."""
 
 
@@ -618,14 +771,27 @@ class Report(FrozenModel):
 class EvidenceManager(Protocol):
     """§6.6, §47. Hosted by walk.telemetry."""
 
-    async def record(self, draft: EvidenceDraft, *, actor: Actor, work_item_id: WorkItemId | None, phase_id: PhaseId | None, commit: Sha | None) -> Evidence:
+    async def record(
+        self,
+        draft: EvidenceDraft,
+        *,
+        actor: Actor,
+        work_item_id: WorkItemId | None,
+        phase_id: PhaseId | None,
+        commit: Sha | None,
+    ) -> Evidence:
         """Copies/links file under `.ai/<features|bugs|phases>/<id>/evidence/`, hashes it, mints EVD id, ledger EVIDENCE_RECORDED."""
 
-    async def for_item(self, work_item_id: WorkItemId, kinds: list[EvidenceKind] | None = None) -> list[Evidence]: ...
+    async def for_item(
+        self, work_item_id: WorkItemId, kinds: list[EvidenceKind] | None = None
+    ) -> list[Evidence]: ...
     async def for_phase(self, phase_id: PhaseId) -> list[Evidence]: ...
     def strongest(self, evidence: list[Evidence]) -> Evidence | None:
         """max by rank (§47), ties by produced_at desc."""
-    def satisfies(self, required: list[EvidenceKind], present: list[Evidence]) -> list[EvidenceKind]:
+
+    def satisfies(
+        self, required: list[EvidenceKind], present: list[Evidence]
+    ) -> list[EvidenceKind]:
         """Returns missing kinds (guard `required_evidence_present`)."""
 
 
@@ -634,8 +800,11 @@ class TelemetryManager(Protocol):
 
     def counter(self, name: str, value: float = 1.0, **labels: str) -> None: ...
     def timer(self, name: str, seconds: float, **labels: str) -> None: ...
-    async def metrics(self, *, phase_id: PhaseId | None = None, since: datetime | None = None) -> RetrospectiveMetrics:
+    async def metrics(
+        self, *, phase_id: PhaseId | None = None, since: datetime | None = None
+    ) -> RetrospectiveMetrics:
         """Computed from ledger (first-pass rate = items reaching COMPLETE with fix_loops == 0 / completed; etc.)."""
+
     def log(self, level: str, message: str, **fields: object) -> None:
         """JSON line to `.walk/logs/kernel.jsonl`; diagnostics only (ADR-0001)."""
 ```
@@ -646,26 +815,40 @@ class TelemetryManager(Protocol):
 class ImprovementManager(Protocol):
     """§94–§121. Hosted by walk.improvement."""
 
-    async def observe(self, draft: ObservationDraft, *, actor: Actor, work_item_id: WorkItemId | None, run_id: RunId | None, source_signal: str) -> ImprovementObservation:
+    async def observe(
+        self,
+        draft: ObservationDraft,
+        *,
+        actor: Actor,
+        work_item_id: WorkItemId | None,
+        run_id: RunId | None,
+        source_signal: str,
+    ) -> ImprovementObservation:
         """Project scope; writes `.ai/improvements/OBS-NNNN.md`; fires ON_IMPROVEMENT_OBSERVATION."""
 
     async def detect_signals(self, since: datetime) -> list[ImprovementObservation]:
         """§99 automatic sources from ledger: repeated fallback, stale context, fix loops, build failures, user overrides (§118)."""
 
-    async def phase_retrospective(self, phase_id: PhaseId, *, with_narrative: bool) -> Retrospective:
+    async def phase_retrospective(
+        self, phase_id: PhaseId, *, with_narrative: bool
+    ) -> Retrospective:
         """§115: TelemetryManager.metrics + top bottleneck/defect; optional PROCESS_ARCHITECT run for narrative."""
 
     async def promote(self, observation_id: ObservationId) -> ImprovementObservation:
         """§111 project → kernel scope (explicit; never automatic §110)."""
 
     async def create_candidate(self, candidate: ImprovementCandidate) -> ImprovementCandidate: ...
-    async def review_candidate(self, candidate_id: ImprovementId, approve: bool, *, by: Actor, note: str) -> ImprovementCandidate:
+    async def review_candidate(
+        self, candidate_id: ImprovementId, approve: bool, *, by: Actor, note: str
+    ) -> ImprovementCandidate:
         """§104 tiers: LOW → ORCHESTRATOR may approve; MEDIUM → PRODUCT_OWNER/maintainer; HIGH → USER only."""
 
     async def register_version(self, version: BehaviorVersion) -> BehaviorVersion:
         """§105; ledger BEHAVIOR_VERSION_CHANGED; kernel_changelog entry required when stage ∈ {LIMITED, DEFAULT} (§120)."""
 
-    async def set_stage(self, kind: ImprovementScope, name: str, version: str, stage: RolloutStage) -> BehaviorVersion:
+    async def set_stage(
+        self, kind: ImprovementScope, name: str, version: str, stage: RolloutStage
+    ) -> BehaviorVersion:
         """INTERFACES §6.5 rollout table."""
 
     def pinned_versions(self) -> dict[str, str]:
@@ -681,6 +864,7 @@ class ImprovementManager(Protocol):
 ```python
 class RunSession(FrozenModel):
     """Per-run adapter configuration supplied by the kernel."""
+
     run_id: RunId
     worktree_path: str
     allowed_tools: list[ToolSpec]
@@ -690,11 +874,14 @@ class RunSession(FrozenModel):
     max_turns: int
     timeout_s: int
     env_allowlist: dict[str, str]
-    output_path: str = Field(description="<worktree>/.walk/output.json — fallback channel for the structured AgentOutput")
+    output_path: str = Field(
+        description="<worktree>/.walk/output.json — fallback channel for the structured AgentOutput"
+    )
 
 
 class ProviderEffortConfig(FrozenModel):
     """ADR-0011: what the adapter actually sets."""
+
     model_id: ModelId
     params: JsonDict
 
@@ -718,7 +905,9 @@ class ModelAdapter(Protocol):
         MUST: drop thinking/reasoning blocks (§22); route every tool call through session.permission_authorizer before execution
         (Claude) or configure sandbox equivalently (Codex); emit USAGE at least at end; emit session ref in STARTED."""
 
-    def resume(self, session_ref: ProviderSessionRef, instruction: str, session: RunSession) -> AsyncIterator[AgentEvent]:
+    def resume(
+        self, session_ref: ProviderSessionRef, instruction: str, session: RunSession
+    ) -> AsyncIterator[AgentEvent]:
         """Continue provider-side session (Claude `resume=session_id`; Codex `exec resume <id>`). Raise NotResumable if unsupported."""
 
     async def cancel(self, run_id: RunId) -> None: ...
@@ -750,10 +939,14 @@ class WorkProvider(Protocol):
     async def create(self, item: WorkItem, *, idempotency_key: str) -> WorkItemRef:
         """Create issue/record with label `walk:<item.id>`. Idempotent: existing key → return stored ref; else search by label before creating."""
 
-    async def update(self, item: WorkItem, fields: dict[str, object], *, idempotency_key: str) -> None:
+    async def update(
+        self, item: WorkItem, fields: dict[str, object], *, idempotency_key: str
+    ) -> None:
         """Title/description/priority/labels/parent link."""
 
-    async def transition(self, item: WorkItem, to_state: WorkItemState, *, idempotency_key: str) -> None:
+    async def transition(
+        self, item: WorkItem, to_state: WorkItemState, *, idempotency_key: str
+    ) -> None:
         """Map WorkItemState → provider status via status map; no-op if already there."""
 
     async def assign(self, item: WorkItem, role: AgentRole, *, idempotency_key: str) -> None:
@@ -761,11 +954,24 @@ class WorkProvider(Protocol):
 
     async def comment(self, item: WorkItem, markdown: str, *, idempotency_key: str) -> None: ...
 
-    async def link(self, from_item: WorkItem, to_item: WorkItem, kind: Literal["BLOCKS", "RELATES", "PARENT"], *, idempotency_key: str) -> None: ...
+    async def link(
+        self,
+        from_item: WorkItem,
+        to_item: WorkItem,
+        kind: Literal["BLOCKS", "RELATES", "PARENT"],
+        *,
+        idempotency_key: str,
+    ) -> None: ...
 
     async def get(self, external_ref: str) -> JsonDict: ...
 
-    async def query(self, *, states: list[WorkItemState] | None = None, kinds: list[WorkItemKind] | None = None, limit: int = 200) -> list[JsonDict]: ...
+    async def query(
+        self,
+        *,
+        states: list[WorkItemState] | None = None,
+        kinds: list[WorkItemKind] | None = None,
+        limit: int = 200,
+    ) -> list[JsonDict]: ...
 
     async def changes_since(self, since: datetime | None) -> list[WorkProviderEvent]:
         """Polling fallback (§56)."""
@@ -794,7 +1000,7 @@ class PullRequestRef(FrozenModel):
 
 
 class GitProvider(Protocol):
-    provider: str   # "git-cli"
+    provider: str  # "git-cli"
 
     async def head(self, path: str) -> Sha: ...
     async def current_branch(self, path: str) -> str: ...
@@ -803,22 +1009,37 @@ class GitProvider(Protocol):
     async def remove_worktree(self, path: str, *, force: bool = False) -> None: ...
     async def status(self, path: str) -> list[str]:
         """Dirty files (porcelain)."""
+
     async def diff_names(self, path: str, base: Sha | None = None) -> list[str]: ...
-    async def commit_all(self, path: str, message: str, *, trailer_work_item: WorkItemId, idempotency_key: str) -> CommitInfo | None:
+    async def commit_all(
+        self, path: str, message: str, *, trailer_work_item: WorkItemId, idempotency_key: str
+    ) -> CommitInfo | None:
         """Stages everything except forbidden paths; message gets trailer `Walk-Work-Item: <id>` (§59 traceability). None if clean."""
+
     async def push(self, path: str, branch: str, *, protected_branches: list[str]) -> None:
         """Raises PermissionDenied if branch ∈ protected (protected ops go through ToolInvoker with approval)."""
-    async def open_pr(self, branch: str, base: str, title: str, body: str, *, idempotency_key: str) -> PullRequestRef:
+
+    async def open_pr(
+        self, branch: str, base: str, title: str, body: str, *, idempotency_key: str
+    ) -> PullRequestRef:
         """Via `gh` CLI when available; else records a local PR stub (LocalWorkProvider dev mode)."""
-    async def merge(self, pr: PullRequestRef, *, strategy: Literal["squash", "merge"], idempotency_key: str) -> Sha:
+
+    async def merge(
+        self, pr: PullRequestRef, *, strategy: Literal["squash", "merge"], idempotency_key: str
+    ) -> Sha:
         """Protected action — caller must hold an approved ApprovalRequest."""
+
     async def squash_wip(self, path: str, branch: str, base: Sha, message: str) -> Sha:
         """Collapse `wip(...)` checkpoint commits into one commit before PR (ADR-0002 §D-4)."""
+
     async def install_guard_hooks(self, path: str, protected_branches: list[str]) -> None: ...
     async def is_ancestor(self, ancestor: Sha, descendant: Sha, path: str) -> bool: ...
     async def merge_base(self, a: str, b: str, path: str) -> Sha:
         """`git merge-base a b`; refs or shas; no common ancestor → GitError. Squash base of the integration step (E03-S12)."""
-    async def changed_between(self, a: Sha, b: Sha, path: str, *, paths: list[str] | None = None) -> list[str]:
+
+    async def changed_between(
+        self, a: Sha, b: Sha, path: str, *, paths: list[str] | None = None
+    ) -> list[str]:
         """Used by freshness classification (§42)."""
 ```
 
@@ -835,7 +1056,15 @@ class BuildTarget(StrEnum):
 
 class JobResult(FrozenModel):
     ok: bool
-    job_kind: Literal["compile", "editmode_tests", "playmode_tests", "build", "asset_validation", "static_check", "perf_smoke"]
+    job_kind: Literal[
+        "compile",
+        "editmode_tests",
+        "playmode_tests",
+        "build",
+        "asset_validation",
+        "static_check",
+        "perf_smoke",
+    ]
     duration_s: float
     log_path: str
     artifact_paths: list[str]
@@ -848,8 +1077,12 @@ class UnityProvider(Protocol):
 
     async def detect(self, project_path: str) -> ComponentStatus: ...
     async def compile(self, project_path: str) -> JobResult: ...
-    async def run_tests(self, project_path: str, mode: Literal["EditMode", "PlayMode"], *, filter: str | None = None) -> JobResult: ...
-    async def build(self, project_path: str, target: BuildTarget, output_path: str, *, development: bool = True) -> JobResult: ...
+    async def run_tests(
+        self, project_path: str, mode: Literal["EditMode", "PlayMode"], *, filter: str | None = None
+    ) -> JobResult: ...
+    async def build(
+        self, project_path: str, target: BuildTarget, output_path: str, *, development: bool = True
+    ) -> JobResult: ...
     async def validate_assets(self, project_path: str, paths: list[str]) -> JobResult:
         """§79 [Stage 8]."""
 
@@ -857,8 +1090,15 @@ class UnityProvider(Protocol):
 class CiProvider(Protocol):
     """§62 orchestration of jobs for a commit; default implementation runs UnityProvider locally."""
 
-    async def run_pipeline(self, worktree_path: str, commit: Sha, jobs: list[str], *, idempotency_key: str,
-                           work_item_id: WorkItemId | None = None) -> list[JobResult]:
+    async def run_pipeline(
+        self,
+        worktree_path: str,
+        commit: Sha,
+        jobs: list[str],
+        *,
+        idempotency_key: str,
+        work_item_id: WorkItemId | None = None,
+    ) -> list[JobResult]:
         """Fires ON_BUILD_START/SUCCESS/FAILURE and ON_TEST_RESULT; each result → EvidenceManager.record.
         `work_item_id` attributes hook contexts, evidence and BUILD_RESULT/TEST_RESULT ledger events to the item (E03-S11)."""
 ```
@@ -870,7 +1110,7 @@ class AssetRequest(FrozenModel):
     kind: Literal["model3d", "texture", "image", "animation", "audio"]
     prompt: str
     reference_artifact_ids: list[ApprovedArtifactId]
-    constraints: JsonDict      # triangle budget, texture size, style tags (§79)
+    constraints: JsonDict  # triangle budget, texture size, style tags (§79)
     work_item_id: WorkItemId
 
 
@@ -883,6 +1123,7 @@ class AssetJob(FrozenModel):
 
 class AssetProvenance(FrozenModel):
     """§80 metadata stored next to the asset as `<asset>.provenance.yaml` and as Evidence."""
+
     asset_path: str
     provider: str
     prompt: str
@@ -897,11 +1138,14 @@ class AssetProvenance(FrozenModel):
 
 class AssetProvider(Protocol):
     provider: str
+
     async def health(self) -> ComponentStatus: ...
     async def generate(self, request: AssetRequest, *, idempotency_key: str) -> AssetJob: ...
     async def poll(self, job_id: str) -> AssetJob: ...
     async def download(self, job_id: str, target_dir: str) -> list[str]: ...
-    def provenance(self, job: AssetJob, request: AssetRequest, paths: list[str], actor: Actor) -> AssetProvenance: ...
+    def provenance(
+        self, job: AssetJob, request: AssetRequest, paths: list[str], actor: Actor
+    ) -> AssetProvenance: ...
 ```
 
 ### 2.6 `CodeGraphProvider` (§43; ADR-0009 §D-9)
@@ -917,7 +1161,7 @@ class GraphNode(FrozenModel):
 class GraphEdge(FrozenModel):
     src: str
     dst: str
-    kind: str      # imports / calls / references / depends_on
+    kind: str  # imports / calls / references / depends_on
 
 
 class GraphNeighborhood(FrozenModel):
@@ -927,16 +1171,19 @@ class GraphNeighborhood(FrozenModel):
 
 
 class CodeGraphProvider(Protocol):
-    provider: str   # "graphify"
+    provider: str  # "graphify"
 
     async def health(self, repo_path: str) -> ComponentStatus: ...
     async def build(self, repo_path: str, *, incremental: bool = True) -> str:
         """Returns graph version/sha. Output under `<repo>/graphify-out/` (gitignored)."""
+
     async def mark_dirty(self, paths: list[str]) -> None: ...
     async def neighbors(self, repo_path: str, seeds: list[str], depth: int) -> GraphNeighborhood:
         """seeds = file paths or symbol names (feature_context.relevant_files / affected_systems)."""
+
     async def impact(self, repo_path: str, changed_paths: list[str]) -> list[GraphNode]:
         """Reverse dependencies — used by §72 CHANGE analysis and Lead Dev review context."""
+
     async def query(self, repo_path: str, question: str) -> str:
         """Free-text graph query (graphify query) returned as markdown; used sparingly at HIGH+ effort."""
 ```

@@ -1,6 +1,6 @@
 # ADR-0001 — Kernel Technology Stack
 
-**Status:** Proposed (needs owner confirmation before Stage 1 implementation starts)
+**Status:** Accepted (owner confirmed 2026-10-06)
 **Date:** 2026-10-05
 **Deciders:** Project owner
 **Related requirements:** §4 (objectives 12, 13, 17), §122, §125, §127–129, §139
@@ -35,7 +35,8 @@ Constraints that drive the choice:
 | Model adapters | Claude via `claude-agent-sdk` (Python). Codex via `codex exec --json` subprocess. Both behind one `ModelAdapter` protocol |
 | Work provider | `WorkProvider` protocol with two implementations: `LocalWorkProvider` (file-backed, default for dev/tests) and `JiraWorkProvider` |
 | Git | `git` CLI via subprocess, worktrees for parallel execution |
-| Unity | Unity batchmode CLI first; Unity MCP later (Stage 8) |
+| Unity | Unity batchmode CLI (`com.walk.ci`) for all Editor automation; Unity MCP rejected (ADR-0015) |
+| MCP client | `mcp` (official MCP Python SDK) for remote MCP servers, first used for OpenArt `[Stage 8]` — approved dependency per ADR-0017 |
 | Tests | `pytest` + `pytest-asyncio`, coverage via `pytest-cov` |
 | Static quality | `ruff` (lint + format), `mypy --strict` |
 | Logging | stdlib `logging` emitting JSON lines; ledger is the source of truth, logs are diagnostics |

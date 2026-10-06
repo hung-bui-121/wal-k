@@ -150,49 +150,69 @@ The GDD files listed in `Project.gdd_paths` are parsed deterministically into a 
 ```python
 # src/walk/workflow/gdd.py
 class GddSection(FrozenModel):
-    ref: GddRef                      # path relative to repo root, anchor = slug_anchor(title) (deduplicated per file)
-    area: str                        # area key
+    ref: GddRef  # path relative to repo root, anchor = slug_anchor(title) (deduplicated per file)
+    area: str  # area key
     title: str
-    text: str                        # body until the next heading of level <= 3, '\r\n' -> '\n', trailing spaces stripped
+    text: str  # body until the next heading of level <= 3, '\r\n' -> '\n', trailing spaces stripped
     content_sha256: str
-    line: int                        # 1-based line of the heading
+    line: int  # 1-based line of the heading
+
 
 class GddArea(FrozenModel):
-    key: str                         # area_key(title)
+    key: str  # area_key(title)
     title: str
     sections: tuple[GddSection, ...]
+
 
 class GlossaryEntry(FrozenModel):
     term: str
     definition: str
 
+
 class GddDocument(FrozenModel):
     path: str
-    title: str                       # first '#' heading or file stem
+    title: str  # first '#' heading or file stem
     areas: tuple[GddArea, ...]
     glossary: tuple[GlossaryEntry, ...]
     source_sha256: str
 
+
 class GddIndex(FrozenModel):
     documents: tuple[GddDocument, ...]
-    areas: tuple[GddArea, ...]       # merged by key across documents, first-appearance order
+    areas: tuple[GddArea, ...]  # merged by key across documents, first-appearance order
     glossary: tuple[GlossaryEntry, ...]
-    index_sha256: str                # sha256 over the documents' source_sha256 in gdd_paths order
-    def section(self, ref: GddRef) -> GddSection: ...          # ConfigError("unknown GDD ref …")
-    def sections(self) -> list[GddSection]: ...                 # all, area order then document order
+    index_sha256: str  # sha256 over the documents' source_sha256 in gdd_paths order
 
-def area_key(title: str) -> str: ...          # "Meta Progression" -> "META_PROGRESSION"; non [A-Z0-9] runs -> "_"
-def slug_anchor(title: str) -> str: ...       # GitHub style: lower, drop punctuation except '-', spaces -> '-'
-def parse_gdd_ref(text: str) -> GddRef: ...   # "GDD/combat.md#shotgun" -> GddRef(path="GDD/combat.md", anchor="shotgun")
+    def section(self, ref: GddRef) -> GddSection: ...  # ConfigError("unknown GDD ref …")
+    def sections(self) -> list[GddSection]: ...  # all, area order then document order
+
+
+def area_key(
+    title: str,
+) -> str: ...  # "Meta Progression" -> "META_PROGRESSION"; non [A-Z0-9] runs -> "_"
+def slug_anchor(
+    title: str,
+) -> str: ...  # GitHub style: lower, drop punctuation except '-', spaces -> '-'
+def parse_gdd_ref(
+    text: str,
+) -> GddRef: ...  # "GDD/combat.md#shotgun" -> GddRef(path="GDD/combat.md", anchor="shotgun")
 def parse_gdd_markdown(path: str, text: str) -> GddDocument: ...
 def load_gdd_index(repo_root: Path, gdd_paths: list[str]) -> GddIndex: ...
 
+
 # src/walk/memory/paths.py
 PROJECT_DATA_FILES: tuple[str, ...] = ("traceability.yaml", "gdd-readiness.yaml", "gdd-coverage.md")
-def project_data_path(root: Path, name: str) -> Path: ...     # <root>/project/<name>; ConfigError for other names
+
+
+def project_data_path(
+    root: Path, name: str
+) -> Path: ...  # <root>/project/<name>; ConfigError for other names
+
 
 # src/walk/memory/protocols.py (MemoryManager additions)
-async def write_project_data(self, name: str, text: str, *, actor: Actor, head: Sha, branch: str) -> str: ...
+async def write_project_data(
+    self, name: str, text: str, *, actor: Actor, head: Sha, branch: str
+) -> str: ...
 async def read_project_data(self, name: str) -> str | None: ...
 ```
 
@@ -278,13 +298,20 @@ Whenever the GDD index changes, the kernel runs a readiness analysis — determi
 `DecisionManager.escalate` (INTERFACES §1.9), `EscalationRequest`/`AutonomyLevel`/`DecisionCategory` (DOMAIN-MODEL §4.8), `WorkflowManager.create/raise_event/query` (INTERFACES §1.3), `MemoryManager.write_project_data/write_report` (E06-S01, INTERFACES §1.8), `Project.autonomy_level_max`. Deltas:
 ```python
 # src/walk/orchestrator/gdd_readiness.py
-class GddFindingKind(StrEnum):                       # §49, verbatim order
-    AMBIGUITY = "AMBIGUITY"; CONTRADICTION = "CONTRADICTION"; UNDEFINED_TERM = "UNDEFINED_TERM"
-    MISSING_SUCCESS_CRITERIA = "MISSING_SUCCESS_CRITERIA"; MISSING_DEPENDENCY = "MISSING_DEPENDENCY"
-    UNBOUNDED_SCOPE = "UNBOUNDED_SCOPE"; CONFLICTING_SYSTEMS = "CONFLICTING_SYSTEMS"; MISSING_UX = "MISSING_UX"
+class GddFindingKind(StrEnum):  # §49, verbatim order
+    AMBIGUITY = "AMBIGUITY"
+    CONTRADICTION = "CONTRADICTION"
+    UNDEFINED_TERM = "UNDEFINED_TERM"
+    MISSING_SUCCESS_CRITERIA = "MISSING_SUCCESS_CRITERIA"
+    MISSING_DEPENDENCY = "MISSING_DEPENDENCY"
+    UNBOUNDED_SCOPE = "UNBOUNDED_SCOPE"
+    CONFLICTING_SYSTEMS = "CONFLICTING_SYSTEMS"
+    MISSING_UX = "MISSING_UX"
     MISSING_DESIGN_INTENT = "MISSING_DESIGN_INTENT"
 
+
 FindingSeverity = Literal["MINOR", "MAJOR", "BLOCKING"]
+
 
 class GddFinding(WalkModel):
     kind: GddFindingKind
@@ -295,36 +322,69 @@ class GddFinding(WalkModel):
     options: list[str] = Field(default_factory=list)
     suggestion: str | None = None
     source: Literal["KERNEL", "AGENT"]
-    level: AutonomyLevel | None = None              # set by the analyzer
+    level: AutonomyLevel | None = None  # set by the analyzer
     escalation_id: str | None = None
+
 
 class GddReadiness(WalkModel):
     index_sha256: str
     analysed_at: datetime
     task_id: WorkItemId | None
     findings: list[GddFinding]
-    blocked_areas: list[str]                        # areas with a BLOCKING finding
-    ready: bool                                     # blocked_areas == []
-    def to_yaml(self) -> str: ...                   # schema version 1, keys in field order
+    blocked_areas: list[str]  # areas with a BLOCKING finding
+    ready: bool  # blocked_areas == []
+
+    def to_yaml(self) -> str: ...  # schema version 1, keys in field order
     @classmethod
     def from_yaml(cls, text: str) -> "GddReadiness": ...
 
-FINDING_ESCALATION: dict[tuple[GddFindingKind, FindingSeverity], tuple[AutonomyLevel, DecisionCategory]]   # table in Behavior 4
-UNBOUNDED_TERMS: tuple[str, ...] = ("unlimited", "infinite", "endless", "any number of", "all possible")
+
+FINDING_ESCALATION: dict[
+    tuple[GddFindingKind, FindingSeverity], tuple[AutonomyLevel, DecisionCategory]
+]  # table in Behavior 4
+UNBOUNDED_TERMS: tuple[str, ...] = (
+    "unlimited",
+    "infinite",
+    "endless",
+    "any number of",
+    "all possible",
+)
 FINDINGS_BLOCK_LABEL = "walk-gdd-findings"
 
+
 def kernel_prechecks(index: GddIndex) -> list[GddFinding]: ...
-def parse_findings_block(result_markdown: str, index: GddIndex) -> list[GddFinding]: ...   # OutputInvalid on bad YAML/refs
+def parse_findings_block(
+    result_markdown: str, index: GddIndex
+) -> list[GddFinding]: ...  # OutputInvalid on bad YAML/refs
+
 
 class GddReadinessAnalyzer:
-    def __init__(self, workflow: WorkflowManager, decisions: DecisionManager, memory: MemoryManager,
-                 idempotency: IdempotencyStore, enabled_roles: Callable[[], list[AgentRole]],
-                 project: Callable[[], Project], repo_root: Path, clock: Clock) -> None: ...
-    async def ensure_current(self) -> Task | None: ...          # creates a readiness task when needed
-    async def current(self) -> GddReadiness | None: ...         # parsed gdd-readiness.yaml if index_sha256 matches
-    async def on_task_completed(self, task: Task, run: AgentRun, output: AgentOutput) -> GddReadiness | None: ...
-    async def on_completion(self, ctx: CompletionContext) -> None: ...   # label dispatch: gdd:readiness -> on_task_completed(ctx.item, ctx.run, ctx.run.output)
-    def register(self, handler: RunCompletionHandler) -> None: ...      # registers (TASK, "ANALYSIS", "analysis_done") -> on_completion (E03-S09)
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        decisions: DecisionManager,
+        memory: MemoryManager,
+        idempotency: IdempotencyStore,
+        enabled_roles: Callable[[], list[AgentRole]],
+        project: Callable[[], Project],
+        repo_root: Path,
+        clock: Clock,
+    ) -> None: ...
+    async def ensure_current(self) -> Task | None: ...  # creates a readiness task when needed
+    async def current(
+        self,
+    ) -> GddReadiness | None: ...  # parsed gdd-readiness.yaml if index_sha256 matches
+    async def on_task_completed(
+        self, task: Task, run: AgentRun, output: AgentOutput
+    ) -> GddReadiness | None: ...
+    async def on_completion(
+        self, ctx: CompletionContext
+    ) -> (
+        None
+    ): ...  # label dispatch: gdd:readiness -> on_task_completed(ctx.item, ctx.run, ctx.run.output)
+    def register(
+        self, handler: RunCompletionHandler
+    ) -> None: ...  # registers (TASK, "ANALYSIS", "analysis_done") -> on_completion (E03-S09)
 ```
 Agent block format (inside `AgentOutput.result`):
 ````text
@@ -425,44 +485,74 @@ Every GDD section becomes a product requirement with a stable id `REQ-<AREA>-<NN
 ```python
 # src/walk/workflow/traceability.py
 REQUIREMENT_ID_PATTERN = r"^REQ-[A-Z0-9_]+-\d{3,}$"
-def format_requirement_id(area: str, n: int) -> str: ...      # ("COMBAT", 7) -> "REQ-COMBAT-007"
+
+
+def format_requirement_id(area: str, n: int) -> str: ...  # ("COMBAT", 7) -> "REQ-COMBAT-007"
+
 
 class RequirementStatus(StrEnum):
-    ACTIVE = "ACTIVE"; CHANGED = "CHANGED"; REMOVED = "REMOVED"
+    ACTIVE = "ACTIVE"
+    CHANGED = "CHANGED"
+    REMOVED = "REMOVED"
+
 
 class RequirementLinks(WalkModel):
-    specs: list[str] = Field(default_factory=list, description="Spec documents: FEAT ids (feature context) and APR ids")
-    work_items: list[WorkItemId] = Field(default_factory=list, description="EPIC/FEATURE/STORY/TASK ids, creation order")
+    specs: list[str] = Field(
+        default_factory=list, description="Spec documents: FEAT ids (feature context) and APR ids"
+    )
+    work_items: list[WorkItemId] = Field(
+        default_factory=list, description="EPIC/FEATURE/STORY/TASK ids, creation order"
+    )
+
 
 class GddRequirement(WalkModel):
     id: str = Field(pattern=REQUIREMENT_ID_PATTERN)
     area: str
-    ref: GddRef                                    # ref.requirement_id == id
+    ref: GddRef  # ref.requirement_id == id
     title: str
     text_sha256: str
     status: RequirementStatus = RequirementStatus.ACTIVE
     links: RequirementLinks = Field(default_factory=RequirementLinks)
 
+
 class TraceabilityMatrix(WalkModel):
     version: Literal[1] = 1
     index_sha256: str
     requirements: list[GddRequirement]
-    def by_id(self, requirement_id: str) -> GddRequirement: ...          # ConfigError when unknown
-    def for_ref(self, ref: GddRef) -> GddRequirement | None: ...         # match on (path, anchor)
-    def active(self) -> list[GddRequirement]: ...                        # status != REMOVED
-    def with_links(self, requirement_id: str, *, specs: list[str] = (), work_items: list[WorkItemId] = ()) -> "TraceabilityMatrix": ...
+
+    def by_id(self, requirement_id: str) -> GddRequirement: ...  # ConfigError when unknown
+    def for_ref(self, ref: GddRef) -> GddRequirement | None: ...  # match on (path, anchor)
+    def active(self) -> list[GddRequirement]: ...  # status != REMOVED
+    def with_links(
+        self, requirement_id: str, *, specs: list[str] = (), work_items: list[WorkItemId] = ()
+    ) -> "TraceabilityMatrix": ...
     def to_yaml(self) -> str: ...
     @classmethod
     def from_yaml(cls, text: str) -> "TraceabilityMatrix": ...
 
-def normalise_requirements(index: GddIndex, previous: TraceabilityMatrix | None) -> TraceabilityMatrix: ...
+
+def normalise_requirements(
+    index: GddIndex, previous: TraceabilityMatrix | None
+) -> TraceabilityMatrix: ...
+
 
 # src/walk/orchestrator/traceability_store.py
 class TraceabilityStore:
-    def __init__(self, memory: MemoryManager, git_head: Callable[[], Awaitable[tuple[Sha, str]]]) -> None: ...
+    def __init__(
+        self, memory: MemoryManager, git_head: Callable[[], Awaitable[tuple[Sha, str]]]
+    ) -> None: ...
     async def load(self) -> TraceabilityMatrix | None: ...
-    async def refresh(self, index: GddIndex, *, actor: Actor) -> TraceabilityMatrix: ...   # normalise + save when changed
-    async def link(self, requirement_id: str, *, specs: list[str] = (), work_items: list[WorkItemId] = (), actor: Actor) -> TraceabilityMatrix: ...
+    async def refresh(
+        self, index: GddIndex, *, actor: Actor
+    ) -> TraceabilityMatrix: ...  # normalise + save when changed
+    async def link(
+        self,
+        requirement_id: str,
+        *,
+        specs: list[str] = (),
+        work_items: list[WorkItemId] = (),
+        actor: Actor,
+    ) -> TraceabilityMatrix: ...
 ```
 File `.ai/project/traceability.yaml` (schema v1):
 ```yaml
@@ -558,66 +648,111 @@ _pending_
 `Orchestrator.plan_phase(phase_id) -> list[WorkItem]` (INTERFACES §1.1, unchanged signature), `WorkflowManager.create` (INTERFACES §1.3), `StoryContract` (DOMAIN-MODEL §4.1, §57), `WorkProvider.create/link` (INTERFACES §2.2), `RunCompletionHandler`/`CompletionContext` (E03-S09), `TraceabilityStore` (E06-S03), `GddReadinessAnalyzer.ensure_current/current` (E06-S02), `walk phase plan ID` (INTERFACES §6). Deltas:
 ```python
 # src/walk/workflow/models.py
-class WorkItemDraft(WalkModel):                       # DOMAIN-MODEL §4.1 fields +
-    gdd_refs: list[GddRef] = Field(default_factory=list, description="Requirement anchors (Stage 6); copied to Epic/Feature.gdd_refs or contract.source_requirements")
+class WorkItemDraft(WalkModel):  # DOMAIN-MODEL §4.1 fields +
+    gdd_refs: list[GddRef] = Field(
+        default_factory=list,
+        description="Requirement anchors (Stage 6); copied to Epic/Feature.gdd_refs or contract.source_requirements",
+    )
+
 
 # src/walk/orchestrator/gdd_compiler.py
 PLAN_BLOCK_LABEL = "walk-phase-plan"
 
+
 class PlanStoryDraft(WalkModel):
-    key: str                                           # unique in the plan, e.g. "S1"
-    existing_id: WorkItemId | None = None              # re-plan: keep this item
+    key: str  # unique in the plan, e.g. "S1"
+    existing_id: WorkItemId | None = None  # re-plan: keep this item
     title: str
     description: str = ""
-    requirements: list[str] = Field(min_length=1)      # REQ ids
+    requirements: list[str] = Field(min_length=1)  # REQ ids
     goal: str
     acceptance_criteria: list[str] = Field(min_length=1)
     constraints: list[str] = Field(default_factory=list)
-    depends_on: list[str] = Field(default_factory=list)          # story keys
-    required_evidence: list[EvidenceKind] = Field(default_factory=lambda: [EvidenceKind.AUTOMATED_TEST], min_length=1)
+    depends_on: list[str] = Field(default_factory=list)  # story keys
+    required_evidence: list[EvidenceKind] = Field(
+        default_factory=lambda: [EvidenceKind.AUTOMATED_TEST], min_length=1
+    )
     owner_role: AgentRole = AgentRole.SENIOR_DEV
     reviewer_role: AgentRole = AgentRole.LEAD_DEV
     risk: Risk = Risk.MEDIUM
     priority: Priority = Priority.P2
     complexity: Literal["TRIVIAL", "SMALL", "NORMAL", "LARGE", "CORE"] = "NORMAL"
 
+
 class PlanFeatureDraft(WalkModel):
-    key: str; existing_id: WorkItemId | None = None; title: str; description: str = ""
-    requirements: list[str] = Field(min_length=1); stories: list[PlanStoryDraft] = Field(min_length=1)
+    key: str
+    existing_id: WorkItemId | None = None
+    title: str
+    description: str = ""
+    requirements: list[str] = Field(min_length=1)
+    stories: list[PlanStoryDraft] = Field(min_length=1)
+
 
 class PlanEpicDraft(WalkModel):
-    key: str; existing_id: WorkItemId | None = None; title: str; description: str = ""
+    key: str
+    existing_id: WorkItemId | None = None
+    title: str
+    description: str = ""
     features: list[PlanFeatureDraft] = Field(min_length=1)
+
 
 class PhasePlanDraft(WalkModel):
     phase_goal: str
     exit_criteria: list[str] = Field(min_length=1)
     epics: list[PlanEpicDraft] = Field(min_length=1)
 
+
 class PlanStatus(StrEnum):
-    READINESS_PENDING = "READINESS_PENDING"; READINESS_BLOCKED = "READINESS_BLOCKED"
-    NOTHING_TO_PLAN = "NOTHING_TO_PLAN"; PLANNING = "PLANNING"; PLANNED = "PLANNED"
+    READINESS_PENDING = "READINESS_PENDING"
+    READINESS_BLOCKED = "READINESS_BLOCKED"
+    NOTHING_TO_PLAN = "NOTHING_TO_PLAN"
+    PLANNING = "PLANNING"
+    PLANNED = "PLANNED"
+
 
 class PhasePlanResult(WalkModel):
     phase_id: PhaseId
     status: PlanStatus
-    task_id: WorkItemId | None = None                  # readiness or plan task
+    task_id: WorkItemId | None = None  # readiness or plan task
     blocked_areas: list[str] = Field(default_factory=list)
     created: list[WorkItemId] = Field(default_factory=list)
     unreferenced: list[WorkItemId] = Field(default_factory=list)
 
-def parse_plan_block(result_markdown: str) -> PhasePlanDraft: ...      # OutputInvalid: none/two blocks, bad YAML, schema
-def validate_plan(plan: PhasePlanDraft, matrix: TraceabilityMatrix, blocked_areas: list[str],
-                  existing: dict[WorkItemId, WorkItem]) -> list[str]: ...   # violations, empty = valid
+
+def parse_plan_block(
+    result_markdown: str,
+) -> PhasePlanDraft: ...  # OutputInvalid: none/two blocks, bad YAML, schema
+def validate_plan(
+    plan: PhasePlanDraft,
+    matrix: TraceabilityMatrix,
+    blocked_areas: list[str],
+    existing: dict[WorkItemId, WorkItem],
+) -> list[str]: ...  # violations, empty = valid
+
 
 class GddCompiler:
-    def __init__(self, workflow: WorkflowManager, phases: PhaseRepository, memory: MemoryManager, traceability: TraceabilityStore,
-                 readiness: GddReadinessAnalyzer, integrations: IntegrationManager, decisions: DecisionManager,
-                 idempotency: IdempotencyStore, project: Callable[[], Project], repo_root: Path, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        phases: PhaseRepository,
+        memory: MemoryManager,
+        traceability: TraceabilityStore,
+        readiness: GddReadinessAnalyzer,
+        integrations: IntegrationManager,
+        decisions: DecisionManager,
+        idempotency: IdempotencyStore,
+        project: Callable[[], Project],
+        repo_root: Path,
+        clock: Clock,
+    ) -> None: ...
     async def plan_phase(self, phase_id: PhaseId) -> PhasePlanResult: ...
     async def on_plan_completed(self, ctx: CompletionContext) -> None: ...
-    async def materialise(self, phase: Phase, plan: PhasePlanDraft, matrix: TraceabilityMatrix, task: Task) -> list[WorkItem]: ...
-    def register(self, handler: RunCompletionHandler) -> None: ...     # (TASK, "PLAN", "analysis_done") -> on_plan_completed
+    async def materialise(
+        self, phase: Phase, plan: PhasePlanDraft, matrix: TraceabilityMatrix, task: Task
+    ) -> list[WorkItem]: ...
+    def register(
+        self, handler: RunCompletionHandler
+    ) -> None: ...  # (TASK, "PLAN", "analysis_done") -> on_plan_completed
 ```
 CLI: `walk phase plan PHASE_ID [--json]` → one line per status: `PHASE-01 READINESS_PENDING (TASK-0001)`, `PHASE-01 READINESS_BLOCKED areas: COMBAT`, `PHASE-01 PLANNING (TASK-0002)`, `PHASE-01 PLANNED: 2 epics, 3 features, 6 stories`; `--json` prints `PhasePlanResult`. Command row `phase.plan` `{"phase_id"}`.
 
@@ -707,28 +842,41 @@ For any requirement the kernel answers the full §73 chain — GDD requirement �
 `TraceabilityMatrix` (E06-S03), `LedgerManager.query` (INTERFACES §1.14), `EvidenceManager.for_item` (INTERFACES §1.14), `WorkflowManager.get/query` (INTERFACES §1.3); ledger kinds `AGENT_RUN_ENDED`, `COMMIT`, `BUILD_RESULT`, `TEST_RESULT`, `QC_RESULT` (ARCHITECTURE §4.3; payloads per E03-S11/S12/S14). Deltas:
 ```python
 # src/walk/workflow/trace_query.py
-class TraceLevel(StrEnum):                    # §73 order
-    REQUIREMENT = "REQUIREMENT"; SPECIFICATION = "SPECIFICATION"; WORK_ITEM = "WORK_ITEM"; IMPLEMENTATION = "IMPLEMENTATION"
-    COMMIT = "COMMIT"; BUILD = "BUILD"; TEST = "TEST"; QC_EVIDENCE = "QC_EVIDENCE"
+class TraceLevel(StrEnum):  # §73 order
+    REQUIREMENT = "REQUIREMENT"
+    SPECIFICATION = "SPECIFICATION"
+    WORK_ITEM = "WORK_ITEM"
+    IMPLEMENTATION = "IMPLEMENTATION"
+    COMMIT = "COMMIT"
+    BUILD = "BUILD"
+    TEST = "TEST"
+    QC_EVIDENCE = "QC_EVIDENCE"
+
 
 class TraceNode(FrozenModel):
     level: TraceLevel
-    ref: str                                  # REQ id | FEAT/APR id | work item id | RUN id | sha | evidence id / ledger event id
-    label: str                                # human summary, e.g. "STORY-0003 Shotgun spread (COMPLETE)"
+    ref: str  # REQ id | FEAT/APR id | work item id | RUN id | sha | evidence id / ledger event id
+    label: str  # human summary, e.g. "STORY-0003 Shotgun spread (COMPLETE)"
     work_item_id: WorkItemId | None = None
     at: datetime | None = None
+
 
 class TraceChain(FrozenModel):
     requirement_id: str
     status: RequirementStatus
     nodes: dict[TraceLevel, list[TraceNode]]  # every level present as a key (possibly empty)
-    first_gap: TraceLevel | None              # first level with no node, None when complete
+    first_gap: TraceLevel | None  # first level with no node, None when complete
+
 
 class TraceQuery:
-    def __init__(self, workflow: WorkflowManager, ledger: LedgerManager, evidence: EvidenceManager) -> None: ...
+    def __init__(
+        self, workflow: WorkflowManager, ledger: LedgerManager, evidence: EvidenceManager
+    ) -> None: ...
     async def chain(self, matrix: TraceabilityMatrix, requirement_id: str) -> TraceChain: ...
-    async def chains(self, matrix: TraceabilityMatrix) -> list[TraceChain]: ...           # matrix order
-    async def requirements_for(self, matrix: TraceabilityMatrix, work_item_id: WorkItemId) -> list[str]: ...
+    async def chains(self, matrix: TraceabilityMatrix) -> list[TraceChain]: ...  # matrix order
+    async def requirements_for(
+        self, matrix: TraceabilityMatrix, work_item_id: WorkItemId
+    ) -> list[str]: ...
 ```
 CLI: `walk work trace REQ-COMBAT-001|STORY-0003 [--json]` — for a requirement prints the eight levels with their nodes and `gap: <level>|none`; for a work item prints its requirement ids followed by each chain.
 
@@ -808,36 +956,61 @@ GDD implementation coverage per area and per requirement is derived from traceab
 `WorkflowManager.gdd_coverage(project_key) -> dict[str, float]` ("COMPLETE stories with gdd_refs / all stories with gdd_refs, per GDD area", INTERFACES §1.3), `KernelStatus.gdd_coverage` (INTERFACES §1.1), `MemoryManager.write_project_data` (E06-S01). Deltas:
 ```python
 # src/walk/workflow/coverage.py
-def area_of_requirement(requirement_id: str) -> str: ...      # "REQ-META_PROGRESSION-004" -> "META_PROGRESSION"
+def area_of_requirement(
+    requirement_id: str,
+) -> str: ...  # "REQ-META_PROGRESSION-004" -> "META_PROGRESSION"
+
 
 class RequirementCoverage(FrozenModel):
-    requirement_id: str; area: str; title: str
-    stories: int; complete: int
-    ratio: float                                                  # complete / stories, 0.0 when stories == 0
+    requirement_id: str
+    area: str
+    title: str
+    stories: int
+    complete: int
+    ratio: float  # complete / stories, 0.0 when stories == 0
+
 
 class AreaCoverage(FrozenModel):
-    area: str; requirements: int; planned_requirements: int
-    stories: int; complete: int
-    ratio: float                                                  # complete / stories, 0.0 when stories == 0
+    area: str
+    requirements: int
+    planned_requirements: int
+    stories: int
+    complete: int
+    ratio: float  # complete / stories, 0.0 when stories == 0
+
 
 class GddCoverage(FrozenModel):
     index_sha256: str
-    areas: list[AreaCoverage]                                     # matrix area order
+    areas: list[AreaCoverage]  # matrix area order
     requirements: list[RequirementCoverage]
-    def as_dict(self) -> dict[str, float]: ...                    # {area: ratio}
+
+    def as_dict(self) -> dict[str, float]: ...  # {area: ratio}
+
 
 def compute_coverage(matrix: TraceabilityMatrix, items: list[WorkItem]) -> GddCoverage: ...
 def render_gdd_coverage(coverage: GddCoverage, *, generated_at: datetime) -> str: ...
 
+
 # src/walk/orchestrator/traceability_store.py
 class TraceabilityStore:
-    def subscribe(self, callback: Callable[[TraceabilityMatrix], Awaitable[None]]) -> None: ...   # called after every save
+    def subscribe(
+        self, callback: Callable[[TraceabilityMatrix], Awaitable[None]]
+    ) -> None: ...  # called after every save
+
 
 # src/walk/orchestrator/coverage_writer.py
 class GddCoverageWriter:
-    def __init__(self, workflow: WorkflowManager, traceability: TraceabilityStore, memory: MemoryManager,
-                 git_head: Callable[[], Awaitable[tuple[Sha, str]]], clock: Clock) -> None: ...
-    async def refresh(self, matrix: TraceabilityMatrix | None = None) -> GddCoverage | None: ...   # None when no matrix
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        traceability: TraceabilityStore,
+        memory: MemoryManager,
+        git_head: Callable[[], Awaitable[tuple[Sha, str]]],
+        clock: Clock,
+    ) -> None: ...
+    async def refresh(
+        self, matrix: TraceabilityMatrix | None = None
+    ) -> GddCoverage | None: ...  # None when no matrix
 ```
 `gdd-coverage.md`: front matter `{id: GDD-COVERAGE, type: report, title: GDD coverage, generated_at, index_sha256}`, then `## Summary` (table `Area | Coverage | Complete | Stories | Requirements planned`), `## Requirements` (table `Requirement | Area | Title | Coverage | Complete | Stories`), `## Not Planned` (bullets of requirement ids with zero stories, or `- none`). Coverage printed as whole percent (`75%`, §74 example).
 
@@ -916,10 +1089,17 @@ async def assign_phase_scope(self, phase_id: PhaseId, epic_ids: list[EpicId]) ->
     """Phase must be PLANNED. scope_epic_ids |= epic_ids; every descendant of those epics with phase_id None
     gets phase_id = phase_id. An epic in another phase's scope -> ConfigError. No ledger event (no state change)."""
 
+
 # src/walk/orchestrator/scope_hooks.py
 GDD_PLANNED_LABEL = "gdd-planned"
-async def activate_planned_features(workflow: WorkflowManager, phase: Phase) -> list[WorkItemId]: ...
-def register_scope_hooks(hooks: HookManager, workflow: WorkflowManager, phases: PhaseRepository) -> None:
+
+
+async def activate_planned_features(
+    workflow: WorkflowManager, phase: Phase
+) -> list[WorkItemId]: ...
+def register_scope_hooks(
+    hooks: HookManager, workflow: WorkflowManager, phases: PhaseRepository
+) -> None:
     """builtin.gdd_phase_activate on ON_PHASE_START (required=False, log_and_continue, priority 40)."""
 ```
 Payload key `scope_epic_id: EpicId | None` (top-most EPIC ancestor of the item, written by `raise_event`).

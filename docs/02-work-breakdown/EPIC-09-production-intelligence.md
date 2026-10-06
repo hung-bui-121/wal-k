@@ -144,25 +144,41 @@ Task and Feature reports (§83) are rendered deterministically from `ledger_even
 # src/walk/telemetry/reports.py
 class ReportSection(FrozenModel):
     title: str
-    rows: list[JsonDict]            # machine-readable rows (also placed in Report.data[title])
-    markdown: str                   # rendered table / list for this section
+    rows: list[JsonDict]  # machine-readable rows (also placed in Report.data[title])
+    markdown: str  # rendered table / list for this section
+
 
 class ReportQuery(Protocol):
-    kind: ClassVar[str]             # one of "task", "feature", "phase", "project", "cost", "improvement"
+    kind: ClassVar[str]  # one of "task", "feature", "phase", "project", "cost", "improvement"
+
     async def run(self, subject_id: str) -> Report: ...
 
-class TaskReportQuery:              # kind = "task"; subject = STORY/TASK/BUG id
-    def __init__(self, db: Database, clock: Clock) -> None: ...
-class FeatureReportQuery:           # kind = "feature"; subject = FEAT id
+
+class TaskReportQuery:  # kind = "task"; subject = STORY/TASK/BUG id
     def __init__(self, db: Database, clock: Clock) -> None: ...
 
-REPORT_QUERIES: dict[str, type[ReportQuery]]      # filled by S01 (task, feature) and S02 (the other four)
 
-def render_report_markdown(kind: str, subject_id: str, generated_at: datetime, sections: list[ReportSection]) -> str:
+class FeatureReportQuery:  # kind = "feature"; subject = FEAT id
+    def __init__(self, db: Database, clock: Clock) -> None: ...
+
+
+REPORT_QUERIES: dict[
+    str, type[ReportQuery]
+]  # filled by S01 (task, feature) and S02 (the other four)
+
+
+def render_report_markdown(
+    kind: str, subject_id: str, generated_at: datetime, sections: list[ReportSection]
+) -> str:
     """'# <Kind> report — <subject>' + 'Generated: <iso>' + one '## <title>' per section, in order."""
 
+
 # DefaultLedgerManager
-async def report(self, kind: Literal["task", "feature", "phase", "project", "cost", "improvement"], subject_id: str) -> Report:
+async def report(
+    self,
+    kind: Literal["task", "feature", "phase", "project", "cost", "improvement"],
+    subject_id: str,
+) -> Report:
     """REPORT_QUERIES[kind](self._db, self._clock).run(subject_id); unknown kind → ConfigError."""
 ```
 `Report` is INTERFACES §1.14 (`kind, subject_id, generated_at, markdown, data`). CLI: `walk report (task|feature) SUBJECT_ID [--json]` prints `markdown` or `Report.model_dump(mode="json")`.
@@ -327,16 +343,31 @@ Every §84 cost dimension produces `CostRecord`s — LLM (existing), Assets (E08
 #### Interface contract
 ```python
 # CostManager (INTERFACES §1.6 addition)
-async def breakdown(self, *, work_item_id: WorkItemId | None = None, phase_id: PhaseId | None = None,
-                    project_key: ProjectKey | None = None, by: Literal["category", "provider", "model", "role"]) -> dict[str, float]:
+async def breakdown(
+    self,
+    *,
+    work_item_id: WorkItemId | None = None,
+    phase_id: PhaseId | None = None,
+    project_key: ProjectKey | None = None,
+    by: Literal["category", "provider", "model", "role"],
+) -> dict[str, float]:
     """Σ cost_usd of the selected cost_records grouped by the chosen column; item subjects include descendants (as cost_of)."""
 
+
 # CostRepository
-async def aggregate(self, *, ids: list[WorkItemId] | None, phase_id: PhaseId | None, project_key: ProjectKey | None, column: str) -> dict[str, float]: ...
+async def aggregate(
+    self,
+    *,
+    ids: list[WorkItemId] | None,
+    phase_id: PhaseId | None,
+    project_key: ProjectKey | None,
+    column: str,
+) -> dict[str, float]: ...
+
 
 # KernelSettings
-compute_usd_per_hour: float = 0.0     # §84 Compute: CI / build infrastructure
-time_usd_per_hour: float = 0.0        # §84 Time: agent execution wall clock
+compute_usd_per_hour: float = 0.0  # §84 Compute: CI / build infrastructure
+time_usd_per_hour: float = 0.0  # §84 Time: agent execution wall clock
 
 # Hook payloads consumed
 # ON_BUILD_SUCCESS / ON_BUILD_FAILURE: {"job": str, "provider": "unity"|"ci", "duration_ms": int, "work_item_id", "run_id", "phase_id"}
@@ -518,20 +549,41 @@ Every ledger event records the behavior versions in effect (§82 "with which ver
 #### Interface contract
 ```python
 # DefaultLedgerManager
-def __init__(self, db: Database, repo: LedgerRepository, ids: IdFactory, clock: Clock,
-             behavior_versions: Callable[[], dict[str, str]] | None = None) -> None: ...
+def __init__(
+    self,
+    db: Database,
+    repo: LedgerRepository,
+    ids: IdFactory,
+    clock: Clock,
+    behavior_versions: Callable[[], dict[str, str]] | None = None,
+) -> None: ...
+
+
 # append(): if event.behavior_versions == {} and behavior_versions is not None → event = event.model_copy(update={"behavior_versions": behavior_versions()})
+
 
 # src/walk/telemetry/provenance.py
 class ProvenanceLink(FrozenModel):
-    question: Literal["WHY", "WHICH_ROLE", "WHICH_MODEL", "WHICH_VERSION", "WHAT_EVIDENCE", "WHAT_CODE", "WHICH_REQUIREMENT", "WHAT_COST", "WHAT_OUTCOME"]
-    answer: str                       # human-readable
-    event_seqs: list[int]             # ledger rows supporting the answer
+    question: Literal[
+        "WHY",
+        "WHICH_ROLE",
+        "WHICH_MODEL",
+        "WHICH_VERSION",
+        "WHAT_EVIDENCE",
+        "WHAT_CODE",
+        "WHICH_REQUIREMENT",
+        "WHAT_COST",
+        "WHAT_OUTCOME",
+    ]
+    answer: str  # human-readable
+    event_seqs: list[int]  # ledger rows supporting the answer
+
 
 class ProvenanceChain(FrozenModel):
     subject_id: str
-    links: list[ProvenanceLink]       # fixed order of the Literal above
-    events: list[LedgerEvent]         # all events in the chain, seq ascending
+    links: list[ProvenanceLink]  # fixed order of the Literal above
+    events: list[LedgerEvent]  # all events in the chain, seq ascending
+
 
 class ProvenanceQuery:
     def __init__(self, db: Database) -> None: ...
@@ -612,18 +664,34 @@ The §86 "kernel MUST record" list is mapped as data to ledger event kinds and c
 ```python
 # src/walk/telemetry/metrics.py
 OBSERVABILITY_MAP: dict[str, tuple[LedgerEventKind, ...]] = {
-    "executions": (AGENT_RUN_STARTED, AGENT_RUN_ENDED), "models": (MODEL_SELECTED,), "role": (AGENT_ASSIGNED, AGENT_RUN_STARTED),
-    "effort": (EFFORT_SET, EFFORT_CHANGED), "tool calls": (TOOL_INVOKED, TOOL_DENIED), "workflow transitions": (WORK_ITEM_TRANSITION, PHASE_TRANSITION, RC_TRANSITION),
-    "failures": (ERROR,), "retries": (RETRY,), "handovers": (HANDOVER_CREATED,), "decisions": (DECISION_RECORDED,), "debates": (DEBATE_OPENED, DEBATE_POSITION, DEBATE_RESOLVED),
-    "tokens": (COST_RECORDED,), "cost": (COST_RECORDED,), "duration": (AGENT_RUN_ENDED, TOOL_INVOKED), "artifacts": (EVIDENCE_RECORDED, ARTIFACT_APPROVED, COMMIT, BUILD_RESULT),
-}   # the 14 §86 bullets + "artifacts" column as written in §86
+    "executions": (AGENT_RUN_STARTED, AGENT_RUN_ENDED),
+    "models": (MODEL_SELECTED,),
+    "role": (AGENT_ASSIGNED, AGENT_RUN_STARTED),
+    "effort": (EFFORT_SET, EFFORT_CHANGED),
+    "tool calls": (TOOL_INVOKED, TOOL_DENIED),
+    "workflow transitions": (WORK_ITEM_TRANSITION, PHASE_TRANSITION, RC_TRANSITION),
+    "failures": (ERROR,),
+    "retries": (RETRY,),
+    "handovers": (HANDOVER_CREATED,),
+    "decisions": (DECISION_RECORDED,),
+    "debates": (DEBATE_OPENED, DEBATE_POSITION, DEBATE_RESOLVED),
+    "tokens": (COST_RECORDED,),
+    "cost": (COST_RECORDED,),
+    "duration": (AGENT_RUN_ENDED, TOOL_INVOKED),
+    "artifacts": (EVIDENCE_RECORDED, ARTIFACT_APPROVED, COMMIT, BUILD_RESULT),
+}  # the 14 §86 bullets + "artifacts" column as written in §86
+
 
 async def observability_coverage(db: Database) -> dict[str, bool]:
     """item → True iff at least one event of any mapped kind exists in ledger_events."""
 
+
 # src/walk/telemetry/logging.py
-def configure_logging(repo_root: Path, *, level: str = "INFO", max_bytes: int = 20_000_000, backup_count: int = 10) -> None:
+def configure_logging(
+    repo_root: Path, *, level: str = "INFO", max_bytes: int = 20_000_000, backup_count: int = 10
+) -> None:
     """RotatingFileHandler on <repo>/.walk/logs/kernel.jsonl with JsonLineHandler formatting."""
+
 
 # src/walk/cli/lints.py
 async def lint_observability_coverage(db: Database) -> list[str]:

@@ -149,11 +149,18 @@ The scheduler admits up to a configurable `max_parallel_agents` (> 2) concurrent
 ```python
 # src/walk/orchestrator/scheduler.py
 class SchedulerLimits(FrozenModel):
-    max_parallel_agents: int = Field(default=2, ge=1, le=16, description="ADR-0009 D-4 global cap; §60")
-    per_role: dict[AgentRole, int] = Field(default_factory=dict, description="RuntimePolicy.max_parallel_runs per role; missing role → 1")
+    max_parallel_agents: int = Field(
+        default=2, ge=1, le=16, description="ADR-0009 D-4 global cap; §60"
+    )
+    per_role: dict[AgentRole, int] = Field(
+        default_factory=dict,
+        description="RuntimePolicy.max_parallel_runs per role; missing role → 1",
+    )
+
 
 class Scheduler:  # existing (E01-S29/E03-S18); additions
     limits: SchedulerLimits
+
     def running_by_role(self) -> dict[AgentRole, int]:
         """Count of AgentExecutor.running() runs per role (RUNNING or PAUSED_FOR_APPROVAL)."""
 ```
@@ -245,6 +252,7 @@ async def start_phase(self, phase_id: PhaseId) -> Phase:
     after commit: Phase.started_at = clock.now(); projects.current_phase_id = phase_id; MemoryManager.write(phase document);
     returns the persisted Phase (baseline_artifact_id and budget_id set by the hooks below)."""
 
+
 # src/walk/orchestrator/builtin_hooks.py  (ADR-0016)
 # ON_PHASE_START  builtin.phase_baseline   prio 10  required=True   (exists since E02-S08; content completed here)
 #   payload manifest written as the APR payload file `baseline.yaml`:
@@ -255,15 +263,27 @@ async def start_phase(self, phase_id: PhaseId) -> Phase:
 # ON_PHASE_START  builtin.phase_budget     prio 60  required=False
 #   → BudgetManager.ensure(BudgetScope.PHASE, phase_id, policy=None, limits=deps.phase_budget_limits); Phase.budget_id = first Budget.id
 
-class BuiltinHookDeps(WalkModel):   # additions
+
+class BuiltinHookDeps(WalkModel):  # additions
     workflow: WorkflowManager
     phase_budget_limits: dict[BudgetDimension, float]
 
+
 # src/walk/memory/sections.py
-PHASE_SECTIONS = ("Goal", "Scope", "Exit Criteria", "Status", "Gate History", "Known Limitations", "Risks")
+PHASE_SECTIONS = (
+    "Goal",
+    "Scope",
+    "Exit Criteria",
+    "Status",
+    "Gate History",
+    "Known Limitations",
+    "Risks",
+)
+
+
 # src/walk/memory/paths.py
-def phase_doc_path(phase_id: PhaseId) -> str: ...        # "phases/<PHASE-id>.md"
-def phase_evidence_dir(phase_id: PhaseId) -> str: ...    # "phases/<PHASE-id>/evidence"
+def phase_doc_path(phase_id: PhaseId) -> str: ...  # "phases/<PHASE-id>.md"
+def phase_evidence_dir(phase_id: PhaseId) -> str: ...  # "phases/<PHASE-id>/evidence"
 ```
 `policies.yaml` gains a top-level `phase_budget` mapping (`BudgetDimension` → limit) next to `roles:`; absent → kernel default above.
 
@@ -347,26 +367,61 @@ The §69 Phase Evidence Package is assembled deterministically from persisted fa
 # src/walk/orchestrator/protocols.py
 class EvidencePackager(Protocol):
     """§69. Hosted by walk.orchestrator; called by the ON_PHASE_REVIEW_START MUST hook."""
+
     async def build(self, phase_id: PhaseId) -> PhaseEvidencePackage:
         """Assemble from persisted state only (no agent run, no .ai narrative except feature-context sections named below)."""
-    async def write(self, package: PhaseEvidencePackage, *, actor: Actor, head: Sha, branch: str) -> str:
+
+    async def write(
+        self, package: PhaseEvidencePackage, *, actor: Actor, head: Sha, branch: str
+    ) -> str:
         """Render + MemoryManager.write(MemoryDocument type=evidence_package, id=f"{phase_id}-EP{gate_round}") at
         phase_evidence_package_path(phase_id). Returns repo-relative path."""
 
+
 # src/walk/orchestrator/evidence_packager.py
 class DefaultEvidencePackager:
-    def __init__(self, workflow: WorkflowManager, evidence: EvidenceManager, costs: CostManager, ledger: LedgerManager,
-                 memory: MemoryManager, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        evidence: EvidenceManager,
+        costs: CostManager,
+        ledger: LedgerManager,
+        memory: MemoryManager,
+        clock: Clock,
+    ) -> None: ...
 
-EVIDENCE_PACKAGE_SECTIONS = ("GDD Coverage", "Stories Completed", "Open Issues", "Known Limitations", "QC Status", "Automated Tests",
-                             "Performance Metrics", "Playable Build", "Gameplay Recording", "Screenshots", "Design Review",
-                             "Technical Review", "Risk Summary", "Production Cost")   # §69 order, verbatim
 
-def render_evidence_package(package: PhaseEvidencePackage, titles: dict[WorkItemId, str], evidence: dict[EvidenceId, Evidence]) -> str:
+EVIDENCE_PACKAGE_SECTIONS = (
+    "GDD Coverage",
+    "Stories Completed",
+    "Open Issues",
+    "Known Limitations",
+    "QC Status",
+    "Automated Tests",
+    "Performance Metrics",
+    "Playable Build",
+    "Gameplay Recording",
+    "Screenshots",
+    "Design Review",
+    "Technical Review",
+    "Risk Summary",
+    "Production Cost",
+)  # §69 order, verbatim
+
+
+def render_evidence_package(
+    package: PhaseEvidencePackage,
+    titles: dict[WorkItemId, str],
+    evidence: dict[EvidenceId, Evidence],
+) -> str:
     """One '## <section>' per EVIDENCE_PACKAGE_SECTIONS entry, in order; empty section body = '_none_'."""
 
+
 # src/walk/memory/paths.py
-def phase_evidence_package_path(phase_id: PhaseId) -> str: ...   # "phases/<PHASE-id>/evidence-package.md"
+def phase_evidence_package_path(
+    phase_id: PhaseId,
+) -> str: ...  # "phases/<PHASE-id>/evidence-package.md"
+
 
 # ON_PHASE_REVIEW_START  builtin.phase_review_build_package  prio 10  required=True
 #   package = packager.build(phase_id); path = packager.write(package, actor=KERNEL, head=repo HEAD, branch=default_branch)
@@ -447,19 +502,23 @@ The kernel stops at the phase boundary by itself (§68): when every scope featur
 #### Interface contract
 ```python
 # DefaultOrchestrator (INTERFACES §1.1)
-async def request_phase_review(self, phase_id: PhaseId, *, force: bool = False, actor: AgentRole = AgentRole.KERNEL) -> PhaseEvidencePackage:
+async def request_phase_review(
+    self, phase_id: PhaseId, *, force: bool = False, actor: AgentRole = AgentRole.KERNEL
+) -> PhaseEvidencePackage:
     """1) phase_event(phase_id, "request_review", ctx(actor, payload={"scope_feature_states": {feature_id: state}, "force": force}))
-          → EVIDENCE_REVIEW; ON_PHASE_REVIEW_START fires (E07-S03 MUST package; E07-S08 default retrospective).
-       2) phase_event(phase_id, "package_ready", ctx(KERNEL, payload={"evidence_package_written": <file exists>,
-          "retrospective_written": <retrospective_path(phase_id) exists>})) → USER_GATE, gate_round += 1.
-       3) returns the package built in step 1 (read back from the document)."""
+       → EVIDENCE_REVIEW; ON_PHASE_REVIEW_START fires (E07-S03 MUST package; E07-S08 default retrospective).
+    2) phase_event(phase_id, "package_ready", ctx(KERNEL, payload={"evidence_package_written": <file exists>,
+       "retrospective_written": <retrospective_path(phase_id) exists>})) → USER_GATE, gate_round += 1.
+    3) returns the package built in step 1 (read back from the document)."""
+
 
 async def auto_request_review(self) -> bool:
     """Called at the end of every tick: if project.current_phase is ACTIVE, running() is empty for the phase, and every FEATURE under
     Phase.scope_epic_ids is in COMPLETE ∪ CANCELLED ∪ BLOCKED → request_phase_review(phase_id); returns True when it did."""
 
+
 # src/walk/memory/paths.py
-def retrospective_path(phase_id: PhaseId) -> str: ...     # "phases/<PHASE-id>/retrospective.md"
+def retrospective_path(phase_id: PhaseId) -> str: ...  # "phases/<PHASE-id>/retrospective.md"
 ```
 Guards (E01-S11 names): `all_scope_features_terminal` reads `scope_feature_states` (passes when all values ∈ {COMPLETE, CANCELLED, BLOCKED} or `force` is True **and** `actor_role == USER`); `evidence_package_written`, `retrospective_written` read the same-named boolean payload keys.
 CLI: `walk phase review ID [--force]` (USER actor; `--force` is the INTERFACES §3.4 "USER force"); `walk phase evidence ID [--open] [--json]` prints the evidence-package document (`--json` → `PhaseEvidencePackage.model_dump(mode="json")` reconstructed from the document's front matter + sections; `--open` launches the OS default viewer via `SubprocessRunner`).
@@ -649,15 +708,27 @@ User feedback given with `REWORK` becomes structured production work (§71): the
 #### Interface contract
 ```python
 # src/walk/orchestrator/phase_gate.py
-REWORK_LABELS: tuple[str, ...] = ("rework:design", "rework:vfx", "rework:animation", "rework:gameplay", "rework:audio", "rework:qc", "rework:other")   # §71 categories
+REWORK_LABELS: tuple[str, ...] = (
+    "rework:design",
+    "rework:vfx",
+    "rework:animation",
+    "rework:gameplay",
+    "rework:audio",
+    "rework:qc",
+    "rework:other",
+)  # §71 categories
 
-class DefaultPhaseGate:   # additions
+
+class DefaultPhaseGate:  # additions
     async def rework_intake(self, phase: Phase, feedback: str, actor: Actor) -> Task:
         """INTERFACES §5.6 REWORK line: WorkflowManager.create(WorkItemDraft(kind=TASK, title=f"Rework intake: {phase.id} r{phase.gate_round}",
         description=feedback, contract=StoryContract(goal=feedback, owner_role=PRODUCT_OWNER if enabled else ORCHESTRATOR,
         acceptance_criteria=["new_tasks cover every feedback category", "all new_tasks inside phase scope"]), labels=["phase-intake", "rework", "analysis-only"]),
         actor=KERNEL, phase_id=phase.id) → state READY (raise_event "ready" by KERNEL); idempotency key f"phase.rework:{phase.id}:{phase.gate_round}"."""
-    async def on_intake_completed(self, task: Task, output: AgentOutput, created: list[WorkItemId]) -> Phase | None:
+
+    async def on_intake_completed(
+        self, task: Task, output: AgentOutput, created: list[WorkItemId]
+    ) -> Phase | None:
         """Called once the intake task reaches COMPLETE through `analysis_done` (INTERFACES §3.2 row, E06-S02 label `analysis-only`): phase_event(task.phase_id, "rework_planned", ctx(KERNEL, payload={"rework_task_ids": created}))
         → ACTIVE (ON_PHASE_START fires again: new baseline r+1, budgets ensured). Returns the Phase, or None if task is not an intake task."""
 ```
@@ -752,53 +823,91 @@ A `CHANGE` decision becomes a §72 impact analysis that the user approves before
 # src/walk/orchestrator/models.py
 class ChangeImpact(WalkModel):
     """§72 impact analysis result; rendered to .ai/phases/<PHASE-id>/evidence/change-plan-<gate_round>.md."""
+
     phase_id: PhaseId
     gate_round: int
     feedback: str
-    affected_gdd: list[GddRef]                 # Affected GDD
-    affected_specs: list[str]                  # Affected Specs (doc ids / .ai paths)
-    affected_work_items: list[WorkItemId]      # Affected Jira Work (kernel ids; provider keys rendered alongside)
-    affected_code: list[str]                   # Affected Code (repo paths; declared ∪ CodeGraphProvider.impact)
-    affected_assets: list[str]                 # Affected Assets
-    affected_save_data: list[str]              # Affected Save Data
-    affected_tests: list[str]                  # Affected Tests (paths + AUTOMATED_TEST evidence ids)
-    affected_future_phases: list[PhaseId]      # Affected Future Phases
-    migration_plan: str                        # §72 SHOULD: migration/change plan (markdown)
+    affected_gdd: list[GddRef]  # Affected GDD
+    affected_specs: list[str]  # Affected Specs (doc ids / .ai paths)
+    affected_work_items: list[
+        WorkItemId
+    ]  # Affected Jira Work (kernel ids; provider keys rendered alongside)
+    affected_code: list[str]  # Affected Code (repo paths; declared ∪ CodeGraphProvider.impact)
+    affected_assets: list[str]  # Affected Assets
+    affected_save_data: list[str]  # Affected Save Data
+    affected_tests: list[str]  # Affected Tests (paths + AUTOMATED_TEST evidence ids)
+    affected_future_phases: list[PhaseId]  # Affected Future Phases
+    migration_plan: str  # §72 SHOULD: migration/change plan (markdown)
     graph_available: bool
     analysis_run_ids: list[RunId]
     generated_at: datetime
 
+
 # src/walk/orchestrator/change_impact.py
-CHANGE_PLAN_SECTIONS = ("Feedback", "Affected GDD", "Affected Specs", "Affected Jira Work", "Affected Code", "Affected Assets",
-                        "Affected Save Data", "Affected Tests", "Affected Future Phases", "Migration Plan")   # §72 order + plan
-CHANGE_FINDING_PREFIXES: dict[str, str] = {"GDD:": "affected_gdd", "SPEC:": "affected_specs", "WORK:": "affected_work_items",
-    "CODE:": "affected_code", "ASSET:": "affected_assets", "SAVE:": "affected_save_data", "TEST:": "affected_tests",
-    "PHASE:": "affected_future_phases"}   # Finding.summary prefix → field; values come from Finding.affected_files
+CHANGE_PLAN_SECTIONS = (
+    "Feedback",
+    "Affected GDD",
+    "Affected Specs",
+    "Affected Jira Work",
+    "Affected Code",
+    "Affected Assets",
+    "Affected Save Data",
+    "Affected Tests",
+    "Affected Future Phases",
+    "Migration Plan",
+)  # §72 order + plan
+CHANGE_FINDING_PREFIXES: dict[str, str] = {
+    "GDD:": "affected_gdd",
+    "SPEC:": "affected_specs",
+    "WORK:": "affected_work_items",
+    "CODE:": "affected_code",
+    "ASSET:": "affected_assets",
+    "SAVE:": "affected_save_data",
+    "TEST:": "affected_tests",
+    "PHASE:": "affected_future_phases",
+}  # Finding.summary prefix → field; values come from Finding.affected_files
+
 
 class ChangeImpactAnalyzer:
-    def __init__(self, workflow: WorkflowManager, memory: MemoryManager, evidence: EvidenceManager,
-                 code_graph: CodeGraphProvider | None, repo_path: str, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        memory: MemoryManager,
+        evidence: EvidenceManager,
+        code_graph: CodeGraphProvider | None,
+        repo_path: str,
+        clock: Clock,
+    ) -> None: ...
     async def seed(self, phase: Phase, feedback: str) -> ChangeImpact:
         """Kernel facts before any agent run: affected_future_phases = phases with ordinal > phase.ordinal not COMPLETE/STOPPED;
         affected_work_items = []; all other lists empty; migration_plan = ''. Passed to the ANALYSIS template."""
-    async def analyze(self, phase: Phase, feedback: str, outputs: list[tuple[RunId, AgentOutput]]) -> ChangeImpact:
+
+    async def analyze(
+        self, phase: Phase, feedback: str, outputs: list[tuple[RunId, AgentOutput]]
+    ) -> ChangeImpact:
         """Merge declared findings (CHANGE_FINDING_PREFIXES) of every output, then expand:
         affected_code ∪= [n.path for n in code_graph.impact(repo_path, declared_code) if n.path];
         affected_tests ∪= impacted paths matching tests globs + AUTOMATED_TEST evidence ids of affected work items;
         affected_work_items ∪= scope descendants whose FeatureContext.relevant_files ∩ affected_code ≠ ∅ or whose gdd_refs ∩ affected_gdd ≠ ∅;
         affected_future_phases ∪= seed facts; migration_plan = LEAD_DEV output.result (+ PO output.result under '### Product');
         all lists de-duplicated and sorted."""
+
     async def record(self, impact: ChangeImpact, *, actor: Actor) -> Evidence:
         """render_change_plan → file at change_plan_path(phase_id, gate_round) → EvidenceManager.record(
         EvidenceDraft(kind=PROJECT_DATA, path_or_uri=<file>, description=f"Change plan {phase_id} r{gate_round}",
         metrics=impact.model_dump(mode="json")), actor=actor, work_item_id=None, phase_id=phase_id, commit=HEAD)."""
 
+
 def render_change_plan(impact: ChangeImpact, titles: dict[WorkItemId, str]) -> str:
     """One '## <section>' per CHANGE_PLAN_SECTIONS in order; empty list → '_none identified_';
     Affected Code adds '_code graph unavailable — agent-declared paths only_' when graph_available is False."""
 
+
 # src/walk/memory/paths.py
-def change_plan_path(phase_id: PhaseId, gate_round: int) -> str: ...   # "phases/<PHASE-id>/evidence/change-plan-<gate_round>.md"
+def change_plan_path(
+    phase_id: PhaseId, gate_round: int
+) -> str: ...  # "phases/<PHASE-id>/evidence/change-plan-<gate_round>.md"
+
 
 # src/walk/orchestrator/phase_gate.py — DefaultPhaseGate additions (constructor gains analyzer, permissions, plan_phase)
 async def change_intake(self, phase: Phase, feedback: str, actor: Actor) -> Task:
@@ -806,7 +915,11 @@ async def change_intake(self, phase: Phase, feedback: str, actor: Actor) -> Task
     description=feedback, contract=StoryContract(goal=feedback, owner_role=LEAD_DEV,
     reviewer_role=PRODUCT_OWNER if enabled else LEAD_DEV, acceptance_criteria=["every §72 category answered", "migration plan in result"]),
     labels=["phase-intake", "change", "analysis-only"]), actor=KERNEL, phase_id=phase.id) → READY; idempotency key f"phase.change:{phase.id}:{phase.gate_round}"."""
-async def on_change_analysis_completed(self, task: Task, output: AgentOutput, run_id: RunId) -> ApprovalRequest | None:
+
+
+async def on_change_analysis_completed(
+    self, task: Task, output: AgentOutput, run_id: RunId
+) -> ApprovalRequest | None:
     """Called after the task reached COMPLETE via `analysis_done` (INTERFACES §3.2, label `analysis-only`).
     LEAD_DEV task done and PRODUCT_OWNER enabled → create the follow-up change-analysis TASK (same title suffix " (PO)",
     owner_role=PRODUCT_OWNER, labels ["phase-intake", "change", "analysis-only", "change:po"], parent_id=task.id) → READY;
@@ -814,6 +927,8 @@ async def on_change_analysis_completed(self, task: Task, output: AgentOutput, ru
     Last task done → analyzer.analyze(outputs of all change-analysis tasks of this gate round) → analyzer.record →
     PermissionManager.request_approval({"phase_id", "gate_round", "evidence_id", "path"}, kind="CHANGE_PLAN",
     approver=USER, requested_by=LEAD_DEV, run_id=run_id, work_item_id=task.id)."""
+
+
 async def apply_change_decision(self, approval_id: ApprovalRequestId) -> Phase:
     """Approval kind CHANGE_PLAN, state APPROVED → phase_event("change_plan_approved", ctx(Actor(USER, name=decided_by),
     payload={"change_plan_evidence_id": payload.evidence_id, "approval_state": "APPROVED"})) → PLANNED → plan_phase(phase_id);
@@ -917,24 +1032,31 @@ Protocol: INTERFACES §1.15 `ImprovementManager.phase_retrospective(phase_id, *,
 # src/walk/improvement/repository.py
 class RetrospectiveRepository:
     def __init__(self, db: Database) -> None: ...
-    async def upsert(self, retro: Retrospective) -> None: ...                 # PK id; json = model_dump_json()
+    async def upsert(self, retro: Retrospective) -> None: ...  # PK id; json = model_dump_json()
     async def get(self, retro_id: RetrospectiveId) -> Retrospective | None: ...
+
 
 # src/walk/improvement/retrospective.py — pure functions over ledger events (§83)
 def top_bottleneck(transitions: list[LedgerEvent], now: datetime) -> str:
     """Sum dwell time per WorkItemState over WORK_ITEM_TRANSITION events of STORY/TASK/BUG items (state entered → next transition,
     open intervals closed at `now`), excluding COMPLETE and CANCELLED. Max sum wins; tie → state name ascending.
     Returns f"{state}: {hours:.1f} h over {n} items (worst {item_id})" or "none"."""
+
+
 def top_defect(bug_events: list[LedgerEvent]) -> str:
     """Group BUG_CREATED by payload.parent_id (feature or story). Max count wins; tie → highest payload.severity, then id ascending.
     Returns f"{count} bugs under {parent_id} (max severity {severity}; first {bug_id})" or "none"."""
+
+
 def render_retrospective(retro: Retrospective, phase_id: PhaseId, gate_round: int) -> str:
     """One '## <section>' per RETROSPECTIVE_SECTIONS. Metrics = '| metric | value |' table in §115 order
     (Stories, First-pass success %, Reworked stories, QC Bugs, Escaped Bugs, Context stale incidents, Fallbacks, Failed handoffs,
     Build failures) followed by Debate rounds, User escalations, Total cost USD, Total tokens, Mean task duration s."""
 
+
 # src/walk/memory/sections.py
 RETROSPECTIVE_SECTIONS = ("Metrics", "Top Bottleneck", "Top Defect", "Candidates", "Narrative")
+
 
 # DefaultImprovementManager — constructor gains telemetry: TelemetryManager, retrospectives: RetrospectiveRepository
 async def phase_retrospective(self, phase_id: PhaseId, *, with_narrative: bool) -> Retrospective:
@@ -942,6 +1064,7 @@ async def phase_retrospective(self, phase_id: PhaseId, *, with_narrative: bool) 
     top_bottleneck/top_defect from ledger.query(phase_id=phase_id, kinds=[...]); Retrospective(id=f"RETRO-{phase_id}", level="PHASE",
     subject_id=phase_id, candidate_ids=[], narrative_markdown=""); repository upsert; MemoryManager.write(doc type=retrospective,
     id=f"RETRO-{phase_id}") at retrospective_path(phase_id) (E07-S04). Returns the Retrospective."""
+
 
 # ON_PHASE_REVIEW_START  builtin.phase_retrospective  prio 5  required=False  (default attachment, ARCHITECTURE §4.1)
 #   improvement.phase_retrospective(phase_id, with_narrative=False); ctx.payload["retrospective_written"] = True
@@ -1027,23 +1150,43 @@ When a phase reaches `COMPLETE` the `ON_PHASE_COMPLETE` MUST attachment writes `
 `MemoryManager.write_report(kind, subject_id, markdown) -> str` per INTERFACES §1.8.
 ```python
 # src/walk/orchestrator/phase_report.py
-PHASE_REPORT_SECTIONS = ("Summary", "Gate History", "Scope Delivered", "Open Issues", "Production Cost", "Retrospective", "Evidence Package")
+PHASE_REPORT_SECTIONS = (
+    "Summary",
+    "Gate History",
+    "Scope Delivered",
+    "Open Issues",
+    "Production Cost",
+    "Retrospective",
+    "Evidence Package",
+)
 
-def render_phase_report(phase: Phase, decisions: list[LedgerEvent], package: PhaseEvidencePackage | None,
-                        retrospective: Retrospective | None, cost: dict[CostCategory, float], generated_at: datetime) -> str:
+
+def render_phase_report(
+    phase: Phase,
+    decisions: list[LedgerEvent],
+    package: PhaseEvidencePackage | None,
+    retrospective: Retrospective | None,
+    cost: dict[CostCategory, float],
+    generated_at: datetime,
+) -> str:
     """'# Phase report <id> — <name>' then one '## <section>' per PHASE_REPORT_SECTIONS.
     Summary: state, started_at, completed_at, gate rounds, last decision. Gate History: table round | decision | at | feedback excerpt (≤ 120 chars)
     from PHASE_GATE_DECISION events. Scope Delivered / Open Issues: from package (stories_completed, stories_open, open_issues).
     Production Cost: category | usd + total. Retrospective: §115 figures + top bottleneck/defect, or '_none_'.
     Evidence Package: repo-relative link to phase_evidence_package_path(phase.id) and its gate_round, or '_none_'."""
 
+
 # src/walk/memory/paths.py
-def report_path(kind: str, subject_id: str) -> str: ...   # kind "phase" → "reports/phases/<subject_id>.md"
+def report_path(
+    kind: str, subject_id: str
+) -> str: ...  # kind "phase" → "reports/phases/<subject_id>.md"
+
 
 # DefaultMemoryManager
 async def write_report(self, kind: str, subject_id: str, markdown: str) -> str:
     """kind == "phase" only, else NotSupported("E09-S02"). Atomic overwrite at report_path; no front matter, no memory_index row,
     no CONTEXT_UPDATED (derived artefact, E09-S02 contract). Returns repo-relative path."""
+
 
 # ON_PHASE_COMPLETE  builtin.phase_complete_report  prio 10  required=True  (MUST, ARCHITECTURE §4.1)
 #   decisions = ledger.query(kinds=[PHASE_GATE_DECISION], phase_id=…); package = read back from evidence-package.md (E07-S04 reader);
@@ -1051,6 +1194,7 @@ async def write_report(self, kind: str, subject_id: str, markdown: str) -> str:
 #   → MemoryManager.write_report("phase", phase_id, render_phase_report(...))
 #   → MemoryManager.apply_updates([ContextUpdate(doc=phase_doc_path, section="Status", REPLACE, f"COMPLETE at {iso}"),
 #                                  ContextUpdate(doc=phase_doc_path, section="Gate History", REPLACE, <gate history table>)], actor=KERNEL)
+
 
 # DefaultOrchestrator
 async def repair_phase_reports(self) -> list[PhaseId]:

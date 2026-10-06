@@ -315,6 +315,7 @@ The project database `<repo>/.ai/kernel.db` can be created and migrated to the f
 ```python
 DbKind = Literal["project", "kernel"]
 
+
 class Database:
     def __init__(self, path: Path, *, read_only: bool = False) -> None: ...
     @property
@@ -322,15 +323,25 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         """Opens (or returns the process-wide) connection with PRAGMA journal_mode=WAL, foreign_keys=ON,
         synchronous=NORMAL, busy_timeout=5000; row_factory=sqlite3.Row; isolation_level=None (explicit BEGIN)."""
+
     def close(self) -> None: ...
-    def backup_to(self, target: Path) -> None: ...   # sqlite3.Connection.backup
+    def backup_to(self, target: Path) -> None: ...  # sqlite3.Connection.backup
+
 
 class Migration(FrozenModel):
-    version: int; name: str; sql_path: str; py_path: str | None
+    version: int
+    name: str
+    sql_path: str
+    py_path: str | None
+
 
 class MigrationRunner:
     def __init__(self, db: Database, kind: DbKind) -> None: ...
-    def discover(self) -> list[Migration]: ...        # files NNNN_<name>.sql under migrations/<kind>/, sorted, contiguous from 1
+    def discover(
+        self,
+    ) -> list[
+        Migration
+    ]: ...  # files NNNN_<name>.sql under migrations/<kind>/, sorted, contiguous from 1
     def applied(self) -> list[int]: ...
     def apply_pending(self) -> list[int]:
         """Applies each missing migration in one BEGIN IMMEDIATE transaction per file; inserts schema_migrations row;
@@ -414,37 +425,75 @@ Transactional building blocks shared by every repository: one SQLite transaction
 ```python
 class UnitOfWork:
     """Async context manager around one SQLite transaction (ADR-0002 D-9)."""
+
     def __init__(self, db: Database) -> None: ...
     @property
     def conn(self) -> sqlite3.Connection: ...
-    async def __aenter__(self) -> "UnitOfWork": ...     # BEGIN IMMEDIATE; nested use raises ConfigError
-    async def __aexit__(self, *exc: object) -> None: ... # COMMIT on success, ROLLBACK on exception
-    def after_commit(self, fn: Callable[[], Awaitable[None]]) -> None: ...  # hooks fired after COMMIT, in order
+    async def __aenter__(
+        self,
+    ) -> "UnitOfWork": ...  # BEGIN IMMEDIATE; nested use raises ConfigError
+    async def __aexit__(self, *exc: object) -> None: ...  # COMMIT on success, ROLLBACK on exception
+    def after_commit(
+        self, fn: Callable[[], Awaitable[None]]
+    ) -> None: ...  # hooks fired after COMMIT, in order
+
 
 T = TypeVar("T", bound=WalkModel)
+
+
 class Repository(Generic[T]):
-    _table: ClassVar[str]; _model: type[T]; _key: ClassVar[str] = "id"
+    _table: ClassVar[str]
+    _model: type[T]
+    _key: ClassVar[str] = "id"
+
     def __init__(self, db: Database) -> None: ...
-    def projection(self, obj: T) -> dict[str, object]: ...   # subclass hook: indexed columns; default {}
+    def projection(
+        self, obj: T
+    ) -> dict[str, object]: ...  # subclass hook: indexed columns; default {}
     async def insert(self, obj: T, uow: UnitOfWork) -> T: ...
     async def upsert(self, obj: T, uow: UnitOfWork) -> T: ...
     async def get(self, key: str) -> T | None: ...
-    async def list_where(self, where: str = "1=1", params: Sequence[object] = (), *, order_by: str | None = None, limit: int | None = None) -> list[T]: ...
+    async def list_where(
+        self,
+        where: str = "1=1",
+        params: Sequence[object] = (),
+        *,
+        order_by: str | None = None,
+        limit: int | None = None,
+    ) -> list[T]: ...
 
-SEQUENCE_WIDTHS: dict[str, int]   # DOMAIN-MODEL §2: PHASE 2, EPIC 3, FEAT 4, STORY 4, TASK 4, BUG 4, DEC 4, DEB 4, EVD 6, APR 4, HO 4, APV 4, RC 2, OBS 4, OBS-K 4, IMP 2, PATTERN 3, ANTI 3, EXP 4
-class IdSequenceStore:   # implements walk.common.ids.IdFactory
+
+SEQUENCE_WIDTHS: dict[
+    str, int
+]  # DOMAIN-MODEL §2: PHASE 2, EPIC 3, FEAT 4, STORY 4, TASK 4, BUG 4, DEC 4, DEB 4, EVD 6, APR 4, HO 4, APV 4, RC 2, OBS 4, OBS-K 4, IMP 2, PATTERN 3, ANTI 3, EXP 4
+
+
+class IdSequenceStore:  # implements walk.common.ids.IdFactory
     def __init__(self, db: Database) -> None: ...
-    def bind(self, uow: UnitOfWork) -> "IdSequenceStore": ...   # returns a view that allocates on uow.conn
-    def next_sequence(self, prefix: str) -> str: ...            # ConfigError when unbound or prefix unknown
+    def bind(
+        self, uow: UnitOfWork
+    ) -> "IdSequenceStore": ...  # returns a view that allocates on uow.conn
+    def next_sequence(self, prefix: str) -> str: ...  # ConfigError when unbound or prefix unknown
     def new_ulid(self) -> str: ...
 
-class IdempotencyRecord(FrozenModel): key: str; operation: str; result_ref: str | None; created_at: datetime
+
+class IdempotencyRecord(FrozenModel):
+    key: str
+    operation: str
+    result_ref: str | None
+    created_at: datetime
+
+
 class IdempotencyStore:
     def __init__(self, db: Database, clock: Clock) -> None: ...
     async def has(self, key: str) -> bool: ...
     async def get(self, key: str) -> IdempotencyRecord | None: ...
-    async def put(self, key: str, operation: str, result_ref: str | None, uow: UnitOfWork) -> None: ...
-    async def run(self, key: str, operation: str, fn: Callable[[], Awaitable[str]], uow: UnitOfWork) -> str: ...  # replay stored result_ref
+    async def put(
+        self, key: str, operation: str, result_ref: str | None, uow: UnitOfWork
+    ) -> None: ...
+    async def run(
+        self, key: str, operation: str, fn: Callable[[], Awaitable[str]], uow: UnitOfWork
+    ) -> str: ...  # replay stored result_ref
 ```
 
 #### Behavior
@@ -611,9 +660,21 @@ Structured JSON logging, counters/timers, ledger-derived `RetrospectiveMetrics`,
 Protocols: INTERFACES.md §1.14 `TelemetryManager`, `EvidenceManager`. Deltas:
 ```python
 class DefaultTelemetryManager:
-    def __init__(self, repo_root: Path, ledger: LedgerRepository, clock: Clock) -> None: ...   # log file <repo>/.walk/logs/kernel.jsonl
+    def __init__(
+        self, repo_root: Path, ledger: LedgerRepository, clock: Clock
+    ) -> None: ...  # log file <repo>/.walk/logs/kernel.jsonl
+
+
 class DefaultEvidenceManager:
-    def __init__(self, db: Database, ai_root: Path, repo: EvidenceRepository, ledger: LedgerManager, ids: IdSequenceStore, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        db: Database,
+        ai_root: Path,
+        repo: EvidenceRepository,
+        ledger: LedgerManager,
+        ids: IdSequenceStore,
+        clock: Clock,
+    ) -> None: ...
 ```
 `METRIC_QUERIES` — one SQL per `RetrospectiveMetrics` field, scoped by optional `phase_id`/`since`:
 | Field | Definition over `ledger_events` (`e`) |
@@ -706,11 +767,25 @@ A deterministic, synchronous, priority-ordered hook dispatcher with timeouts, fa
 Models: DOMAIN-MODEL §4.6 (`walk.hooks.models`) verbatim. Protocol: INTERFACES.md §1.11 `HookManager`. Deltas:
 ```python
 HookCallable = Callable[[HookContext], Awaitable[None]]
-class HookFailed(PermanentError): """A FAIL_CLOSED hook failed; carries hook_id and results so far in detail."""
+
+
+class HookFailed(PermanentError):
+    """A FAIL_CLOSED hook failed; carries hook_id and results so far in detail."""
+
+
 class DefaultHookManager:
-    def __init__(self, repo: HookExecutionRepository, ledger: LedgerManager, clock: Clock, *, callables: dict[str, HookCallable] | None = None) -> None: ...
-    def register(self, hook: Hook, fn: HookCallable | None = None) -> None: ...   # builtin: fn required (or resolvable callable_path); project: fn None
-    def load_project_hooks(self, path: str) -> list[Hook]: ...                     # raises NotSupported until E02-S09
+    def __init__(
+        self,
+        repo: HookExecutionRepository,
+        ledger: LedgerManager,
+        clock: Clock,
+        *,
+        callables: dict[str, HookCallable] | None = None,
+    ) -> None: ...
+    def register(
+        self, hook: Hook, fn: HookCallable | None = None
+    ) -> None: ...  # builtin: fn required (or resolvable callable_path); project: fn None
+    def load_project_hooks(self, path: str) -> list[Hook]: ...  # raises NotSupported until E02-S09
     async def fire(self, name: HookName, ctx: HookContext) -> list[HookResult]: ...
     def hooks_for(self, name: HookName) -> list[Hook]: ...
 ```
@@ -791,12 +866,30 @@ The §52 hierarchy (Project, Epic, Feature, Story, Task, Bug) is persisted with 
 Models: DOMAIN-MODEL §4.1 verbatim; INTERFACES.md §1.3 value objects. Protocol: INTERFACES.md §1.3 `WorkflowManager` (this story implements `create`, `get`, `query`; remaining methods raise `ConfigError("implemented in E01-S09/S10/S11")` until those stories land — the only permitted deferred-method pattern, see E01-S29 Notes). Deltas:
 ```python
 class WorkItemNotFound(PermanentError): ...
-class WorkflowRepository(Repository[WorkItem]):   # table work_items; projection: kind, project_key, parent_id, phase_id, state, state_version, title, owner_role, assigned_run_id, external_ref, priority, risk, fix_loops, created_at, updated_at
+
+
+class WorkflowRepository(
+    Repository[WorkItem]
+):  # table work_items; projection: kind, project_key, parent_id, phase_id, state, state_version, title, owner_role, assigned_run_id, external_ref, priority, risk, fix_loops, created_at, updated_at
     async def by_external_ref(self, external_ref: str) -> WorkItem | None: ...
     async def children(self, parent_id: WorkItemId) -> list[WorkItem]: ...
-class ProjectRepository(Repository[Project]): ...   # table projects, key "key"
+
+
+class ProjectRepository(Repository[Project]): ...  # table projects, key "key"
+
+
 class DefaultWorkflowManager:
-    def __init__(self, db: Database, items: WorkflowRepository, projects: ProjectRepository, ids: IdSequenceStore, ledger: LedgerManager, hooks: HookManager, clock: Clock, tables_dir: Path) -> None: ...
+    def __init__(
+        self,
+        db: Database,
+        items: WorkflowRepository,
+        projects: ProjectRepository,
+        ids: IdSequenceStore,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        clock: Clock,
+        tables_dir: Path,
+    ) -> None: ...
 ```
 CLI: `walk work list [--state S]... [--kind K]... [--phase ID]`, `walk work show ID` (item + contract + transitions + runs + cost — transitions/runs/cost sections print "none" until their stories exist).
 
@@ -876,18 +969,35 @@ Explicit, data-driven, guarded state transitions committed atomically with the l
 #### Interface contract
 ```python
 class TableLoader:
-    def load(self, path: Path) -> TransitionTable: ...     # validates schema below; every guard name must be registered; ConfigError otherwise
+    def load(
+        self, path: Path
+    ) -> (
+        TransitionTable
+    ): ...  # validates schema below; every guard name must be registered; ConfigError otherwise
+
+
 class StateMachine:
     def __init__(self, tables: dict[WorkItemKind, TransitionTable]) -> None: ...
-    def transition_for(self, kind: WorkItemKind, state: WorkItemState, event: str, item: WorkItem, ctx: TransitionContext) -> Transition:
+    def transition_for(
+        self,
+        kind: WorkItemKind,
+        state: WorkItemState,
+        event: str,
+        item: WorkItem,
+        ctx: TransitionContext,
+    ) -> Transition:
         """Candidates = rows with (from_state, event) incl. wildcard rows ('*' / '* except …'); evaluates guards in row order;
         returns the first row whose guards all pass; raises UnknownTransition when no row matches (from,event),
         GuardRejected(reason) when rows exist but all guards fail, PermissionDenied when actor_role ∉ allowed_roles."""
-    def resolve_target(self, transition: Transition, item: WorkItem, ctx: TransitionContext) -> WorkItemState:
+
+    def resolve_target(
+        self, transition: Transition, item: WorkItem, ctx: TransitionContext
+    ) -> WorkItemState:
         """to_state, or ctx.payload['resume_state'] for the pseudo-state 'PREVIOUS' (BLOCKED → unblock)."""
 
+
 def register_guard(name: str) -> Callable[[Guard], Guard]: ...
-def get_guard(name: str) -> Guard: ...                      # ConfigError on unknown
+def get_guard(name: str) -> Guard: ...  # ConfigError on unknown
 def registered_guards() -> dict[str, Guard]: ...
 ```
 YAML schema (`story_workflow.yaml`):
@@ -1017,10 +1127,22 @@ def definition_of_ready_checks(item: WorkItem, deps: list[WorkItem]) -> list[tup
     """§58: ('requirement_complete', goal non-empty), ('acceptance_criteria', non-empty), ('dependencies_resolved', all deps COMPLETE),
     ('design_approved', not required or payload/feature flag), ('assets_available', contract has no 'asset:' constraint or payload flag),
     ('constraints_known', constraints list non-empty or complexity TRIVIAL/SMALL)."""
+
+
 # DefaultWorkflowManager
-def check_definition_of_ready(self, item: WorkItem) -> GuardResult: ...                # reason lists failing check names
-async def ready_items(self, phase_id: PhaseId | None) -> list[WorkItem]: ...            # scheduled_states ∩ dependencies complete ∩ (phase scope)
-async def set_done_dimension(self, feature_id: FeatureId, dimension: DoneDimension, done: bool, evidence_id: EvidenceId | None) -> Feature: ...
+def check_definition_of_ready(
+    self, item: WorkItem
+) -> GuardResult: ...  # reason lists failing check names
+async def ready_items(
+    self, phase_id: PhaseId | None
+) -> list[WorkItem]: ...  # scheduled_states ∩ dependencies complete ∩ (phase scope)
+async def set_done_dimension(
+    self,
+    feature_id: FeatureId,
+    dimension: DoneDimension,
+    done: bool,
+    evidence_id: EvidenceId | None,
+) -> Feature: ...
 ```
 
 #### Behavior
@@ -1097,10 +1219,16 @@ Phase and release-candidate lifecycles exist as persisted aggregates with data-d
 Tables encode INTERFACES §3.4 (phase, 13 rows; events `decide:GO|REWORK|CHANGE|STOP`) and §3.6 (RC, 6 rows). Guards: `previous_phase_complete_or_first`, `scope_non_empty`, `kit_validated` (payload `kit_validated`, default True until E02-S03 supplies it), `all_scope_features_terminal`, `evidence_package_written`, `retrospective_written`, `feedback_non_empty`, `rework_work_items_created`, `impact_analysis_evidence_present`, `approval_user`, `build_evidence_present`, `qc_report_evidence`, `rejection_bugs_created`, `rejection_bugs_complete`.
 ```python
 # DefaultWorkflowManager additions
-async def create_phase(self, name: str, ordinal: int, *, goal: str = "", scope_epic_ids: list[EpicId] = ()) -> Phase: ...   # id PHASE-NN
+async def create_phase(
+    self, name: str, ordinal: int, *, goal: str = "", scope_epic_ids: list[EpicId] = ()
+) -> Phase: ...  # id PHASE-NN
 async def list_phases(self) -> list[Phase]: ...
-async def phase_event(self, phase_id: PhaseId, event: str, ctx: TransitionContext) -> Phase: ...   # ledger PHASE_TRANSITION; decide:* also PHASE_GATE_DECISION (payload decision, feedback); gate_round += 1 on package_ready
-async def rc_event(self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext) -> ReleaseCandidate: ...   # ledger RC_TRANSITION
+async def phase_event(
+    self, phase_id: PhaseId, event: str, ctx: TransitionContext
+) -> Phase: ...  # ledger PHASE_TRANSITION; decide:* also PHASE_GATE_DECISION (payload decision, feedback); gate_round += 1 on package_ready
+async def rc_event(
+    self, rc_id: ReleaseCandidateId, event: str, ctx: TransitionContext
+) -> ReleaseCandidate: ...  # ledger RC_TRANSITION
 ```
 CLI: `walk phase list`, `walk phase start ID`, `walk phase gate ID --decision GO|REWORK|CHANGE|STOP [--feedback TEXT|@FILE]`.
 
@@ -1178,11 +1306,30 @@ Budgets at Global/Project/Phase/Role/Task scope with soft/hard thresholds and ho
 #### Interface contract
 Models: DOMAIN-MODEL §3 budgets enums, §4.4, plus `BudgetPolicy` (DOMAIN-MODEL §4.2 definition, relocated) and `BudgetVerdict` (INTERFACES §1.6). Protocols: INTERFACES.md §1.6. Deltas:
 ```python
-class BudgetExhausted(PermanentError): """hard limit reached; detail: budget id, hard_action"""
+class BudgetExhausted(PermanentError):
+    """hard limit reached; detail: budget id, hard_action"""
+
+
 class DefaultBudgetManager:
-    def __init__(self, db: Database, repo: BudgetRepository, ledger: LedgerManager, hooks: HookManager, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        db: Database,
+        repo: BudgetRepository,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        clock: Clock,
+    ) -> None: ...
+
+
 class DefaultCostManager:
-    def __init__(self, db: Database, repo: CostRepository, ledger: LedgerManager, budgets: BudgetManager, items: WorkflowRepository) -> None: ...
+    def __init__(
+        self,
+        db: Database,
+        repo: CostRepository,
+        ledger: LedgerManager,
+        budgets: BudgetManager,
+        items: WorkflowRepository,
+    ) -> None: ...
 ```
 CLI: `walk cost --item ID | --phase ID | --project` → table `category | usd` and total; `--json`.
 
@@ -1258,15 +1405,41 @@ Effective effort is resolved deterministically from role default, task complexit
 `EffortPolicy` = DOMAIN-MODEL §4.2 definition (relocated); `EffortRequest`, `EffortResolution` = DOMAIN-MODEL §4.3. Protocol: INTERFACES.md §1.5. Deltas:
 ```python
 EFFORT_ORDER: tuple[Effort, ...] = (Effort.LOW, Effort.MEDIUM, Effort.HIGH, Effort.VERY_HIGH)
-STATIC_COST_USD: dict[Effort, float] = {LOW: 1, MEDIUM: 3, HIGH: 8, VERY_HIGH: 20}   # ADR-0011 D-5
+STATIC_COST_USD: dict[Effort, float] = {LOW: 1, MEDIUM: 3, HIGH: 8, VERY_HIGH: 20}  # ADR-0011 D-5
+
+
 class CostEstimator(Protocol):
     def estimate(self, role: AgentRole, effort: Effort) -> float: ...
-class StaticCostEstimator: ...   # STATIC_COST_USD; E09-S03 adds the rolling-mean estimator (>= 10 samples)
+
+
+class StaticCostEstimator: ...  # STATIC_COST_USD; E09-S03 adds the rolling-mean estimator (>= 10 samples)
+
+
 class DefaultEffortManager:
-    def __init__(self, estimator: CostEstimator, ledger: LedgerManager, hooks: HookManager, clock: Clock,
-                 request_approval: Callable[[RunId, EffortRequest], Awaitable[bool]]) -> None: ...
-    def resolve(self, policy: EffortPolicy, item: WorkItem, state: WorkItemState, escalation_bump: int, budget_headroom: dict[BudgetDimension, float]) -> EffortResolution: ...
-    async def request_change(self, run_id: RunId, current: Effort, request: EffortRequest, policy: EffortPolicy, headroom: dict[BudgetDimension, float]) -> Effort: ...
+    def __init__(
+        self,
+        estimator: CostEstimator,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        clock: Clock,
+        request_approval: Callable[[RunId, EffortRequest], Awaitable[bool]],
+    ) -> None: ...
+    def resolve(
+        self,
+        policy: EffortPolicy,
+        item: WorkItem,
+        state: WorkItemState,
+        escalation_bump: int,
+        budget_headroom: dict[BudgetDimension, float],
+    ) -> EffortResolution: ...
+    async def request_change(
+        self,
+        run_id: RunId,
+        current: Effort,
+        request: EffortRequest,
+        policy: EffortPolicy,
+        headroom: dict[BudgetDimension, float],
+    ) -> Effort: ...
 ```
 
 #### Behavior
@@ -1341,7 +1514,11 @@ The closed set of kernel tools exists as data with availability resolution and s
 #### Interface contract
 Models: DOMAIN-MODEL §3 `ToolKind`, §4.6 `ToolSpec`, `Skill`, `SkillProjection`, `DriftReport`. Protocols: INTERFACES.md §1.11 `ToolRegistry`, `SkillProjector`, `SkillRegistry`. Deltas:
 ```python
-def load_tool_specs(paths: list[Path]) -> list[ToolSpec]: ...   # builtin yaml + project overrides; duplicate name → ConfigError
+def load_tool_specs(
+    paths: list[Path],
+) -> list[ToolSpec]: ...  # builtin yaml + project overrides; duplicate name → ConfigError
+
+
 class DefaultToolRegistry:
     def __init__(self, specs: list[ToolSpec]) -> None: ...
 ```
@@ -1416,12 +1593,29 @@ Pure, deterministic permission evaluation (ADR-0006 D-3) with default deny, plus
 #### Interface contract
 Models: DOMAIN-MODEL §3 permissions enums, §4.5 verbatim. Protocol: INTERFACES.md §1.10. Deltas:
 ```python
-def tool_pattern_specificity(pattern: str) -> int: ...      # exact 3 > dotted prefix glob "git.*" 2 > "*" 1 > no match 0
+def tool_pattern_specificity(
+    pattern: str,
+) -> int: ...  # exact 3 > dotted prefix glob "git.*" 2 > "*" 1 > no match 0
 def match_tool(pattern: str, tool: ToolName) -> bool: ...
-def command_allowed(command: str, allow_rules: list[PermissionRule], deny_rules: list[PermissionRule]) -> tuple[bool, str]: ...
-def path_inside_worktree(path: str, worktree: str) -> bool: ...   # resolves symlinks/.., Windows-safe
+def command_allowed(
+    command: str, allow_rules: list[PermissionRule], deny_rules: list[PermissionRule]
+) -> tuple[bool, str]: ...
+def path_inside_worktree(
+    path: str, worktree: str
+) -> bool: ...  # resolves symlinks/.., Windows-safe
+
+
 class DefaultPermissionManager:
-    def __init__(self, rules: list[PermissionRule], protected: list[ProtectedAction], repo: ApprovalRepository, ledger: LedgerManager, hooks: HookManager, ids: IdSequenceStore, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        rules: list[PermissionRule],
+        protected: list[ProtectedAction],
+        repo: ApprovalRepository,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdSequenceStore,
+        clock: Clock,
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -1507,15 +1701,49 @@ Every `.ai/` document is parsed and written through one validated, atomic path t
 #### Interface contract
 Models: DOMAIN-MODEL §3 memory enums, §4.7 verbatim. Protocol: INTERFACES.md §1.8 (`approve_artifact`, `verify_approved_artifacts`, `assess_freshness`, `read_feature_context`, `read_bug_context`, `read_project_context` raise `ConfigError("implemented in E02-S12 / E04-S01 / E04-S03")` until those stories). Deltas:
 ```python
-def parse_document(path: Path, text: str) -> MemoryDocument: ...        # YAML front matter between leading '---' lines; H2 sections in order; unknown H2 kept
-def render_document(doc: MemoryDocument) -> str: ...                    # deterministic: sorted-key YAML, sections in SECTION_ORDER then unknown in original order
-SECTION_ORDER: dict[MemoryDocType, tuple[str, ...]]   # feature §37 (14), bug §38 (12), project §36 (10), handover §22 (10), decision §44 (11: Topic, Participants, Positions, Evidence, Outcome, Owner, Rationale, Alternatives, Affected Systems, Related Work, Version), approved §33 (Status, Scope, Version, Approved By, Related Requirements, Payload)
-def skeleton_for(doc_type: MemoryDocType, id_: str, title: str, actor: Actor, now: datetime) -> MemoryDocument: ...   # all sections present, empty
-SECRET_PATTERNS: tuple[re.Pattern[str], ...]   # r"AKIA[0-9A-Z]{16}", r"\bsk-[A-Za-z0-9]{20,}", r"\bghp_[A-Za-z0-9]{36}", r"\bATATT[A-Za-z0-9_-]{20,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+def parse_document(
+    path: Path, text: str
+) -> (
+    MemoryDocument
+): ...  # YAML front matter between leading '---' lines; H2 sections in order; unknown H2 kept
+def render_document(
+    doc: MemoryDocument,
+) -> (
+    str
+): ...  # deterministic: sorted-key YAML, sections in SECTION_ORDER then unknown in original order
+
+
+SECTION_ORDER: dict[
+    MemoryDocType, tuple[str, ...]
+]  # feature §37 (14), bug §38 (12), project §36 (10), handover §22 (10), decision §44 (11: Topic, Participants, Positions, Evidence, Outcome, Owner, Rationale, Alternatives, Affected Systems, Related Work, Version), approved §33 (Status, Scope, Version, Approved By, Related Requirements, Payload)
+
+
+def skeleton_for(
+    doc_type: MemoryDocType, id_: str, title: str, actor: Actor, now: datetime
+) -> MemoryDocument: ...  # all sections present, empty
+
+
+SECRET_PATTERNS: tuple[
+    re.Pattern[str], ...
+]  # r"AKIA[0-9A-Z]{16}", r"\bsk-[A-Za-z0-9]{20,}", r"\bghp_[A-Za-z0-9]{36}", r"\bATATT[A-Za-z0-9_-]{20,}", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+
+
 def find_secrets(text: str) -> list[str]: ...  # pattern names found
-def doc_path_for(ai_root: Path, doc_type: MemoryDocType, id_: str) -> Path: ...   # ARCHITECTURE §8 layout; project → project/project.md
+def doc_path_for(
+    ai_root: Path, doc_type: MemoryDocType, id_: str
+) -> Path: ...  # ARCHITECTURE §8 layout; project → project/project.md
+
+
 class DefaultMemoryManager:
-    def __init__(self, ai_root: Path, index: MemoryIndexRepository, ledger: LedgerManager, hooks: HookManager, ids: IdSequenceStore, clock: Clock) -> None: ...
+    def __init__(
+        self,
+        ai_root: Path,
+        index: MemoryIndexRepository,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        ids: IdSequenceStore,
+        clock: Clock,
+    ) -> None: ...
 ```
 
 #### Behavior
@@ -1605,13 +1833,26 @@ Models: DOMAIN-MODEL §4.2 (`Constitution`, `ModelPolicy`, `RuntimePolicy`, `Age
 ```python
 class ConstitutionLoader:
     def __init__(self, defaults_dir: Path, project_roles_dir: Path | None) -> None: ...
-    def load(self, role: AgentRole) -> Constitution: ...     # ADR-0013 D-1..D-4; ConstitutionError on schema/merge violations
+    def load(
+        self, role: AgentRole
+    ) -> Constitution: ...  # ADR-0013 D-1..D-4; ConstitutionError on schema/merge violations
     def available_roles(self) -> list[AgentRole]: ...
+
+
 class PolicyLoader:
     def __init__(self, defaults_path: Path, project_path: Path | None) -> None: ...
-    def load(self, role: AgentRole) -> RuntimePolicy: ...    # deep-merge: project scalars/lists replace defaults per key
+    def load(
+        self, role: AgentRole
+    ) -> RuntimePolicy: ...  # deep-merge: project scalars/lists replace defaults per key
+
+
 class DefaultAgentManager:
-    def __init__(self, constitutions: ConstitutionLoader, policies: PolicyLoader, permissions: PermissionManager) -> None: ...
+    def __init__(
+        self,
+        constitutions: ConstitutionLoader,
+        policies: PolicyLoader,
+        permissions: PermissionManager,
+    ) -> None: ...
 ```
 `policies.yaml` schema: `roles: {<ROLE>: {version, model_policy: {preferred: [family…], fallback, restricted, required_capabilities, cross_model_review, allow_task_override}, effort_policy: {...}, budget_policy: {...}, default_skills, allowed_tools, execution_strategy, max_parallel_runs, checkpoint_every_tool_calls}}` with ADR-0011 D-3 defaults for every `AgentRole` except USER/KERNEL. Default constitutions: front matter exactly as ADR-0013 D-2 for the role (ids `ORCHESTRATOR`, `LEAD_DEV`, `SENIOR_DEV`, `QC`; `version: "1.0"`; `authority` per ADR-0006 D-6; `tool_permissions` per ADR-0006 D-6), body sections ADR-0013 D-3 with one-paragraph placeholders derived from §10.1/§10.6/§10.7/§10.8.
 
@@ -1692,27 +1933,101 @@ The §126 execution contract exists as pydantic models, a `Handover` converts lo
 #### Interface contract
 Models: DOMAIN-MODEL §4.2 (`ToolCallSummary` … `AgentOutput`) verbatim; `AgentOutputStatus` = DOMAIN-MODEL §3 definition, **relocated** from `walk.runtime.models` to `walk.agents.models` (see Notes). Protocol: INTERFACES.md §1.2 `instantiate`, `render_instructions`. Deltas:
 ```python
-HANDOVER_SECTION_FIELDS: tuple[tuple[str, str], ...] = (            # §22 H2 heading → Handover field, in SECTION_ORDER[HANDOVER] order
-    ("Task", "task_summary"), ("Current State", "current_state"), ("Completed Work", "completed_work"),
-    ("Modified Files", "modified_files"), ("Findings", "findings"), ("Hypotheses", "hypotheses"),
-    ("Decisions", "decisions"), ("Risks", "risks"), ("Remaining Work", "remaining_work"), ("Next Action", "next_action"))
-def to_document(handover: Handover, *, actor: Actor, now: datetime) -> MemoryDocument: ...   # type HANDOVER, id = handover.id; scalar fields (role, from_run_id, from_model_id, to_run_id, reason, worktree_head, branch, work_item_id) in front matter `extra`; list fields as "- " bullets; findings as "- **summary** — detail" with evidence ids; proposed_decisions as JSON block under "Decisions"
-def from_document(doc: MemoryDocument) -> Handover: ...                                     # inverse; ConfigError when a required section/front-matter key is missing
+HANDOVER_SECTION_FIELDS: tuple[
+    tuple[str, str], ...
+] = (  # §22 H2 heading → Handover field, in SECTION_ORDER[HANDOVER] order
+    ("Task", "task_summary"),
+    ("Current State", "current_state"),
+    ("Completed Work", "completed_work"),
+    ("Modified Files", "modified_files"),
+    ("Findings", "findings"),
+    ("Hypotheses", "hypotheses"),
+    ("Decisions", "decisions"),
+    ("Risks", "risks"),
+    ("Remaining Work", "remaining_work"),
+    ("Next Action", "next_action"),
+)
 
-TEMPLATE_PURPOSES: tuple[str, ...] = ("IMPLEMENT", "DESIGN", "REVIEW", "QC", "TRIAGE", "DEBATE", "PLAN", "ANALYSIS", "RETRO")
-INPUT_SECTION_ORDER: tuple[str, ...] = ("Agent Role", "Constitution", "Authority", "Task", "Workflow State", "Relevant Context",
-    "Approved Artifacts", "Relevant Decisions", "Available Skills", "Allowed Tools", "Permissions", "Budget", "Effort",
-    "Required Evidence", "Expected Output", "Handover")                                      # §126 order; "Handover" only when present
+
+def to_document(
+    handover: Handover, *, actor: Actor, now: datetime
+) -> MemoryDocument: ...  # type HANDOVER, id = handover.id; scalar fields (role, from_run_id, from_model_id, to_run_id, reason, worktree_head, branch, work_item_id) in front matter `extra`; list fields as "- " bullets; findings as "- **summary** — detail" with evidence ids; proposed_decisions as JSON block under "Decisions"
+def from_document(
+    doc: MemoryDocument,
+) -> Handover: ...  # inverse; ConfigError when a required section/front-matter key is missing
+
+
+TEMPLATE_PURPOSES: tuple[str, ...] = (
+    "IMPLEMENT",
+    "DESIGN",
+    "REVIEW",
+    "QC",
+    "TRIAGE",
+    "DEBATE",
+    "PLAN",
+    "ANALYSIS",
+    "RETRO",
+)
+INPUT_SECTION_ORDER: tuple[str, ...] = (
+    "Agent Role",
+    "Constitution",
+    "Authority",
+    "Task",
+    "Workflow State",
+    "Relevant Context",
+    "Approved Artifacts",
+    "Relevant Decisions",
+    "Available Skills",
+    "Allowed Tools",
+    "Permissions",
+    "Budget",
+    "Effort",
+    "Required Evidence",
+    "Expected Output",
+    "Handover",
+)  # §126 order; "Handover" only when present
+
+
 class TemplateRenderer:
-    def __init__(self, templates_dir: Path, project_templates_dir: Path | None = None) -> None: ...   # jinja2 Environment(autoescape=False, undefined=StrictUndefined, keep_trailing_newline=True)
-    def render(self, purpose: str, **context: object) -> str: ...                            # ConfigError on unknown purpose or undefined variable
-    def version_of(self, purpose: str) -> str: ...                                           # first line of the template: `{# version: 1.0 #}`
-def render_constitution(constitution: Constitution, project_constitution_markdown: str | None) -> str: ...   # ADR-0013 D-3 section order, front matter fields rendered as bullet lists, then body_markdown, then project constitution
-def render_input_sections(agent_input: AgentInput) -> str: ...                              # one `## <section>` per INPUT_SECTION_ORDER entry; models serialised as fenced ```json (model_dump(mode="json"), sort_keys) except ContextBundle items which are rendered as `### <kind> <id>` + content
+    def __init__(
+        self, templates_dir: Path, project_templates_dir: Path | None = None
+    ) -> None: ...  # jinja2 Environment(autoescape=False, undefined=StrictUndefined, keep_trailing_newline=True)
+    def render(
+        self, purpose: str, **context: object
+    ) -> str: ...  # ConfigError on unknown purpose or undefined variable
+    def version_of(
+        self, purpose: str
+    ) -> str: ...  # first line of the template: `{# version: 1.0 #}`
+
+
+def render_constitution(
+    constitution: Constitution, project_constitution_markdown: str | None
+) -> str: ...  # ADR-0013 D-3 section order, front matter fields rendered as bullet lists, then body_markdown, then project constitution
+def render_input_sections(
+    agent_input: AgentInput,
+) -> str: ...  # one `## <section>` per INPUT_SECTION_ORDER entry; models serialised as fenced ```json (model_dump(mode="json"), sort_keys) except ContextBundle items which are rendered as `### <kind> <id>` + content
+
+
 class DefaultAgentManager:
-    def __init__(self, constitutions: ConstitutionLoader, policies: PolicyLoader, permissions: PermissionManager,
-                 tools: ToolRegistry, renderer: TemplateRenderer, *, skills: SkillRegistry | None = None) -> None: ...   # constructor extended from E01-S17
-    async def instantiate(self, role: AgentRole, item: WorkItem, model_id: ModelId, effort: Effort, budget_ids: list[str], available_env_keys: set[str]) -> AgentInstance: ...
+    def __init__(
+        self,
+        constitutions: ConstitutionLoader,
+        policies: PolicyLoader,
+        permissions: PermissionManager,
+        tools: ToolRegistry,
+        renderer: TemplateRenderer,
+        *,
+        skills: SkillRegistry | None = None,
+    ) -> None: ...  # constructor extended from E01-S17
+    async def instantiate(
+        self,
+        role: AgentRole,
+        item: WorkItem,
+        model_id: ModelId,
+        effort: Effort,
+        budget_ids: list[str],
+        available_env_keys: set[str],
+    ) -> AgentInstance: ...
     def render_instructions(self, agent: AgentInstance, item: WorkItem, purpose: str) -> str: ...
 ```
 Template skeleton (every purpose, identical structure, differing only in the purpose paragraph): `{# version: 1.0 #}`, `# Task: {{ purpose }} {{ item.id }} — {{ item.title }}`, sections `## How to work` (§40 order: read context → decisions → approved artifacts → workflow state → code graph → required source → execute), `## Deliverables` (from `expected_output.deliverables`), `## Output contract` (write `.walk/output.json` matching `AgentOutput`, required `status`, `no_context_change_reason` rule, `handover` required for PARTIAL), `## Handover` (rendered only when `handover` is given: "continue from Next Action").
@@ -1798,33 +2113,71 @@ The normalised adapter boundary (protocol, event stream, session configuration, 
 #### Interface contract
 Models: DOMAIN-MODEL §3 `FallbackTrigger`, §4.10 verbatim (`Capability` is imported from `walk.common.enums`, WBS §3.2); INTERFACES.md §2.1 `RunSession`, `ProviderEffortConfig`, `ModelAdapter`; INTERFACES.md §1.4 `ModelRouter`. Deltas:
 ```python
-class NotResumable(PermanentError): """Adapter cannot continue the provider-side session (unsupported or expired)."""
-class BlockedProvider(TransientError): """No routing candidate survived; detail = list[(model_id, reason)]."""
+class NotResumable(PermanentError):
+    """Adapter cannot continue the provider-side session (unsupported or expired)."""
+
+
+class BlockedProvider(TransientError):
+    """No routing candidate survived; detail = list[(model_id, reason)]."""
+
 
 OUTPUT_RELATIVE_PATH = ".walk/output.json"
-def parse_agent_output(raw: str) -> AgentOutput: ...          # json → AgentOutput; raises OutputInvalid whose `detail` is the pydantic error list rendered as "<loc>: <msg>" lines (used verbatim in the repair turn)
-def read_output_file(path: Path) -> str | None: ...           # None when absent
+
+
+def parse_agent_output(
+    raw: str,
+) -> AgentOutput: ...  # json → AgentOutput; raises OutputInvalid whose `detail` is the pydantic error list rendered as "<loc>: <msg>" lines (used verbatim in the repair turn)
+def read_output_file(path: Path) -> str | None: ...  # None when absent
+
 
 # tests/fakes/fake_model_adapter.py
 class FakeScript(WalkModel):
     tool_calls: int = 3
     tool_name: ToolName = "edit"
     output: AgentOutput
-    partial_output: AgentOutput | None = None               # emitted as PARTIAL_OUTPUT before the last tool call when set
-    checkpoint_hint_at: list[int] = []                      # tool-call indexes after which CHECKPOINT_HINT is emitted
-    fail_after_tool_calls: int | None = None                # emit ERROR(trigger) after this many tool calls and stop
+    partial_output: AgentOutput | None = (
+        None  # emitted as PARTIAL_OUTPUT before the last tool call when set
+    )
+    checkpoint_hint_at: list[int] = []  # tool-call indexes after which CHECKPOINT_HINT is emitted
+    fail_after_tool_calls: int | None = (
+        None  # emit ERROR(trigger) after this many tool calls and stop
+    )
     fail_trigger: FallbackTrigger | None = None
     fail_error: str = "scripted failure"
-    invalid_output_times: int = 0                           # first N FINAL_OUTPUTs carry output=None + error (forces repair turns)
-    usage_per_tool_call: UsageReport = UsageReport(input_tokens=1000, output_tokens=200, cost_usd=0.0, turns=1, tool_calls=1, duration_s=1.0)
+    invalid_output_times: int = (
+        0  # first N FINAL_OUTPUTs carry output=None + error (forces repair turns)
+    )
+    usage_per_tool_call: UsageReport = UsageReport(
+        input_tokens=1000, output_tokens=200, cost_usd=0.0, turns=1, tool_calls=1, duration_s=1.0
+    )
     resumable: bool = True
-def fake_descriptor(model_id: ModelId, provider: str, **overrides: object) -> ModelDescriptor: ...   # all capabilities 4, 200k window, 16k output, all effort levels, prices 1.0/5.0 per MTok
+
+
+def fake_descriptor(
+    model_id: ModelId, provider: str, **overrides: object
+) -> (
+    ModelDescriptor
+): ...  # all capabilities 4, 200k window, 16k output, all effort levels, prices 1.0/5.0 per MTok
+
+
 class FakeModelAdapter:
     provider: str
-    def __init__(self, provider: str, descriptors: list[ModelDescriptor], script: FakeScript | Callable[[AgentInput], FakeScript], clock: Clock, *, healthy: bool = True) -> None: ...
-    runs: dict[RunId, list[AgentEvent]]                     # every event emitted, per run (assertion helper)
+
+    def __init__(
+        self,
+        provider: str,
+        descriptors: list[ModelDescriptor],
+        script: FakeScript | Callable[[AgentInput], FakeScript],
+        clock: Clock,
+        *,
+        healthy: bool = True,
+    ) -> None: ...
+
+    runs: dict[RunId, list[AgentEvent]]  # every event emitted, per run (assertion helper)
     authorizations: list[tuple[RunId, ToolCallRequest, PermissionDecision]]
+
     def set_healthy(self, ok: bool) -> None: ...
+
     # ModelAdapter methods per INTERFACES §2.1
 ```
 
@@ -1905,24 +2258,61 @@ Model families resolve to concrete descriptors from configuration, `ModelRouter.
 #### Interface contract
 Protocol: INTERFACES.md §1.4 `ModelRouter`. Deltas:
 ```python
-FAMILY_PATTERN = r"^[a-z0-9-]+/[a-z0-9-]+$"                 # "claude/opus", "codex/default", "fake-codex/sim"
+FAMILY_PATTERN = r"^[a-z0-9-]+/[a-z0-9-]+$"  # "claude/opus", "codex/default", "fake-codex/sim"
+
+
 class FamilyLevel(FrozenModel):
     model: ModelId
-    params: JsonDict                                         # provider params for this effort (effort, max_turns, model_reasoning_effort …)
-    execution_time_s: int                                    # ADR-0011 D-2 wall-clock bound
-    escalate_to: str | None = None                           # family name when this level is served by another family (sonnet VERY_HIGH → claude/opus)
+    params: (
+        JsonDict  # provider params for this effort (effort, max_turns, model_reasoning_effort …)
+    )
+    execution_time_s: int  # ADR-0011 D-2 wall-clock bound
+    escalate_to: str | None = (
+        None  # family name when this level is served by another family (sonnet VERY_HIGH → claude/opus)
+    )
+
+
 class ModelsConfig(WalkModel):
     version: str
     models: dict[ModelId, ModelDescriptor]
     families: dict[str, dict[Effort, FamilyLevel]]
-def load_models_config(default_path: Path, project_path: Path | None) -> ModelsConfig: ...   # deep-merge: project `models` entries replace by id; project `families` replace by family name; ConfigError on schema violation or a family level naming an unknown model
+
+
+def load_models_config(
+    default_path: Path, project_path: Path | None
+) -> ModelsConfig: ...  # deep-merge: project `models` entries replace by id; project `families` replace by family name; ConfigError on schema violation or a family level naming an unknown model
 def build_registry(config: ModelsConfig) -> CapabilityRegistry: ...
-def resolve_family(config: ModelsConfig, family_or_model: str, effort: Effort) -> tuple[ModelId, FamilyLevel]: ...   # concrete ModelId passes through (level synthesised from descriptor); unknown family → ConfigError; follows `escalate_to` once
-def usage_to_cost_record(usage: UsageReport, descriptor: ModelDescriptor, subject: BudgetSubject, *, record_id: str, at: datetime) -> CostRecord: ...   # category LLM, dimension TOKENS, quantity = input+output+cache_read, unit "tokens", cost_usd from prices, token fields copied
+def resolve_family(
+    config: ModelsConfig, family_or_model: str, effort: Effort
+) -> tuple[
+    ModelId, FamilyLevel
+]: ...  # concrete ModelId passes through (level synthesised from descriptor); unknown family → ConfigError; follows `escalate_to` once
+def usage_to_cost_record(
+    usage: UsageReport,
+    descriptor: ModelDescriptor,
+    subject: BudgetSubject,
+    *,
+    record_id: str,
+    at: datetime,
+) -> CostRecord: ...  # category LLM, dimension TOKENS, quantity = input+output+cache_read, unit "tokens", cost_usd from prices, token fields copied
 def estimate_usage_cost_usd(usage: UsageReport, descriptor: ModelDescriptor) -> float: ...
-ERROR_TRIGGER_MAP: dict[type[BaseException], FallbackTrigger] = {ProviderUnavailable: PROVIDER_OUTAGE, RateLimited: RATE_LIMIT, QuotaExhausted: QUOTA_EXHAUSTED, Timeout: TIMEOUT, ToolCrashed: TOOL_INCOMPATIBILITY, BudgetExhausted: BUDGET_RESTRICTION, OutputInvalid: REPEATED_OUTPUT_INVALID}
+
+
+ERROR_TRIGGER_MAP: dict[type[BaseException], FallbackTrigger] = {
+    ProviderUnavailable: PROVIDER_OUTAGE,
+    RateLimited: RATE_LIMIT,
+    QuotaExhausted: QUOTA_EXHAUSTED,
+    Timeout: TIMEOUT,
+    ToolCrashed: TOOL_INCOMPATIBILITY,
+    BudgetExhausted: BUDGET_RESTRICTION,
+    OutputInvalid: REPEATED_OUTPUT_INVALID,
+}
+
+
 class DefaultModelRouter:
-    def __init__(self, config: ModelsConfig, adapters: dict[str, ModelAdapter], clock: Clock) -> None: ...   # adapters keyed by provider; every enabled descriptor's provider must have an adapter → ConfigError otherwise
+    def __init__(
+        self, config: ModelsConfig, adapters: dict[str, ModelAdapter], clock: Clock
+    ) -> None: ...  # adapters keyed by provider; every enabled descriptor's provider must have an adapter → ConfigError otherwise
 ```
 `defaults/models.yaml` content is ADR-0011 D-2 verbatim: models `claude-opus-5-5`, `claude-sonnet-5-5` (provider `claude`), `gpt-5-codex` (provider `codex`) with `supports_effort_levels` = all four, `supports_native_resume: true`, capability scores (opus: all 5 except VISUAL_REASONING 4; sonnet: CODING 4, ARCHITECTURE 4, others 4, VISUAL_REASONING 3; codex: CODING 5, REPOSITORY_NAVIGATION 5, TOOL_USE 5, ARCHITECTURE 3, DESIGN_REASONING 2, VISUAL_REASONING 1, REVIEW 4, PLANNING 3, LONG_CONTEXT_REASONING 4), context windows 200000/200000/272000, max output 32000/32000/32000, prices (per MTok USD) 15/75, 3/15, 1.25/10 with cache read 1.5/0.3/0.125; families `claude/opus`, `claude/sonnet` (VERY_HIGH `escalate_to: claude/opus`), `codex/default` with the D-2 params and `execution_time_s` 600/1500/2700/5400.
 
@@ -2243,21 +2633,71 @@ Every provider-boundary protocol and its value objects exist in `walk.integratio
 #### Interface contract
 Models: DOMAIN-MODEL §4.13 verbatim; INTERFACES §2.2–§2.6 value objects (`WorkItemRef`, `CommitInfo`, `PullRequestRef`, `BuildTarget`, `JobResult`, `AssetRequest`, `AssetJob`, `AssetProvenance`, `GraphNode`, `GraphEdge`, `GraphNeighborhood`) placed in `integrations.models` (WBS §3.2). Protocols: INTERFACES.md §1.12, §2.2, §2.3, §2.4, §2.5, §2.6 verbatim. Deltas:
 ```python
-class NotSupported(PermanentError): """Provider does not implement the operation (e.g. LocalWorkProvider.parse_webhook)."""
-class GitError(TransientError): """git exited non-zero; detail = argv + stderr tail."""
+class NotSupported(PermanentError):
+    """Provider does not implement the operation (e.g. LocalWorkProvider.parse_webhook)."""
+
+
+class GitError(TransientError):
+    """git exited non-zero; detail = argv + stderr tail."""
+
+
 class SubprocessResult(FrozenModel):
-    argv: list[str]; exit_code: int; stdout: str; stderr: str; duration_ms: int
+    argv: list[str]
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+
+
 class SubprocessRunner(Protocol):
-    async def run(self, argv: list[str], *, cwd: str | None = None, env: dict[str, str] | None = None, timeout_s: int = 120, input_text: str | None = None) -> SubprocessResult: ...
-class AsyncioSubprocessRunner: ...               # asyncio.create_subprocess_exec; env=None → inherit; timeout → kill + Timeout
+    async def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_s: int = 120,
+        input_text: str | None = None,
+    ) -> SubprocessResult: ...
+
+
+class AsyncioSubprocessRunner: ...  # asyncio.create_subprocess_exec; env=None → inherit; timeout → kill + Timeout
+
+
 WORK_ITEM_TRAILER = "Walk-Work-Item"
-FORBIDDEN_COMMIT_PATHSPECS: tuple[str, ...] = (":(exclude).ai/kernel.db", ":(exclude).ai/kernel.db-wal", ":(exclude).ai/kernel.db-shm", ":(exclude).walk/**", ":(exclude)**/*.env", ":(exclude)ProjectSettings/*Secrets*")
+FORBIDDEN_COMMIT_PATHSPECS: tuple[str, ...] = (
+    ":(exclude).ai/kernel.db",
+    ":(exclude).ai/kernel.db-wal",
+    ":(exclude).ai/kernel.db-shm",
+    ":(exclude).walk/**",
+    ":(exclude)**/*.env",
+    ":(exclude)ProjectSettings/*Secrets*",
+)
 GUARD_HOOK_MARKER = "# walk-guard-hook v1"
-def render_guard_hook(kind: Literal["pre-commit", "pre-push"], protected_branches: list[str]) -> str: ...   # POSIX sh script; exits 1 with a message when the current/target branch matches a protected glob
+
+
+def render_guard_hook(
+    kind: Literal["pre-commit", "pre-push"], protected_branches: list[str]
+) -> str: ...  # POSIX sh script; exits 1 with a message when the current/target branch matches a protected glob
+
+
 class GitCliProvider:
     provider = "git-cli"
-    def __init__(self, repo_root: Path, runner: SubprocessRunner, ledger: LedgerManager, idempotency: IdempotencyStore, clock: Clock, *, project_key: ProjectKey) -> None: ...
-    async def discard_changes(self, path: str) -> None: ...    # `git checkout -- .` + `git clean -fd` restricted to the worktree (used by BoundaryAuditor path, E01-S27)
+
+    def __init__(
+        self,
+        repo_root: Path,
+        runner: SubprocessRunner,
+        ledger: LedgerManager,
+        idempotency: IdempotencyStore,
+        clock: Clock,
+        *,
+        project_key: ProjectKey,
+    ) -> None: ...
+    async def discard_changes(
+        self, path: str
+    ) -> None: ...  # `git checkout -- .` + `git clean -fd` restricted to the worktree (used by BoundaryAuditor path, E01-S27)
+
     # GitProvider methods per INTERFACES §2.3; remote ops deferred to E03-S01
 ```
 
@@ -2343,22 +2783,65 @@ _pending_
 #### Interface contract
 Models: DOMAIN-MODEL §4.9 verbatim. Protocol: INTERFACES.md §1.7. Deltas:
 ```python
-EFFORT_BUDGET_RATIO: dict[Effort, float] = {LOW: 0.20, MEDIUM: 0.35, HIGH: 0.50, VERY_HIGH: 0.60}   # ADR-0012 D-3
+EFFORT_BUDGET_RATIO: dict[Effort, float] = {
+    LOW: 0.20,
+    MEDIUM: 0.35,
+    HIGH: 0.50,
+    VERY_HIGH: 0.60,
+}  # ADR-0012 D-3
 CHARS_PER_TOKEN = 3.5
-def estimate_tokens(text: str) -> int: ...                                   # ceil(len(text) / 3.5)
-def token_budget_for(effort: Effort, context_window_tokens: int, max_output_tokens: int) -> int: ...   # int(ratio × window) − max_output; minimum 1000
-PROJECT_CONTEXT_SECTIONS: tuple[str, ...] = ("Goals", "Technical Constraints", "Coding Conventions", "Architecture Overview")   # matched case-insensitively against SECTION_ORDER[PROJECT] headings
-MANDATORY_ORDER: tuple[ContextItemKind, ...] = (WORK_ITEM, WORKFLOW_STATE, HANDOVER, FEATURE_CONTEXT, BUG_CONTEXT, PROJECT_CONTEXT, DECISION, APPROVED_ARTIFACT)
+
+
+def estimate_tokens(text: str) -> int: ...  # ceil(len(text) / 3.5)
+def token_budget_for(
+    effort: Effort, context_window_tokens: int, max_output_tokens: int
+) -> int: ...  # int(ratio × window) − max_output; minimum 1000
+
+
+PROJECT_CONTEXT_SECTIONS: tuple[str, ...] = (
+    "Goals",
+    "Technical Constraints",
+    "Coding Conventions",
+    "Architecture Overview",
+)  # matched case-insensitively against SECTION_ORDER[PROJECT] headings
+MANDATORY_ORDER: tuple[ContextItemKind, ...] = (
+    WORK_ITEM,
+    WORKFLOW_STATE,
+    HANDOVER,
+    FEATURE_CONTEXT,
+    BUG_CONTEXT,
+    PROJECT_CONTEXT,
+    DECISION,
+    APPROVED_ARTIFACT,
+)
 FreshnessProbe = Callable[[MemoryDocument, Sha], Awaitable[FreshnessAssessment | None]]
 HandoverLookup = Callable[[WorkItemId], Awaitable[MemoryDocument | None]]
 DecisionLookup = Callable[[WorkItem, list[str]], Awaitable[list[Decision]]]
 ArtifactLookup = Callable[[WorkItem], Awaitable[list[ApprovedArtifact]]]
+
+
 class DefaultContextManager:
-    def __init__(self, workflow: WorkflowManager, items: WorkflowRepository, memory: MemoryManager, hooks: HookManager, ledger: LedgerManager, clock: Clock, *,
-                 head_resolver: Callable[[], Awaitable[Sha]], freshness: FreshnessProbe | None = None, handovers: HandoverLookup | None = None,
-                 decisions: DecisionLookup | None = None, artifacts: ArtifactLookup | None = None) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        items: WorkflowRepository,
+        memory: MemoryManager,
+        hooks: HookManager,
+        ledger: LedgerManager,
+        clock: Clock,
+        *,
+        head_resolver: Callable[[], Awaitable[Sha]],
+        freshness: FreshnessProbe | None = None,
+        handovers: HandoverLookup | None = None,
+        decisions: DecisionLookup | None = None,
+        artifacts: ArtifactLookup | None = None,
+    ) -> None: ...
+
+
 # WorkflowRepository
-async def transitions(self, work_item_id: WorkItemId, *, limit: int = 5) -> list[WorkItemTransition]: ...   # newest first
+async def transitions(
+    self, work_item_id: WorkItemId, *, limit: int = 5
+) -> list[WorkItemTransition]: ...  # newest first
 ```
 
 #### Behavior
@@ -2549,24 +3032,74 @@ Every tool call an agent makes is decided by the kernel at one enforcement point
 Protocol: INTERFACES.md §1.13 `ToolInvoker`. Deltas:
 ```python
 KernelToolHandler = Callable[[ToolCallRequest], Awaitable[JsonDict]]
-APPROVAL_TIMEOUT_S = 24 * 3600                                           # ADR-0006 D-4 default
+APPROVAL_TIMEOUT_S = 24 * 3600  # ADR-0006 D-4 default
+
+
 class ApprovalWaiter(Protocol):
-    async def wait(self, approval_id: ApprovalRequestId, *, timeout_s: int) -> bool: ...   # True = approved; False = denied or expired
+    async def wait(
+        self, approval_id: ApprovalRequestId, *, timeout_s: int
+    ) -> bool: ...  # True = approved; False = denied or expired
+
+
 class PollingApprovalWaiter:
-    def __init__(self, approvals: ApprovalRepository, clock: Clock, *, sleep: Callable[[float], Awaitable[None]], interval_s: float = 1.0) -> None: ...   # E02-S11 replaces with an event-based waiter; on timeout marks the request EXPIRED
+    def __init__(
+        self,
+        approvals: ApprovalRepository,
+        clock: Clock,
+        *,
+        sleep: Callable[[float], Awaitable[None]],
+        interval_s: float = 1.0,
+    ) -> (
+        None
+    ): ...  # E02-S11 replaces with an event-based waiter; on timeout marks the request EXPIRED
+
+
 class DefaultToolInvoker:
-    def __init__(self, permissions: PermissionManager, tools: ToolRegistry, budgets: BudgetManager, hooks: HookManager, ledger: LedgerManager,
-                 runs: AgentRunRepository, checkpoints: CheckpointManager, waiter: ApprovalWaiter, clock: Clock, *,
-                 handlers: dict[ToolName, KernelToolHandler] | None = None, approval_timeout_s: int = APPROVAL_TIMEOUT_S, project_key: ProjectKey) -> None: ...
-    def register_handler(self, tool: ToolName, handler: KernelToolHandler) -> None: ...   # duplicate → ConfigError
-    def authorizer_for(self, run: AgentRun) -> Callable[[ToolCallRequest], Awaitable[PermissionDecision]]: ...   # binds run for RunSession.permission_authorizer
+    def __init__(
+        self,
+        permissions: PermissionManager,
+        tools: ToolRegistry,
+        budgets: BudgetManager,
+        hooks: HookManager,
+        ledger: LedgerManager,
+        runs: AgentRunRepository,
+        checkpoints: CheckpointManager,
+        waiter: ApprovalWaiter,
+        clock: Clock,
+        *,
+        handlers: dict[ToolName, KernelToolHandler] | None = None,
+        approval_timeout_s: int = APPROVAL_TIMEOUT_S,
+        project_key: ProjectKey,
+    ) -> None: ...
+    def register_handler(
+        self, tool: ToolName, handler: KernelToolHandler
+    ) -> None: ...  # duplicate → ConfigError
+    def authorizer_for(
+        self, run: AgentRun
+    ) -> Callable[
+        [ToolCallRequest], Awaitable[PermissionDecision]
+    ]: ...  # binds run for RunSession.permission_authorizer
     async def authorize(self, request: ToolCallRequest) -> PermissionDecision: ...
     async def invoke(self, request: ToolCallRequest) -> JsonDict: ...
-    async def record_result(self, request: ToolCallRequest, result: JsonDict, *, duration_ms: int) -> None: ...   # post event for PROVIDER_NATIVE tools (called by the executor on TOOL_CALL_RESULT)
+    async def record_result(
+        self, request: ToolCallRequest, result: JsonDict, *, duration_ms: int
+    ) -> (
+        None
+    ): ...  # post event for PROVIDER_NATIVE tools (called by the executor on TOOL_CALL_RESULT)
+
+
 # adapters/codex
-def sandbox_for_session(session: RunSession, *, network_enabled: bool = False, extra_writable: list[str] = ()) -> CodexSandboxConfig: ...
+def sandbox_for_session(
+    session: RunSession, *, network_enabled: bool = False, extra_writable: list[str] = ()
+) -> CodexSandboxConfig: ...
+
+
 class CodexAdapter:
-    def configure_sandbox(self, session: RunSession) -> CodexSandboxConfig: ...   # workspace-write, cwd = session.worktree_path, network off, no extra roots in MVP
+    def configure_sandbox(
+        self, session: RunSession
+    ) -> (
+        CodexSandboxConfig
+    ): ...  # workspace-write, cwd = session.worktree_path, network off, no extra roots in MVP
 ```
 
 #### Behavior
@@ -2653,48 +3186,153 @@ _pending_
 #### Interface contract
 Protocols: INTERFACES.md §1.13 `AgentExecutor`, `OutputApplier`, `AppliedEffects`; §2.1 `RunSession`. Deltas:
 ```python
-MAX_REPAIR_TURNS = 1                                   # ARCHITECTURE §5.5
-RUN_TIMEOUT_S = 2700                                   # used when the resolved FamilyLevel has no execution_time_s
-REPAIR_INSTRUCTION = ("Your final output was rejected by the kernel:\n{errors}\n"
-                      "Write a corrected AgentOutput JSON object to .walk/output.json and finish.")
-IMPLEMENT_OUTPUT_EVENTS: dict[AgentOutputStatus, str] = {COMPLETED: "submit_for_review", PARTIAL: "partial", BLOCKED: "block", NEEDS_INPUT: "block"}
-    # STORY/TASK + purpose IMPLEMENT only; FAILED → no event; E03-S08 replaces this constant with output_events.yaml
+MAX_REPAIR_TURNS = 1  # ARCHITECTURE §5.5
+RUN_TIMEOUT_S = 2700  # used when the resolved FamilyLevel has no execution_time_s
+REPAIR_INSTRUCTION = (
+    "Your final output was rejected by the kernel:\n{errors}\n"
+    "Write a corrected AgentOutput JSON object to .walk/output.json and finish."
+)
+IMPLEMENT_OUTPUT_EVENTS: dict[AgentOutputStatus, str] = {
+    COMPLETED: "submit_for_review",
+    PARTIAL: "partial",
+    BLOCKED: "block",
+    NEEDS_INPUT: "block",
+}
+# STORY/TASK + purpose IMPLEMENT only; FAILED → no event; E03-S08 replaces this constant with output_events.yaml
 
-def expected_output_for(purpose: str, item: WorkItem) -> ExpectedOutput: ...   # E01-S18 rule 8 status options; required_evidence from item.contract; deliverables [] in E01
+
+def expected_output_for(
+    purpose: str, item: WorkItem
+) -> ExpectedOutput: ...  # E01-S18 rule 8 status options; required_evidence from item.contract; deliverables [] in E01
+
+
 class AgentInputBuilder:
-    def __init__(self, agents: AgentManager, context: ContextManager, tools: ToolRegistry, budgets: BudgetManager,
-                 phases: PhaseRepository, clock: Clock, *, project_key: ProjectKey) -> None: ...
-    async def build(self, agent: AgentInstance, item: WorkItem, purpose: str, *, run_id: RunId, worktree_path: str, branch: str,
-                    descriptor: ModelDescriptor, handover: Handover | None = None, debate: Debate | None = None) -> AgentInput: ...
-def build_run_session(run: AgentRun, agent_input: AgentInput, authorizer: Callable[[ToolCallRequest], Awaitable[PermissionDecision]], *,
-                      max_turns: int, timeout_s: int, env_allowlist: dict[str, str]) -> RunSession: ...   # output_path = <worktree>/OUTPUT_RELATIVE_PATH
+    def __init__(
+        self,
+        agents: AgentManager,
+        context: ContextManager,
+        tools: ToolRegistry,
+        budgets: BudgetManager,
+        phases: PhaseRepository,
+        clock: Clock,
+        *,
+        project_key: ProjectKey,
+    ) -> None: ...
+    async def build(
+        self,
+        agent: AgentInstance,
+        item: WorkItem,
+        purpose: str,
+        *,
+        run_id: RunId,
+        worktree_path: str,
+        branch: str,
+        descriptor: ModelDescriptor,
+        handover: Handover | None = None,
+        debate: Debate | None = None,
+    ) -> AgentInput: ...
+
+
+def build_run_session(
+    run: AgentRun,
+    agent_input: AgentInput,
+    authorizer: Callable[[ToolCallRequest], Awaitable[PermissionDecision]],
+    *,
+    max_turns: int,
+    timeout_s: int,
+    env_allowlist: dict[str, str],
+) -> RunSession: ...  # output_path = <worktree>/OUTPUT_RELATIVE_PATH
+
 
 class UsageMeter:
-    def __init__(self, costs: CostManager, descriptor: ModelDescriptor, subject: BudgetSubject, clock: Clock, *, new_id: Callable[[], str]) -> None: ...
-    async def observe(self, cumulative: UsageReport) -> CostRecord | None: ...   # meters only the delta since the last observe; None when no new tokens
+    def __init__(
+        self,
+        costs: CostManager,
+        descriptor: ModelDescriptor,
+        subject: BudgetSubject,
+        clock: Clock,
+        *,
+        new_id: Callable[[], str],
+    ) -> None: ...
+    async def observe(
+        self, cumulative: UsageReport
+    ) -> (
+        CostRecord | None
+    ): ...  # meters only the delta since the last observe; None when no new tokens
     @property
     def total(self) -> UsageReport: ...
 
+
 class DefaultOutputApplier:
-    def __init__(self, memory: MemoryManager, evidence: EvidenceManager, workflow: WorkflowManager, git: GitProvider, clock: Clock) -> None: ...
-    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> AppliedEffects: ...   # `start_head` keyword is a delta to INTERFACES §1.13
+    def __init__(
+        self,
+        memory: MemoryManager,
+        evidence: EvidenceManager,
+        workflow: WorkflowManager,
+        git: GitProvider,
+        clock: Clock,
+    ) -> None: ...
+    async def apply(
+        self, run: AgentRun, output: AgentOutput, *, start_head: Sha
+    ) -> AppliedEffects: ...  # `start_head` keyword is a delta to INTERFACES §1.13
+
 
 class DefaultAgentExecutor:
-    def __init__(self, db: Database, runs: AgentRunRepository, items: WorkflowRepository, workflow: WorkflowManager, router: ModelRouter,
-                 inputs: AgentInputBuilder, sandbox: SandboxManager, checkpoints: DefaultCheckpointManager, tool_invoker: DefaultToolInvoker,
-                 auditor: BoundaryAuditor, applier: DefaultOutputApplier, git: GitProvider, budgets: BudgetManager, costs: CostManager,
-                 hooks: HookManager, ledger: LedgerManager, ids: IdFactory, clock: Clock, *, project_key: ProjectKey, kernel_instance: str,
-                 env_allowlist: Callable[[], dict[str, str]] = dict, on_run_finished: Callable[[AgentRun], Awaitable[None]] | None = None,
-                 allowed_paths: tuple[str, ...] = DEFAULT_ALLOWED_PATHS, forbidden_paths: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS) -> None: ...
-    async def start(self, agent: AgentInstance, item: WorkItem, purpose: str, *, handover: Handover | None = None, parent_run_id: RunId | None = None,
-                    debate: Debate | None = None, routing: RoutingDecision | None = None, effort_resolution: EffortResolution | None = None) -> AgentRun: ...
-    async def resume_native(self, checkpoint: Checkpoint) -> AgentRun: ...   # ConfigError("implemented in E01-S28")
+    def __init__(
+        self,
+        db: Database,
+        runs: AgentRunRepository,
+        items: WorkflowRepository,
+        workflow: WorkflowManager,
+        router: ModelRouter,
+        inputs: AgentInputBuilder,
+        sandbox: SandboxManager,
+        checkpoints: DefaultCheckpointManager,
+        tool_invoker: DefaultToolInvoker,
+        auditor: BoundaryAuditor,
+        applier: DefaultOutputApplier,
+        git: GitProvider,
+        budgets: BudgetManager,
+        costs: CostManager,
+        hooks: HookManager,
+        ledger: LedgerManager,
+        ids: IdFactory,
+        clock: Clock,
+        *,
+        project_key: ProjectKey,
+        kernel_instance: str,
+        env_allowlist: Callable[[], dict[str, str]] = dict,
+        on_run_finished: Callable[[AgentRun], Awaitable[None]] | None = None,
+        allowed_paths: tuple[str, ...] = DEFAULT_ALLOWED_PATHS,
+        forbidden_paths: tuple[str, ...] = DEFAULT_FORBIDDEN_PATHS,
+    ) -> None: ...
+    async def start(
+        self,
+        agent: AgentInstance,
+        item: WorkItem,
+        purpose: str,
+        *,
+        handover: Handover | None = None,
+        parent_run_id: RunId | None = None,
+        debate: Debate | None = None,
+        routing: RoutingDecision | None = None,
+        effort_resolution: EffortResolution | None = None,
+    ) -> AgentRun: ...
+    async def resume_native(
+        self, checkpoint: Checkpoint
+    ) -> AgentRun: ...  # ConfigError("implemented in E01-S28")
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun: ...
     async def pause(self, run_id: RunId) -> AgentRun: ...
     def running(self) -> list[AgentRun]: ...
-    async def wait(self, run_id: RunId) -> AgentRun: ...                     # awaits the run task; returns the persisted terminal run
+    async def wait(
+        self, run_id: RunId
+    ) -> AgentRun: ...  # awaits the run task; returns the persisted terminal run
+
+
 # WorkflowRepository
-async def set_assigned_run(self, work_item_id: WorkItemId, run_id: RunId | None, *, conn: sqlite3.Connection | None = None) -> WorkItem: ...
+async def set_assigned_run(
+    self, work_item_id: WorkItemId, run_id: RunId | None, *, conn: sqlite3.Connection | None = None
+) -> WorkItem: ...
 ```
 
 #### Behavior
@@ -2929,37 +3567,93 @@ The orchestrator package exists: `DefaultTaskRouter` resolves the role and purpo
 #### Interface contract
 Models: INTERFACES.md §1.1 `RouteDecision`, `KernelStatus`; DOMAIN-MODEL §4.15 `PhaseEvidencePackage` verbatim. Protocols: INTERFACES.md §1.1 `Orchestrator`, `TaskRouter` verbatim. Algorithm: INTERFACES.md §5.1. Deltas:
 ```python
-class NoScheduledRole(ConfigError): """(kind, state) has no row in scheduled_states.yaml."""
+class NoScheduledRole(ConfigError):
+    """(kind, state) has no row in scheduled_states.yaml."""
+
 
 class DefaultTaskRouter:
-    def __init__(self, scheduled_states: Path, agents: AgentManager, runs: AgentRunRepository, workflow: WorkflowManager) -> None: ...   # signature fixed for E03-S07
+    def __init__(
+        self,
+        scheduled_states: Path,
+        agents: AgentManager,
+        runs: AgentRunRepository,
+        workflow: WorkflowManager,
+    ) -> None: ...  # signature fixed for E03-S07
     def route(self, item: WorkItem, state: WorkItemState) -> RouteDecision: ...
     def can_run_parallel(self, a: WorkItem, b: WorkItem) -> bool: ...
 
-DEFAULT_MAX_PARALLEL_AGENTS = 2                                            # ARCHITECTURE §3.2 [MVP]
+
+DEFAULT_MAX_PARALLEL_AGENTS = 2  # ARCHITECTURE §3.2 [MVP]
 ADMISSION_EVENTS: dict[tuple[WorkItemKind, WorkItemState], str] = {
-    (STORY, READY): "start_implementation", (STORY, REWORK): "start_implementation",
-    (TASK, READY): "start_implementation", (TASK, REWORK): "start_implementation"}
+    (STORY, READY): "start_implementation",
+    (STORY, REWORK): "start_implementation",
+    (TASK, READY): "start_implementation",
+    (TASK, REWORK): "start_implementation",
+}
+
+
 class Scheduler:
-    def __init__(self, db: Database, projects: ProjectRepository, workflow: WorkflowManager, router: TaskRouter, agents: AgentManager,
-                 effort: EffortManager, budgets: BudgetManager, models: ModelRouter, executor: DefaultAgentExecutor,
-                 checkpoints: DefaultCheckpointManager, idempotency: IdempotencyStore, telemetry: TelemetryManager, clock: Clock, *,
-                 project_key: ProjectKey, max_parallel_agents: int = DEFAULT_MAX_PARALLEL_AGENTS,
-                 ready_env_keys: Callable[[], set[str]] = set) -> None: ...
+    def __init__(
+        self,
+        db: Database,
+        projects: ProjectRepository,
+        workflow: WorkflowManager,
+        router: TaskRouter,
+        agents: AgentManager,
+        effort: EffortManager,
+        budgets: BudgetManager,
+        models: ModelRouter,
+        executor: DefaultAgentExecutor,
+        checkpoints: DefaultCheckpointManager,
+        idempotency: IdempotencyStore,
+        telemetry: TelemetryManager,
+        clock: Clock,
+        *,
+        project_key: ProjectKey,
+        max_parallel_agents: int = DEFAULT_MAX_PARALLEL_AGENTS,
+        ready_env_keys: Callable[[], set[str]] = set,
+    ) -> None: ...
     async def tick(self) -> int: ...
 
+
 class StatusBuilder:
-    def __init__(self, projects: ProjectRepository, workflow: WorkflowManager, phases: PhaseRepository, runs: AgentRunRepository,
-                 budgets: BudgetManager, ledger: LedgerManager, *, project_key: ProjectKey,
-                 pending_approvals: Callable[[], Awaitable[list[ApprovalRequest]]] | None = None) -> None: ...
+    def __init__(
+        self,
+        projects: ProjectRepository,
+        workflow: WorkflowManager,
+        phases: PhaseRepository,
+        runs: AgentRunRepository,
+        budgets: BudgetManager,
+        ledger: LedgerManager,
+        *,
+        project_key: ProjectKey,
+        pending_approvals: Callable[[], Awaitable[list[ApprovalRequest]]] | None = None,
+    ) -> None: ...
     async def build(self) -> KernelStatus: ...
 
-DEFAULT_POLL_INTERVAL_S = 5.0                                              # ADR-0009 D-4 timer wake-up
+
+DEFAULT_POLL_INTERVAL_S = 5.0  # ADR-0009 D-4 timer wake-up
+
+
 class DefaultOrchestrator:
-    def __init__(self, scheduler: Scheduler, executor: DefaultAgentExecutor, recovery: RecoveryManager, status_builder: StatusBuilder,
-                 hooks: HookManager, ledger: LedgerManager, clock: Clock, *, project_key: ProjectKey, kernel_instance: str,
-                 poll_interval_s: float = DEFAULT_POLL_INTERVAL_S) -> None: ...
-    async def run_once(self, *, wait_runs: bool = True) -> int: ...        # startup steps 4–6, one tick, optionally await the started runs, stop
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        executor: DefaultAgentExecutor,
+        recovery: RecoveryManager,
+        status_builder: StatusBuilder,
+        hooks: HookManager,
+        ledger: LedgerManager,
+        clock: Clock,
+        *,
+        project_key: ProjectKey,
+        kernel_instance: str,
+        poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+    ) -> None: ...
+    async def run_once(
+        self, *, wait_runs: bool = True
+    ) -> int: ...  # startup steps 4–6, one tick, optionally await the started runs, stop
+
     # Orchestrator protocol methods per INTERFACES §1.1
 ```
 

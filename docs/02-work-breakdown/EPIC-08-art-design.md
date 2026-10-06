@@ -1,7 +1,7 @@
 # EPIC-08 — Art / Design
 
 **Roadmap stage:** §135 Stage 8
-**Goal.** Design Leader and Art Director take part in the feature workflow; generated assets come from pluggable `AssetProvider`s (Meshy, OpenArt) through one kernel-executed `asset.generate` path that is idempotent, metered as `EXTERNAL_CREDITS`/`ASSETS` cost, validated against §79 rules held as data, recorded with §80 provenance and visual evidence (screenshots), reviewed by the Art Director (who may reject a technically valid asset, §10.5), and registered as `ApprovedArtifact(kind=ASSET)` (§33); Unity MCP becomes an optional `ToolKind.MCP` provider (ADR-0009 D-6).
+**Goal.** Design Leader and Art Director take part in the feature workflow; generated assets come from pluggable `AssetProvider`s (Meshy, OpenArt) through one kernel-executed `asset.generate` path that is idempotent, metered as `EXTERNAL_CREDITS`/`ASSETS` cost, validated against §79 rules held as data, recorded with §80 provenance and visual evidence (screenshots), reviewed by the Art Director (who may reject a technically valid asset, §10.5), and registered as `ApprovedArtifact(kind=ASSET)` (§33); OpenArt is reached through its remote MCP server after a one-time OAuth login (ADR-0017), and reviewers inspect Unity scenes, console and assets through kernel tools that run the batchmode CLI (ADR-0015).
 **Requirements.** §10.4–§10.5, §33 (art kinds, change workflow), §78–§80, §6.5 (`ART_COMPLETE`, `DESIGN_VALIDATED`), §84 (Assets cost branch), §90 (idempotency), §30–§31 (tool kinds, permissions), §137 (Inv. 7, 9, 10).
 **Epic gate.** `tests/e2e/test_e08_gate.py`: a feature requiring an asset triggers `asset.generate` via a fake `AssetProvider`, the asset is validated by `FakeUnityProvider.validate_assets`, provenance file + evidence recorded, fake ART_DIRECTOR rejects then approves, `ART_COMPLETE` dimension set, asset registered as `ApprovedArtifact(kind=ASSET)`.
 **Branching.** Every story uses `story/<ID>-<slug>` + worktree (COMMIT-POLICY §4); merge `--no-ff` after E08-R01.
@@ -15,13 +15,14 @@
 | E08-X01 | Refine E08 against codebase | E07-R01 | LOW |
 | E08-S01 | ART_DIRECTOR constitution and design/art routing | E08-X01, E05-S06 | MEDIUM |
 | E08-S02 | `AssetProvider` implementation: Meshy | E08-X01, E02-S01 | HIGH |
-| E08-S03 | `AssetProvider` implementation: OpenArt | E08-S02 | MEDIUM |
+| E08-S03 | `AssetProvider` implementation: OpenArt over remote MCP | E08-S04, E08-S10 | MEDIUM |
 | E08-S04 | `asset.generate` kernel tool, idempotency, `EXTERNAL_CREDITS` cost | E08-S02, E01-S26 | MEDIUM |
 | E08-S05 | `AssetProvenance` files and evidence | E08-S04 | MEDIUM |
 | E08-S06 | Asset validation via `UnityProvider.validate_assets` and `com.walk.ci` | E08-S04, E03-S10 | MEDIUM |
 | E08-S07 | Art Director review flow and ART/DESIGN done dimensions | E08-S01, E08-S06, E03-S17 | MEDIUM |
-| E08-S08 | Unity MCP provider (`ToolKind.MCP`) | E08-X01, E01-S14 | HIGH |
+| E08-S08 | Unity inspection tools via batchmode CLI (screenshot, console, asset inspection) | E08-S06, E01-S14 | HIGH |
 | E08-S09 | Epic gate: asset generation → validation → approval (e2e) | E08-S05, E08-S07 | MEDIUM |
+| E08-S10 | MCP streamable-HTTP client and OAuth login (`walk auth login`) | E08-X01, E02-S01 | HIGH |
 | E08-R01 | Review E08 | E08-S09 | MEDIUM |
 
 Title note: WBS §4 names E08-S06 "Asset validation via `UnityProvider.validate_assets` and `com.walk.ci`"; the WBS §5 row omits "and `com.walk.ci`". Same story; E08-X01 aligns the §5 title.
@@ -29,13 +30,13 @@ Title note: WBS §4 names E08-S06 "Asset validation via `UnityProvider.validate_
 ## Reading order for implementers
 
 1. `WBS.md` §2–§3 (binding conventions; §3.1 `Default*` naming, §3.2 integrations model placement, §3.5 ledger write points, §3.6 fakes and `tests/e2e/`).
-2. ADR-0006 D-2 (side effects — including "Unity builds and asset generation" — are executed by the kernel), D-3/D-4 (decisions, approvals); ADR-0009 D-6 (Unity batchmode first, MCP deferred to Stage 8), D-8 (`MESHY_API_KEY`, `OPENART_API_KEY`), D-11 (provider plugins), D-13 (asset review automation deferred to Stage 8); ADR-0013 (constitution schema; D-7 remaining roles added in Stage 8); ADR-0003 D-4/D-5 (approved artifacts; `.ai/` written only via `MemoryManager.write`).
+2. ADR-0006 D-2 (side effects — including "Unity builds and asset generation" — are executed by the kernel), D-3/D-4 (decisions, approvals); ADR-0009 D-6 (Unity batchmode CLI), D-8 (`MESHY_API_KEY`, `OPENART_OAUTH_CLIENT`, `OPENART_OAUTH_REFRESH_TOKEN`), D-11 (provider plugins), D-13 (asset review automation deferred to Stage 8); ADR-0013 (constitution schema; D-7 remaining roles added in Stage 8); ADR-0003 D-4/D-5 (approved artifacts; `.ai/` written only via `MemoryManager.write`); ADR-0015 (Unity Editor automation via CLI, MCP rejected — E08-S08); ADR-0017 (OpenArt via remote MCP, OAuth login, tool map as config — E08-S10, E08-S03).
 3. `INTERFACES.md` §1.3 (`set_done_dimension`, `check_definition_of_ready`), §1.8 (`approve_artifact`, `verify_approved_artifacts`), §1.12 (`IntegrationManager.assets`, `with_idempotency`), §1.13 (`ToolInvoker`), §1.14 (`EvidenceManager.record`), §2.4 (`UnityProvider.validate_assets`, `JobResult(job_kind="asset_validation")`), §2.5 (`AssetRequest`, `AssetJob`, `AssetProvenance`, `AssetProvider`), §3.1/§3.2 (feature/story tables), §4 (routing table).
 4. `DOMAIN-MODEL.md` §3 (`AgentRole.DESIGN_LEADER/ART_DIRECTOR`, `DoneDimension`, `ApprovedArtifactKind`, `ToolKind.MCP`, `BudgetDimension.EXTERNAL_CREDITS`, `CostCategory.ASSETS`, `EvidenceKind.SCREENSHOT/LOG/PROJECT_DATA`, `DecisionCategory.ART`), §4.1 (`StoryContract`, `Feature.applicable_dimensions/done_dimensions`), §4.4 (`CostRecord`), §4.6 (`ToolSpec`), §4.7 (`ApprovedArtifact`), §4.12 (`Evidence`, `EvidenceDraft`), §4.13 (`EnvironmentManifest.providers`).
-5. `ARCHITECTURE.md` §2.2 (import table: `integrations` may import `telemetry`, `workflow`, `budgets`, `tools`, never `memory`/`runtime`), §2.3 (SDK confinement: Meshy/OpenArt only under `walk/integrations/assets/<provider>/`; `httpx` and PyYAML also allowed in `walk/integrations/assets/`; Unity MCP process/client only under `walk/integrations/unity_mcp/`), §4.2 (KERNEL tools incl. `asset.*` enforced in `ToolInvoker.invoke`), §4.4 (idempotency key `asset.generate:{work_item_id}:{request_hash}`), §8 (`.ai/` layout).
+5. `ARCHITECTURE.md` §2.2 (import table: `integrations` may import `telemetry`, `workflow`, `budgets`, `tools`, never `memory`/`runtime`), §2.3 (SDK confinement: Meshy/OpenArt only under `walk/integrations/assets/<provider>/`; `httpx` and PyYAML also allowed in `walk/integrations/assets/`; the `mcp` SDK only under `walk/integrations/mcp/` and `walk/integrations/assets/openart/`, ADR-0017), §4.2 (KERNEL tools incl. `asset.*` enforced in `ToolInvoker.invoke`), §4.4 (idempotency key `asset.generate:{work_item_id}:{request_hash}`), §8 (`.ai/` layout).
 6. `requirements/WAL_K_REQ.md` §6.5, §10.4, §10.5, §33, §78, §79, §80, §84.
 
-Parallel sets (WBS §8): `{S01} ∥ {S02→S03} ∥ {S08}`; `{S05} ∥ {S06}` after S04; S07 after S01 and S06; S09 last. Accepted exceptions to Files-table disjointness (wiring or one-line config edits only; parallel branches rebase before merge, E08-X01 confirms): `src/walk/cli/composition.py` (S02, S03, S04, S05, S06, S07, S08), `src/walk/integrations/service.py` (S02, S08), `pyproject.toml` (S02, S05, S06).
+Parallel sets (WBS §8): `{S01} ∥ {S02→S04} ∥ {S10}`; `{S05} ∥ {S06}` after S04; S03 after S04 and S10; S08 after S06 (shares `WalkCI.cs`, `unity/provider.py`, `FakeUnityProvider` and INTERFACES §2.4 with S06); S07 after S01 and S06; S09 last. Accepted exceptions to Files-table disjointness (wiring, re-exports or one-line config edits only; parallel branches rebase before merge, E08-X01 confirms): `src/walk/cli/composition.py` (S02, S03, S04, S05, S06, S07, S08), `pyproject.toml` (S02, S05, S06, S10), `src/walk/integrations/errors.py` and `src/walk/integrations/__init__.py` (S02, S10), `src/walk/cli/app.py` (S05, S10).
 
 ## Planning decisions fixed for this epic
 
@@ -56,7 +57,7 @@ Autonomy Level 0 for the planner unless marked `NEW NAME:` (WBS §3):
 | KERNEL tools `art.approve`, `art.reject` (`tools.yaml`, `permissions/defaults.yaml`) | S01 | `review.approve` is LEAD_DEV-only (ADR-0006 D-2 example); the Art Director needs its own review authority |
 | builtin skill `art-direction-review` | S01 | WBS §3.10 lists no art skill |
 | routing rows: FEATURE `DESIGN` → ART_DIRECTOR (before LEAD_DEV, when enabled and art applicable); asset TASK `READY`/`REWORK` → kernel step `asset_pipeline`; FEATURE `QC` → DESIGN_LEADER (REVIEW, when `DESIGN_VALIDATED` pending) | S01, S04, S07 | INTERFACES §4 has no art/design rows |
-| `walk.integrations.assets` package: `request_hash`, `download_to`, `raise_for_asset_status`; `MeshyAssetProvider`, `MESHY_BASE_URL`, `MESHY_STATUS_MAP`; `OpenArtAssetProvider`, `OPENART_BASE_URL`, `OPENART_STATUS_MAP`; `AssetJobFailed` | S02, S03 | ARCHITECTURE §2.3 names the folder, not the classes |
+| `walk.integrations.assets` package: `request_hash`, `download_to`, `raise_for_asset_status`; `MeshyAssetProvider`, `MESHY_BASE_URL`, `MESHY_STATUS_MAP`; `OpenArtAssetProvider`, `OPENART_KINDS`; `AssetJobFailed` | S02, S03 | ARCHITECTURE §2.3 names the folder, not the classes |
 | `detect_asset_providers` (`walk.integrations.preflight`); `KernelOverrides.asset_providers`; `KernelSettings.asset_credits_per_job`, `KernelSettings.asset_usd_per_credit` | S02, S04 | §26 provider readiness; §84 credits → USD rate |
 | `tests/fakes/fake_asset_provider.py::FakeAssetProvider` | S02 | WBS §3.6 fake list has no asset fake |
 | `StoryContract.asset_request: JsonDict \| None` | S04 | `workflow` may not import `integrations.models.AssetRequest`; validated into `AssetRequest` by the kernel |
@@ -69,13 +70,14 @@ Autonomy Level 0 for the planner unless marked `NEW NAME:` (WBS §3):
 | `walk.integrations.assets.rules`: `AssetRuleSet`, `AssetKindRules`, `AssetRuleViolation`, `load_asset_rules`, `evaluate_asset_metrics`, `ASSET_RULES_DEFAULT_PATH`; kernel defaults `asset_rules.yaml`; project override `.ai/project/asset-rules.yaml`; `AssetValidationProcessor`; `walk.integrations.unity.asset_metrics`: `AssetMetrics`, `parse_asset_validation_result`; C# `WalK.CI.ValidateAssets` arguments `-walkAssets`, `-walkResult`, `-walkPreviewDir` | S06 | §79 rules as data; ADR-0009 D-6 names the method only |
 | `DefaultWorkflowManager.update_contract`, `DefaultWorkflowManager.set_applicable_dimensions`; `walk.orchestrator.art_dimensions`: `ArtDimensionTracker`, `applicable_dimensions_for`; `BuiltinHookDeps.art_dimensions`; `ASSET_TASK_REQUIRED_EVIDENCE` | S07 | §6.5 applicability is decided at runtime; INTERFACES §1.3 only has `set_done_dimension` |
 | `ART_LABEL` (`"art"`), `ART_BRIEF_DONE_LABEL` (`"art-brief-done"`) feature labels | S01 | Keep `TaskRouter.route` a pure function of the work item |
-| `RELOCATE:` `httpx` allowed in `walk/integrations/assets/` (shared download helper); `MAX_DOWNLOAD_BYTES`, `MESHY_LICENSE_NOTE`, `OPENART_LICENSE_NOTE`, `OPENART_GENERATE_PATH`, `OPENART_JOB_PATH` | S02, S03 | ARCHITECTURE §2.3 listed httpx only for Jira — applied to ARCHITECTURE §2.3 by the architect 2026-10-06 |
+| `RELOCATE:` `httpx` allowed in `walk/integrations/assets/` (shared download helper); `MAX_DOWNLOAD_BYTES`, `MESHY_LICENSE_NOTE`, `OPENART_LICENSE_NOTE` | S02, S03 | ARCHITECTURE §2.3 listed httpx only for Jira — applied to ARCHITECTURE §2.3 by the architect 2026-10-06 |
 | commit key variant `git.commit:{work_item_id}:asset:{request_hash}` | S04 | Kernel-step commit has no run id (ARCHITECTURE §4.4 key is per run) |
 | `SECRET_LIKE` pattern in `walk.integrations.assets.provenance` | S05 | `integrations` may not import `walk.memory.secrets` |
 | `TextureMetrics`; C# `WalK.AssetMetricsCollector`; `FakeUnityProvider.asset_metrics`, `FakeUnityProvider.validate_calls` | S06 | Metrics schema and fake scripting |
 | `REVIEW_TOOLS_BY_ROLE`, `DESIGN_REVIEW_HOLD_LABEL`, `art_dimensions_on_transition`; asset-request keys `constraints.base_prompt`, `constraints.revision_notes` | S07 | Review authority per reviewer role; revision loop data |
-| `MCP_PROTOCOL_VERSION`; manifest key `tools["unity_mcp"]`; ARCHITECTURE §2.3 row "Unity MCP server process → `walk/integrations/unity_mcp/`" | S08 | MCP handshake and confinement — §2.3 row applied to ARCHITECTURE §2.3 by the architect 2026-10-06 |
-| ADR-0015 (Unity MCP provider and MCP client; written as `Proposed` 2026-10-06); `walk.integrations.unity_mcp`: `McpTransport`, `StdioMcpTransport`, `McpClient`, `McpToolResult`, `UnityMcpProvider`, `UNITY_MCP_TOOLS`; `McpProtocolError`; `walk.runtime.mcp_tools.McpToolHandler`; MCP tools `unity_mcp.screenshot`, `unity_mcp.console`, `unity_mcp.inspect_asset` (`tools_mcp.yaml`); `permissions/defaults_unity_mcp.yaml`; `KernelSettings.unity_mcp_command`, `KernelSettings.unity_mcp_tool_map`; `detect_unity_mcp`; `tests/fakes/fake_mcp_transport.py::FakeMcpTransport` | S08 | ADR-0009 D-6 defers MCP to Stage 8 without a design |
+| `walk.integrations.assets.openart.tool_map`: `OpenArtToolBinding`, `OpenArtResultPaths`, `OpenArtToolMap`, `SemanticArgument`, `OPENART_TOOLS_DEFAULT_PATH`, `ASSET_PROVIDERS_PROJECT_FILE`, `load_openart_tool_map`, `validate_tool_map`; kernel data `openart_tools.yaml`; project file `.ai/project/asset-providers.yaml`; `AssetPipelineStep` keyword `permissions`; escalation reason `provider_auth_required`; `build_fake_openart_server` | S03 | ADR-0017 D-7/D-8: OpenArt tool names are configuration validated against `tools/list` |
+| ADR-0015 (Unity Editor automation via CLI; Accepted 2026-10-06); KERNEL tools `unity.screenshot`, `unity.console`, `unity.inspect_asset`; `UnityProvider.capture_screenshot`/`capture_console`/`inspect_asset`; `JobResult.job_kind`/`UnityResultFile.job` values `screenshot`, `console`, `asset_inspection`; `walk.integrations.unity.inspection`: `ConsoleEntry`, `HierarchyNode`, `AssetInspection`, `parse_console_entries`, `parse_asset_inspections`; `walk.runtime.unity_tools`: `UNITY_INSPECTION_TOOLS`, `UNITY_INSPECTION_TIMEOUT_S`, `UnityInspectionToolHandler`; C# `WalK.CI.CaptureScreenshot`/`CaptureConsole`/`InspectAsset`, `WalK.ScreenshotCapture`, `WalK.ConsoleCapture`, `WalK.AssetInspector`; Unity arguments `-walkTarget`, `-walkCamera`, `-walkResolution`, `-walkLogTypes`, `-walkMaxEntries`; `FakeUnityProvider.console_entries`/`inspections` | S08 | ADR-0015 replaces the Stage 8 Unity MCP deferral of ADR-0009 D-6 |
+| ADR-0017 (OpenArt via remote MCP; Accepted 2026-10-06); dependency `mcp`; `walk.integrations.mcp`: `McpServerSpec`, `McpToolInfo`, `McpImage`, `McpToolResult`, `McpSessionFactory`, `McpHttpClient`, `OPENART_MCP_SERVER`, `MCP_SERVERS`, `OAUTH_CALLBACK_PATH`, `KeyringTokenStorage`, `LoopbackCallback`, `McpLoginResult`, `build_oauth_auth`, `run_oauth_login`, `oauth_logout`; `ProviderAuthRequired`, `McpProtocolError`; `KEYRING_ONLY_CREDENTIALS`, `CredentialStore.set`/`delete`, `KeyringBackend.set_password`/`delete_password`; credentials `OPENART_OAUTH_CLIENT`, `OPENART_OAUTH_REFRESH_TOKEN`; CLI `walk auth login/logout/status` (`walk.cli.cmd_auth`: `auth_app`, `AuthDeps`, `build_auth_deps`); fakes `FakeMcpTool`, `build_fake_mcp_server`, `in_memory_session_factory`, `FakeOAuthServer` | S10 | ADR-0017: no public OpenArt REST contract; the remote MCP server needs an OAuth client |
 
 ---
 
@@ -89,10 +91,10 @@ Autonomy Level 0 for the planner unless marked `NEW NAME:` (WBS §3):
 **Owner role:** LeadDev   **Reviewer role:** QC
 
 #### Goal
-Every E08 story's Files table, interface references and dependencies are re-validated against the `src/walk/` tree and `INTERFACES.md` as they exist after E07-R01, the open questions marked `BLOCKING` are resolved with the architect, and the corrected epic file is committed before any E08 story starts (WBS §1 `X` task, §2 rule 3).
+Every E08 story's Files table, interface references and dependencies are re-validated against the `src/walk/` tree and `INTERFACES.md` as they exist after E07-R01, E08-S03/S08/S10 are checked against the owner decisions recorded in ADR-0015 and ADR-0017, and the corrected epic file is committed before any E08 story starts (WBS §1 `X` task, §2 rule 3).
 
 #### Scope
-- In: this file (E08-S01…S09, R01), WBS §5 rows for E08 (including the S06 title alignment), WBS §6 register additions from the `NEW NAME:` table above, resolution record for the `BLOCKING` notes in E08-S03 and E08-S08.
+- In: this file (E08-S01…S10, R01), WBS §5 rows for E08 (including the S06 title alignment), WBS §6 register additions from the `NEW NAME:` table above, conformance record of E08-S03, E08-S08 and E08-S10 with ADR-0015 and ADR-0017.
 - Out: renaming, renumbering, adding or dropping stories (WBS §1: IDs are fixed); any source change; architecture-doc edits (the architect applies the `NEW NAME:`/`RELOCATE:` register; this task only records the outcome).
 
 #### Files
@@ -105,11 +107,11 @@ Every E08 story's Files table, interface references and dependencies are re-vali
 No code. Procedure:
 1. For every row of every Files table in this file: `create` paths must not exist; `modify` paths must exist (or be created by an earlier story in this file); every symbol listed against a `modify` row must already be defined in that file (grep) or be new in this story.
 2. For every `INTERFACES.md §x.y` / `DOMAIN-MODEL.md §x.y` / `ARCHITECTURE.md §x.y` / ADR reference: the section exists and still defines the referenced names (`AssetProvider`, `AssetRequest`, `AssetJob`, `AssetProvenance`, `UnityProvider.validate_assets`, `ToolKind.MCP`, `ApprovedArtifactKind.ASSET`, `DoneDimension.ART_COMPLETE`, `BudgetDimension.EXTERNAL_CREDITS`, `CostCategory.ASSETS`).
-3. Every `Depends on` ID is `DONE` in WBS §5 (E07-R01, E05-S06, E02-S01, E01-S26, E03-S10, E03-S17, E01-S14) or belongs to this epic.
+3. Every `Depends on` ID is `DONE` in WBS §5 (E07-R01, E05-S06, E02-S01, E01-S26, E03-S10, E03-S17, E01-S14) or belongs to this epic; the E02-S01 `CredentialStore` and `KeyringBackend` match the E08-S10 deltas (`set`/`delete`, keyring-only names).
 4. Every `(verify)` marker is resolved (kept or path corrected) and removed. Known hotspots: `src/walk/orchestrator/router.py` and its routing data (E01-S29, E03-S07), the E03-S12 integration-step module and its worktree helper (reused by `AssetPipelineStep`), `src/walk/runtime/output_applier.py` (E01-S27, E03-S08), `src/walk/runtime/models.py` (E01-S25), `src/walk/workflow/tables/story_workflow.yaml` allowed roles for `start`/`submit` (E01-S09), `src/walk/orchestrator/builtin_hooks.py` (`BuiltinHookDeps`, E02-S08 → E07-S09; moved from `orchestrator/builtin_hooks.py` by ADR-0016), `src/walk/agents/defaults/design_leader.md` and `RuntimePolicy.enabled` (E05-S06), `src/walk/integrations/unity/provider.py` and `unity/com.walk.ci/Editor/WalkCI.cs` (E03-S10), `tests/fakes/fake_unity_provider.py` (E03-S10), `tests/e2e/conftest.py` fixture `e07_scenario` (E07-S10).
-5. ADR number: ADR-0015 (E08-S08) must be the next free number under `docs/01-architecture/adr/`; renumber in E08-S08 and the `NEW NAME:` table if E05–E07 added ADRs.
-6. `BLOCKING` items: (a) E08-S03 OpenArt API contract (endpoint, auth header, job/status shape) confirmed by the owner with a reference URL, or S03 re-scoped by the owner; (b) E08-S08 ADR-0015 (exists as `Proposed` with the architect's recommendations, 2026-10-06) accepted by the owner after its acceptance checklist (server version pinned, `tools/list` bindings confirmed). Each outcome is recorded in the story's Notes and the `BLOCKING` marker removed, or the story is set `BLOCKED`.
-7. Shared-file exceptions (header "Parallel sets"): confirm that the edits to `src/walk/cli/composition.py`, `src/walk/integrations/service.py` and `pyproject.toml` are wiring/one-line config only, or sequence the stories (S08 after S02; S06 after S05) instead of running them in parallel.
+5. ADRs: ADR-0015 (Unity Editor automation via CLI) and ADR-0017 (OpenArt via remote MCP) exist as `Accepted` (owner decisions 2026-10-06); if E05–E07 added ADRs with these numbers, renumber here and in the `NEW NAME:` table.
+6. ADR conformance (no open `BLOCKING` items remain): E08-S08 contains no MCP name and runs only the Unity executable; E08-S03 names no OpenArt REST endpoint, API key or server tool name outside `openart_tools.yaml`; E08-S10 confines `mcp` to `walk/integrations/mcp/` and `walk/integrations/assets/openart/` and stores tokens only through `CredentialStore`.
+7. Shared-file exceptions (header "Parallel sets"): confirm that the edits to `src/walk/cli/composition.py`, `pyproject.toml`, `src/walk/integrations/errors.py`, `src/walk/integrations/__init__.py` and `src/walk/cli/app.py` are wiring/re-export/one-line config only, or sequence the stories (S10 after S02; S06 after S05) instead of running them in parallel.
 8. Dependency note: S07 deliberately does not use S05 code (see header "Provenance approved by"); if refinement finds S07 needs S05, add `E08-S05` to S07's `Depends on` here (a dependency correction, not a new story).
 
 #### Behavior
@@ -124,12 +126,12 @@ No code. Procedure:
 | 1 | Given every Files table path in this file When checked against `src/walk/`, `tests/`, `unity/` and `docs/` Then each `modify` path exists and each `create` path does not exist or is created by an earlier E08 story | manual checklist recorded in Evidence |
 | 2 | Given every `INTERFACES.md`/`DOMAIN-MODEL.md`/`ARCHITECTURE.md`/ADR reference in this file When opened Then the section exists and defines the named symbols | manual checklist recorded in Evidence |
 | 3 | Given WBS §5 When E08 dependencies are read Then every dependency outside E08 is `DONE` or the dependent story is marked `BLOCKED` with a reason | manual checklist recorded in Evidence |
-| 4 | Given the `BLOCKING` notes in E08-S03 and E08-S08 When refinement ends Then each is resolved (decision recorded) or the story is `BLOCKED` | manual checklist recorded in Evidence |
+| 4 | Given ADR-0015 and ADR-0017 When E08-S03, E08-S08 and E08-S10 are read Then each conforms to procedure item 6 or is corrected in place | manual checklist recorded in Evidence |
 | 5 | Given the corrected file When `py -3 scripts/validate_wbs.py` runs Then no error mentions an `E08-` ID | manual checklist recorded in Evidence |
 
 #### Evidence required
 - Checklist per story (ID → paths checked → corrections made).
-- Resolution record for the two `BLOCKING` items.
+- ADR-0015/ADR-0017 conformance record for E08-S03, E08-S08 and E08-S10.
 - `scripts/validate_wbs.py` output.
 - Demo: `walk --version` and `walk doctor` on a scratch repo still succeed (no source change expected).
 
@@ -157,7 +159,7 @@ The ART_DIRECTOR role exists as a kernel-default constitution and runtime policy
 
 #### Scope
 - In: `art_director.md` constitution (ADR-0013 D-2/D-3 schema), ART_DIRECTOR entry in kernel `policies.yaml` (`enabled: false`), builtin skill `art-direction-review`, KERNEL tools `art.approve`/`art.reject`, ART_DIRECTOR permission defaults, router rule for FEATURE `DESIGN`, `OutputApplier` rule that an ART_DIRECTOR DESIGN output adds label `art-brief-done` and raises no workflow event, escalation rule for art-direction changes (L3, USER), INTERFACES §4 rows.
-- Out: `StoryContract.asset_request` and the asset kernel step (E08-S04); asset-task normalisation, Art Director REVIEW handling, `approve_artifact(kind=ASSET)` and dimensions (E08-S07); DESIGN_LEADER constitution content (E05-S06, unchanged here); Unity MCP tools for the role (E08-S08).
+- Out: `StoryContract.asset_request` and the asset kernel step (E08-S04); asset-task normalisation, Art Director REVIEW handling, `approve_artifact(kind=ASSET)` and dimensions (E08-S07); DESIGN_LEADER constitution content (E05-S06, unchanged here); Unity inspection tools for the role (E08-S08).
 
 #### Files
 | Path | Action | Public symbols |
@@ -221,7 +223,7 @@ ART_DIRECTOR:
 ```
 Router rule (pure, INTERFACES §1.1 `TaskRouter.route`):
 ```python
-ART_LABEL = "art"                      # feature needs art (set by planner or `walk feature add --label art`)
+ART_LABEL = "art"  # feature needs art (set by planner or `walk feature add --label art`)
 ART_BRIEF_DONE_LABEL = "art-brief-done"
 # FEATURE in DESIGN:
 #   ART_DIRECTOR enabled and ART_LABEL in item.labels and ART_BRIEF_DONE_LABEL not in item.labels
@@ -317,34 +319,72 @@ Protocol and models: INTERFACES §2.5 (`AssetRequest`, `AssetJob`, `AssetProvena
 ```python
 # src/walk/integrations/assets/common.py
 MAX_DOWNLOAD_BYTES: Final = 200 * 1024 * 1024
+
+
 def request_hash(request: AssetRequest) -> str:
     """First 16 hex chars of sha256 over canonical JSON {kind, prompt, sorted reference_artifact_ids, constraints (sorted keys), work_item_id}."""
-async def download_to(client: httpx.AsyncClient, files: Mapping[str, str], target_dir: Path) -> list[str]:
+
+
+async def download_to(
+    client: httpx.AsyncClient, files: Mapping[str, str], target_dir: Path
+) -> list[str]:
     """files = {file_name: url}; streams each to <target_dir>/<file_name>.tmp then os.replace; returns POSIX paths in input order.
     file_name containing '/', '\\' or '..' -> BoundaryViolation; body > MAX_DOWNLOAD_BYTES -> OutputInvalid (partial file removed)."""
+
+
 def raise_for_asset_status(response: httpx.Response, provider: str) -> None:
     """2xx -> None; 401/403 -> ConfigError; 402 -> QuotaExhausted; 429 -> RateLimited; 404 -> AssetJobFailed; 5xx -> ProviderUnavailable."""
 
+
 # src/walk/integrations/errors.py
-class AssetJobFailed(PermanentError): ...          # provider reported FAILED/CANCELED/EXPIRED, or job unknown
+class AssetJobFailed(
+    PermanentError
+): ...  # provider reported FAILED/CANCELED/EXPIRED, or job unknown
+
 
 # src/walk/integrations/assets/meshy/provider.py
 MESHY_BASE_URL: Final = "https://api.meshy.ai"
 MESHY_STATUS_MAP: Final[dict[str, Literal["QUEUED", "RUNNING", "DONE", "FAILED"]]] = {
-    "PENDING": "QUEUED", "IN_PROGRESS": "RUNNING", "SUCCEEDED": "DONE", "FAILED": "FAILED", "CANCELED": "FAILED", "EXPIRED": "FAILED"}
+    "PENDING": "QUEUED",
+    "IN_PROGRESS": "RUNNING",
+    "SUCCEEDED": "DONE",
+    "FAILED": "FAILED",
+    "CANCELED": "FAILED",
+    "EXPIRED": "FAILED",
+}
 MESHY_LICENSE_NOTE: Final = "Generated with Meshy API; subject to Meshy terms of service"
-class MeshyAssetProvider:                          # implements AssetProvider; provider = "meshy"
-    def __init__(self, credentials: CredentialStore, *, client: httpx.AsyncClient | None = None,
-                 base_url: str = MESHY_BASE_URL, credits_per_job: Mapping[str, float] | None = None) -> None: ...
+
+
+class MeshyAssetProvider:  # implements AssetProvider; provider = "meshy"
+    def __init__(
+        self,
+        credentials: CredentialStore,
+        *,
+        client: httpx.AsyncClient | None = None,
+        base_url: str = MESHY_BASE_URL,
+        credits_per_job: Mapping[str, float] | None = None,
+    ) -> None: ...
+
 
 # src/walk/integrations/preflight.py
-async def detect_asset_providers(providers: Mapping[str, AssetProvider]) -> dict[str, ComponentStatus]: ...
+async def detect_asset_providers(
+    providers: Mapping[str, AssetProvider],
+) -> dict[str, ComponentStatus]: ...
+
 
 # tests/fakes/fake_asset_provider.py
-class FakeAssetProvider:                           # implements AssetProvider
-    def __init__(self, provider: str = "fake-assets", *, polls_until_done: int = 1, credits: float | None = 10.0,
-                 files: tuple[str, ...] = ("model.fbx", "thumbnail.png"), fail_job_numbers: tuple[int, ...] = (),
-                 supported_kinds: tuple[str, ...] = ("model3d", "texture", "image")) -> None: ...
+class FakeAssetProvider:  # implements AssetProvider
+    def __init__(
+        self,
+        provider: str = "fake-assets",
+        *,
+        polls_until_done: int = 1,
+        credits: float | None = 10.0,
+        files: tuple[str, ...] = ("model.fbx", "thumbnail.png"),
+        fail_job_numbers: tuple[int, ...] = (),
+        supported_kinds: tuple[str, ...] = ("model3d", "texture", "image"),
+    ) -> None: ...
+
     generate_calls: list[tuple[AssetRequest, str]]  # (request, idempotency_key)
     poll_calls: int
     download_calls: int
@@ -408,93 +448,171 @@ _pending_
 
 ---
 
-### E08-S03 — `AssetProvider` implementation: OpenArt
+### E08-S03 — `AssetProvider` implementation: OpenArt over remote MCP
 
-**Status:** BLOCKED — OpenArt public API contract unconfirmed (owner must supply an API reference URL; see Notes)
+**Status:** TODO
 **Type:** feat
-**Requirements:** §78, §80, §84, §26, §91
-**Depends on:** E08-S02
+**Requirements:** §78, §80, §84, §26, §91, ADR-0017
+**Depends on:** E08-S04, E08-S10
 **Effort:** MEDIUM   **Risk:** HIGH
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
 #### Goal
-An `OpenArtAssetProvider` implements the `AssetProvider` protocol for 2D images and textures (concept art, UI art, tileable textures) with the same shape, error mapping and credential handling as the Meshy adapter, so the kernel has two interchangeable asset providers (§78).
+An `OpenArtAssetProvider` implements the `AssetProvider` protocol for 2D images and textures (concept art, UI art, tileable textures) by calling OpenArt's remote MCP tools through `McpHttpClient` (E08-S10, ADR-0017); server tool names, argument names and result paths are configuration recorded from the real `tools/list` and validated at preflight, and an expired login becomes a `MISCONFIGURED` health state and a USER escalation instead of a silent failure.
 
 #### Scope
-- In: `OpenArtAssetProvider` (`health`, `generate`, `poll`, `download`, `provenance`) for `kind in {"image", "texture"}`; endpoint/field constants isolated in one module; composition registration as `IntegrationManager.assets["openart"]`; recorded-fixture unit tests; one `@pytest.mark.integration` live test.
-- Out: shared helpers and fakes (E08-S02, reused unchanged); provider selection policy and cost records (E08-S04); 3D, animation and audio kinds (`NotSupported`); Blender (§78 lists it; no Stage 8 gate needs it — not planned in E08).
+- In: discovery of the real OpenArt tools (Behavior 1) and the kernel default tool map `openart_tools.yaml`; `OpenArtToolMap` model, loader (kernel default + `.ai/project/asset-providers.yaml` override) and `validate_tool_map`; `OpenArtAssetProvider` (`health`, `generate`, `poll`, `download`, `provenance`) for `kind in {"image", "texture"}`; composition registration as `IntegrationManager.assets["openart"]`; USER escalation from `AssetPipelineStep` on `ProviderAuthRequired`; fake OpenArt MCP server built from the recorded map; provider conformance test; one `@pytest.mark.integration` health test.
+- Out: MCP client, OAuth login and token storage (E08-S10); provider selection policy and cost records (E08-S04); 3D, animation and audio kinds (`NotSupported`); live generation in automated tests (owner-run only, it spends credits); Blender (§78 lists it; no Stage 8 gate needs it — not planned in E08).
 
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `src/walk/integrations/assets/openart/__init__.py` | create | `OpenArtAssetProvider` |
-| `src/walk/integrations/assets/openart/provider.py` | create | `OpenArtAssetProvider`, `OPENART_BASE_URL`, `OPENART_STATUS_MAP`, `OPENART_LICENSE_NOTE`, `OPENART_GENERATE_PATH`, `OPENART_JOB_PATH` |
+| `src/walk/integrations/assets/openart/__init__.py` | create | `OpenArtAssetProvider`, `OpenArtToolMap`, `load_openart_tool_map` |
+| `src/walk/integrations/assets/openart/tool_map.py` | create | `OpenArtToolBinding`, `OpenArtResultPaths`, `OpenArtToolMap`, `OPENART_TOOLS_DEFAULT_PATH`, `ASSET_PROVIDERS_PROJECT_FILE`, `load_openart_tool_map`, `validate_tool_map` |
+| `src/walk/integrations/assets/openart/openart_tools.yaml` | create | — (kernel default tool map written from Behavior 1) |
+| `src/walk/integrations/assets/openart/provider.py` | create | `OpenArtAssetProvider`, `OPENART_KINDS`, `OPENART_LICENSE_NOTE` |
 | `src/walk/integrations/assets/__init__.py` | modify | re-export `OpenArtAssetProvider` |
-| `src/walk/cli/composition.py` | modify | — (registers `assets["openart"]`) |
+| `src/walk/orchestrator/asset_step.py` | modify | `AssetPipelineStep.__init__` (`permissions` keyword), `AssetPipelineStep.run` (USER escalation on `ProviderAuthRequired`) |
+| `src/walk/cli/composition.py` | modify | — (builds `McpHttpClient(MCP_SERVERS["openart"], credentials)`, registers `assets["openart"]`, passes `permissions` to `AssetPipelineStep`) |
+| `tests/fakes/fake_openart_mcp.py` | create | `build_fake_openart_server` |
 | `tests/integrations/assets/openart/__init__.py` | create | — |
-| `tests/integrations/assets/openart/fixtures/create_job.json`, `job_running.json`, `job_succeeded.json`, `job_failed.json` | create | — |
+| `tests/integrations/assets/openart/fixtures/tools_list.json` | create | — (the `walk --json auth status openart --tools` output from Behavior 1) |
+| `tests/integrations/assets/openart/fixtures/generate_result.json`, `status_running.json`, `status_done.json`, `status_failed.json` | create | — (shapes of the owner-run results from Behavior 1, URLs replaced by `https://example.invalid/...`; status files only when a status tool exists) |
+| `tests/integrations/assets/openart/test_tool_map.py` | create | — |
 | `tests/integrations/assets/openart/test_provider.py` | create | — |
 | `tests/integrations/assets/openart/test_openart_live.py` | create | — (`@pytest.mark.integration`) |
 | `tests/integrations/assets/test_provider_conformance.py` | create | — |
+| `tests/orchestrator/test_asset_step_auth.py` | create | — |
 
 #### Interface contract
-Protocol: INTERFACES §2.5 `AssetProvider`; helpers and errors from E08-S02 (`request_hash`, `download_to`, `raise_for_asset_status`, `AssetJobFailed`).
+Protocol: INTERFACES §2.5 `AssetProvider`; client and errors from E08-S10 (`McpHttpClient`, `McpToolInfo`, `McpToolResult`, `ProviderAuthRequired`, `McpProtocolError`); helpers from E08-S02 (`download_to`, `MAX_DOWNLOAD_BYTES`, `AssetJobFailed`).
 ```python
+# src/walk/integrations/assets/openart/tool_map.py
+SemanticArgument = Literal["prompt", "negative_prompt", "width", "height", "style", "tileable", "idempotency_key", "job_id"]
+OPENART_TOOLS_DEFAULT_PATH: Final[Path]  # package data openart_tools.yaml
+ASSET_PROVIDERS_PROJECT_FILE: Final = ".ai/project/asset-providers.yaml"
+
+
+class OpenArtToolBinding(FrozenModel):
+    tool: str  # server tool name exactly as listed by tools/list
+    arguments: dict[SemanticArgument, str]  # semantic argument -> server argument name
+    fixed_arguments: JsonDict = {}  # merged into every call; a key equal to a mapped server argument -> ConfigError at load
+
+
+class OpenArtResultPaths(FrozenModel):
+    """Dotted paths into the result payload: structuredContent, else the first text item parsed as JSON."""
+
+    job_id: str | None = None  # required when `status` is bound
+    state: str | None = None  # required when `status` is bound
+    image_urls: str | None = None  # a URL or a list of URLs; None -> image content blocks, then resource URIs
+    credits: str | None = None
+    error: str | None = None
+
+
+class OpenArtToolMap(FrozenModel):
+    version: str
+    recorded_at: str  # ISO date of the tools/list this map was written from
+    generate: OpenArtToolBinding
+    status: OpenArtToolBinding | None = None  # None -> generate is synchronous and returns the images
+    results: OpenArtResultPaths
+    status_map: dict[str, Literal["QUEUED", "RUNNING", "DONE", "FAILED"]] = {}
+
+
+def load_openart_tool_map(default_path: Path, project_file: Path | None) -> OpenArtToolMap: ...
+def validate_tool_map(tool_map: OpenArtToolMap, tools: list[McpToolInfo]) -> list[str]: ...  # mismatch messages; [] = valid
+
+
 # src/walk/integrations/assets/openart/provider.py
-OPENART_BASE_URL: Final[str]              # confirmed by E08-X01 (BLOCKING note)
-OPENART_GENERATE_PATH: Final[str]         # POST, returns a job id
-OPENART_JOB_PATH: Final[str]              # GET, "{job_id}" placeholder, returns status + image URLs
-OPENART_STATUS_MAP: Final[dict[str, Literal["QUEUED", "RUNNING", "DONE", "FAILED"]]]
-OPENART_LICENSE_NOTE: Final = "Generated with OpenArt API; subject to OpenArt terms of service"
-class OpenArtAssetProvider:               # implements AssetProvider; provider = "openart"
-    def __init__(self, credentials: CredentialStore, *, client: httpx.AsyncClient | None = None,
-                 base_url: str = OPENART_BASE_URL, credits_per_job: Mapping[str, float] | None = None) -> None: ...
+OPENART_KINDS: Final = ("image", "texture")
+OPENART_LICENSE_NOTE: Final = "Generated with OpenArt via its MCP server; subject to OpenArt terms of service"
+
+
+class OpenArtAssetProvider:  # implements AssetProvider; provider = "openart"
+    def __init__(
+        self,
+        client: McpHttpClient,
+        tool_map_loader: Callable[[], OpenArtToolMap],
+        *,
+        download_client: httpx.AsyncClient | None = None,
+        credits_per_job: Mapping[str, float] | None = None,
+    ) -> None: ...
+
+
+# src/walk/orchestrator/asset_step.py (delta to E08-S04)
+class AssetPipelineStep:
+    def __init__(self, *args: object, permissions: PermissionManager | None = None, **kwargs: object) -> None: ...  # E08-S04 parameters unchanged
+
+
+# tests/fakes/fake_openart_mcp.py
+def build_fake_openart_server(
+    tool_map: OpenArtToolMap,
+    *,
+    polls_until_done: int = 1,
+    fail: bool = False,
+    image_url: str = "https://example.invalid/openart/image.png",
+) -> "FastMCP": ...  # tools named and shaped from tool_map; served through in_memory_session_factory (E08-S10)
 ```
-Request mapping (fields named by the confirmed API; semantic contract fixed here):
-
-| `AssetRequest` | OpenArt request field | Rule |
-|---|---|---|
-| `prompt` | prompt | required, ≤ 1000 chars else `OutputInvalid` |
-| `constraints["negative_prompt"]` | negative prompt | optional |
-| `constraints["texture_size"]` | width = height | default 1024; `kind="texture"` additionally requests a tileable/seamless output when the API supports it, else adds "seamless tileable texture" to the prompt |
-| `constraints["aspect"]` | width/height | `image` only, e.g. `"16:9"`; ignored for `texture` |
-| `constraints["style"]` | style/model preset | optional; unknown preset passed through |
-
-Auth: credential `OPENART_API_KEY` (ADR-0009 D-8) via `CredentialStore`, sent in the header the confirmed API requires.
+`openart_tools.yaml` shape — every `<...>` value is filled from Behavior 1, never guessed:
+```yaml
+version: "1.0"
+recorded_at: "<YYYY-MM-DD of the tools/list>"
+generate:
+  tool: "<server tool name>"
+  arguments: {prompt: "<server arg>", width: "<server arg>", height: "<server arg>"}   # only arguments the tool has
+  fixed_arguments: {}
+status: null            # or {tool: "<server tool name>", arguments: {job_id: "<server arg>"}}
+results: {job_id: null, state: null, image_urls: "<dotted path>", credits: null, error: null}
+status_map: {}          # server status value -> QUEUED|RUNNING|DONE|FAILED, when status is bound
+```
+Project override: `.ai/project/asset-providers.yaml` with top-level key `openart` holding a complete map of the same schema (read-only for the kernel).
 
 #### Behavior
-1. `generate`: kind not in `{"image", "texture"}` → `NotSupported("openart: <kind>")` before any HTTP call; otherwise POST and return `AssetJob(provider="openart", job_id, state="QUEUED", cost_credits=credits_per_job.get(kind) or the credit figure from the response when the API returns one)`.
-2. `poll`: status mapped through `OPENART_STATUS_MAP`; unknown status → `OutputInvalid`.
-3. `download`: state ≠ `DONE` → `AssetJobFailed`; downloads the first image as `image.png` (`texture.png` for `kind="texture"` — the kind is read from the job response or, if absent, from a per-job record kept only for the provider's lifetime) via `download_to`; returns `[path]`.
-4. `provenance`: as E08-S02 Behavior 4 with `provider="openart"` and `OPENART_LICENSE_NOTE`.
-5. `health`: credential absent → `MISSING` without HTTP; if the confirmed API has an authenticated read endpoint it is used (200 → `READY`, 401/403 → `MISCONFIGURED`), otherwise `READY` with `detail="credential present (unverified)"`; transport errors → `UNKNOWN`.
-6. Error mapping and key secrecy identical to E08-S02 Behaviors 6–7.
-7. Conformance: both real providers and `FakeAssetProvider` satisfy `isinstance(x, AssetProvider)` (runtime-checkable protocol) and the same scripted lifecycle (generate → poll until DONE → download → provenance) against mock transports.
+1. Discovery comes first, before adapter code: with the owner's login (E08-S10) the implementer runs `walk --json auth status openart --tools`, stores the output as `fixtures/tools_list.json`, identifies the prompt-to-image tool (and a job-status tool when generation is asynchronous), runs one owner-approved generation to see the real result shape, and writes `openart_tools.yaml` and the result fixtures from what was observed. The tool names, their input schemas and the result shape are pasted into this story's Evidence. If no tool generates an image from a prompt, the story is set `BLOCKED` with the tool list as reason. No server tool or argument name appears in code or tests except through the map.
+2. `load_openart_tool_map`: reads the kernel default; when `project_file` exists and has key `openart`, that mapping replaces the default as a whole (no field merge). Unknown keys or wrong types → `ConfigError` naming file and key. `generate.arguments` must map `prompt`; a bound `status` requires `status.arguments["job_id"]`, `results.job_id`, `results.state` and a non-empty `status_map`; a `fixed_arguments` key that is also a mapped server argument → `ConfigError`.
+3. `validate_tool_map(map, tools)`: one message per mismatch — `generate: tool '<t>' not offered by server`, `generate: argument '<a>' not in input schema`, `generate: required argument '<a>' not mapped` (a `required` property of the tool's schema that is neither mapped nor in `fixed_arguments`); same for `status`.
+4. `health()`: `client.logged_in()` false → `MISSING`, `detail="not logged in; run walk auth login openart"`, no network; tool-map load `ConfigError` → `MISCONFIGURED` with its message; `list_tools()` then `validate_tool_map` → mismatches → `MISCONFIGURED`, `detail="tool map mismatch: <messages joined by '; '>"`; none → `READY`, `detail="<n> tools; map <recorded_at>"`; `ProviderAuthRequired` → `MISCONFIGURED`, `detail="authorization expired; run walk auth login openart"`; `Timeout`/`ProviderUnavailable`/`McpProtocolError` → `UNKNOWN`; never raises. Preflight stores it under `EnvironmentManifest.providers["openart"]` (E08-S02 Behavior 8), so `asset.generate` is offered for OpenArt only when `READY`.
+5. The tool map is loaded on first use through `tool_map_loader` and cached for the provider's lifetime (a load `ConfigError` is cached too, and `generate` re-raises it).
+6. `generate(request, idempotency_key)`: `kind` not in `OPENART_KINDS` → `NotSupported("openart: <kind>")` before any MCP call. Semantic values: `prompt`; `negative_prompt` and `style` from `constraints` when present; `image`: `width`/`height` from `constraints["aspect"]` (`"W:H"`, long side 1024, default `1:1`; malformed → `OutputInvalid`); `texture`: `width = height = constraints.get("texture_size", 1024)` and `tileable = True`; `idempotency_key`. Only semantic values mapped in `generate.arguments` are sent, under their server names, merged with `fixed_arguments`; for `texture` with `tileable` unmapped the prompt gets the suffix `", seamless tileable texture"`; other unmapped values are dropped with a DEBUG log.
+7. Generate result: `is_error` → `AssetJobFailed(<first text line>)`. Asynchronous map (`status` bound): `job_id` read at `results.job_id` (absent → `OutputInvalid`), state from `results.state` through `status_map` when present else `QUEUED`. Synchronous map: the image sources (Behavior 9) must be present (else `OutputInvalid`), `job_id = "sync-" + sha256(idempotency_key)[:16]`, state `DONE`, sources kept in a per-job record for the provider's lifetime. Every job also records its `kind` in that record. `cost_credits` = number at `results.credits` when bound and present, else `credits_per_job.get(kind)`.
+8. `poll(job_id)`: asynchronous → calls the status tool with the mapped `job_id` argument; state through `status_map`; unknown status value → `OutputInvalid`; a `DONE` result's image sources are kept in the job record. Synchronous → record present → `DONE`; absent → `AssetJobFailed("openart: result of <job_id> lost (kernel restarted before download)")`.
+9. `download(job_id, target_dir)`: asynchronous jobs are polled once more; state ≠ `DONE` → `AssetJobFailed(<text at results.error> or state)`. Image source, first available: URLs at `results.image_urls` (http/https only, else `OutputInvalid`) → `McpToolResult.images` (base64, written with the same `.tmp` + `os.replace` and `MAX_DOWNLOAD_BYTES` rules as `download_to`) → http/https `resource_uris`. Only the first image is kept. File name `texture.<ext>` when the record's kind is `texture`, else `image.<ext>`; `<ext>` from the URL suffix or MIME type among `png`, `jpg`, `jpeg`, `webp`, default `png`. URLs go through `download_to`; returns `[path]`.
+10. `provenance`: as E08-S02 Behavior 4 with `provider="openart"` and `OPENART_LICENSE_NOTE`.
+11. Errors from `McpHttpClient` (`Timeout`, `ProviderUnavailable`, `RateLimited`, `ProviderAuthRequired`, `McpProtocolError`) propagate unchanged; E08-S04 treats the first three as transient and the last two as permanent.
+12. `AssetPipelineStep.run`: a `ProviderAuthRequired` from the generator → `block` with reason `asset provider authorization required: <message>` and, when `permissions` is set, `permissions.request_approval({"reason": "provider_auth_required", "provider": <provider>, "remedy": "walk auth login <provider>"}, kind="ESCALATION", approver=USER, requested_by=AgentRole.KERNEL, run_id=None, work_item_id=<task id>)` (ADR-0017 D-7); all other errors keep E08-S04 Behavior 11.
+13. Composition constructs `McpHttpClient(MCP_SERVERS["openart"], credentials)` and `OpenArtAssetProvider(client, lambda: load_openart_tool_map(OPENART_TOOLS_DEFAULT_PATH, <repo>/ASSET_PROVIDERS_PROJECT_FILE))` unconditionally and registers it as `assets["openart"]` (health reports `MISSING` without a login); `KernelOverrides.asset_providers` still replaces the whole dict.
+14. Conformance: Meshy, OpenArt and `FakeAssetProvider` all satisfy `isinstance(x, AssetProvider)` and the scripted lifecycle generate → poll until `DONE` → download → provenance (Meshy on a mock HTTP transport, OpenArt on `build_fake_openart_server` via `in_memory_session_factory`).
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | Given an `image` request with `aspect="16:9"` When `generate` Then the POST body carries prompt and 16:9 dimensions and the job is `QUEUED` | `tests/integrations/assets/openart/test_provider.py::test_generate_image_request_mapping` |
-| 2 | Given a `texture` request with `texture_size=512` When `generate` Then 512×512 and a seamless/tileable request (flag or prompt suffix) | `tests/integrations/assets/openart/test_provider.py::test_generate_texture_is_square_and_tileable` |
-| 3 | Given `kind="model3d"` When `generate` Then `NotSupported` and no HTTP request | `tests/integrations/assets/openart/test_provider.py::test_generate_unsupported_kind` |
-| 4 | Given running then succeeded fixtures When `poll` twice Then `RUNNING` then `DONE` | `tests/integrations/assets/openart/test_provider.py::test_poll_maps_status` |
-| 5 | Given a succeeded texture job When `download` Then a single `texture.png` path | `tests/integrations/assets/openart/test_provider.py::test_download_texture_file` |
-| 6 | Given a failed job When `download` Then `AssetJobFailed` | `tests/integrations/assets/openart/test_provider.py::test_download_failed_job_raises` |
-| 7 | Given no credential When `health` Then `MISSING` with no HTTP call | `tests/integrations/assets/openart/test_provider.py::test_health_missing_credential` |
-| 8 | Given a key `oa-secret` and a 500 response When `generate` Then `ProviderUnavailable` and the key appears in no exception text or log record | `tests/integrations/assets/openart/test_provider.py::test_errors_mapped_and_key_never_leaks` |
-| 9 | Given Meshy, OpenArt and the fake When the scripted lifecycle runs on mock transports Then each is an `AssetProvider` and returns provenance with its own provider name | `tests/integrations/assets/test_provider_conformance.py::test_all_providers_conform` |
-| 10 | Given `OPENART_API_KEY` in the environment When the live test runs Then `health()` is not `MISSING` | `tests/integrations/assets/openart/test_openart_live.py::test_openart_live_health` |
+| 1 | Given the kernel default `openart_tools.yaml` and the recorded `tools_list.json` When loaded and validated Then no mismatch | `tests/integrations/assets/openart/test_tool_map.py::test_default_map_matches_recorded_tools_list` |
+| 2 | Given a project file with key `openart` / an unknown key / a bound `status` without `results.job_id` When loading Then the project map replaces the default / `ConfigError` / `ConfigError` | `tests/integrations/assets/openart/test_tool_map.py::test_load_override_and_validation_rules` |
+| 3 | Given tools lacking the generate tool, lacking a mapped argument, and with an unmapped required property When validated Then one message for each | `tests/integrations/assets/openart/test_tool_map.py::test_validate_reports_each_mismatch` |
+| 4 | Given not logged in / matching tools / a mismatch / `ProviderAuthRequired` / a timeout When `health` Then `MISSING` without an MCP call / `READY` / `MISCONFIGURED` naming the mismatch / `MISCONFIGURED` naming `walk auth login openart` / `UNKNOWN` | `tests/integrations/assets/openart/test_provider.py::test_health_states` |
+| 5 | Given an `image` request with `aspect="16:9"` When `generate` on the fake server Then the call carries the prompt, width 1024 and height 576 under the mapped names plus the fixed arguments, and the job is `QUEUED` (asynchronous map) | `tests/integrations/assets/openart/test_provider.py::test_generate_image_argument_mapping` |
+| 6 | Given a `texture` request with `texture_size=512` When `generate` with `tileable` mapped / unmapped Then 512 by 512 with `tileable` true / with the prompt suffix | `tests/integrations/assets/openart/test_provider.py::test_generate_texture_square_and_tileable` |
+| 7 | Given `kind="model3d"` When `generate` Then `NotSupported` and no MCP call | `tests/integrations/assets/openart/test_provider.py::test_generate_unsupported_kind` |
+| 8 | Given status results running then done When `poll` twice Then `RUNNING` then `DONE`; an unknown status value Then `OutputInvalid` | `tests/integrations/assets/openart/test_provider.py::test_poll_maps_status` |
+| 9 | Given a done texture job with an image URL / with only a base64 image block / a failed job When `download` Then one `texture.png` / one decoded image file / `AssetJobFailed` | `tests/integrations/assets/openart/test_provider.py::test_download_sources_and_failure` |
+| 10 | Given a synchronous map When `generate` Then `DONE` and `download` writes the image; a new provider instance polling that job Then `AssetJobFailed` naming the lost result | `tests/integrations/assets/openart/test_provider.py::test_synchronous_mode_and_lost_result` |
+| 11 | Given `results.credits` bound and present / unbound with `credits_per_job` When `generate` Then `cost_credits` from the result / from the setting | `tests/integrations/assets/openart/test_provider.py::test_cost_credits_source` |
+| 12 | Given Meshy, OpenArt and the fake When the scripted lifecycle runs Then each is an `AssetProvider` and returns provenance with its own provider name | `tests/integrations/assets/test_provider_conformance.py::test_all_providers_conform` |
+| 13 | Given a generator raising `ProviderAuthRequired` When `AssetPipelineStep.run` Then the task is `BLOCKED` with `authorization required` in the reason and one `ESCALATION` approval request for USER with payload reason `provider_auth_required` | `tests/orchestrator/test_asset_step_auth.py::test_auth_required_blocks_and_escalates_to_user` |
+| 14 | Given the owner's stored login When the live test runs Then `health()` is `READY` (the default map matches the live `tools/list`) and no generation tool is called | `tests/integrations/assets/openart/test_openart_live.py::test_openart_live_health` |
 
 #### Evidence required
+- Behavior 1 record: tool names and input schemas of the generation (and status) tool, the observed result shape, the date, and the resulting `openart_tools.yaml`.
 - Quality gate output; live test listed as skipped.
-- Demo: `walk doctor` on a scratch repo → `openart: missing (OPENART_API_KEY not set)`; owner-run `uv run pytest -m integration tests/integrations/assets/openart` transcript when a key is available.
+- Demo: `walk doctor` on a scratch repo without a login → `openart: missing (not logged in; run walk auth login openart)`; owner machine after `walk auth login openart` → `openart: ready (<n> tools; map <date>)`; owner-run `uv run pytest -m integration tests/integrations/assets/openart`.
 
 #### Notes
-- **BLOCKED** pending owner confirmation of an OpenArt API reference URL (architect, 2026-10-06). The public generation API contract — base URL, generate and job-status endpoints, auth header, status values, image URL field, credit reporting — is unknown and must not be invented: the endpoint constants in Interface contract stay unset and the request-mapping table names semantic fields only. Unblock condition: the owner records the reference URL and the confirmed contract in this Notes section (E08-X01), then sets `TODO`. If OpenArt offers no public generation API, the owner either names an OpenArt-compatible HTTP contract or sets the story `DROPPED` in WBS §5 (IDs are never reused).
-- Nothing depends on this story: no `Depends on` in E08–E11 names E08-S03, the E08 gate (E08-S09) uses `FakeAssetProvider`, and E08-S04…S09 use only the `AssetProvider` protocol and E08-S02. Its absence only removes `assets["openart"]` from composition.
-- All uncertainty is confined to the six constants and the field names in `provider.py`; tests read the same constants, so a later API change touches one module.
-- `NEW NAME:` `OpenArtAssetProvider`, `OPENART_BASE_URL`, `OPENART_STATUS_MAP`, `OPENART_LICENSE_NOTE`, `OPENART_GENERATE_PATH`, `OPENART_JOB_PATH`.
-- Commit subject: `feat: add openart asset provider (E08-S03)`.
+- ADR-0017 (D-6 refresh-only kernel runs, D-7 expiry and USER escalation, D-8 tool map validated against `tools/list`); ADR-0009 D-8 (credentials via `CredentialStore` only — this story never touches a token; `McpHttpClient` does).
+- Unblocked by the owner decision of 2026-10-06 (OpenArt via `https://mcp.openart.ai/mcp`); the REST guesses of the earlier draft (base URL, endpoint paths, API-key credential) are gone.
+- Depends on E08-S04 because Behavior 12 edits `asset_step.py`; nothing depends on this story — the E08 gate (E08-S09) uses `FakeAssetProvider`, so its absence only removes `assets["openart"]` from composition.
+- All uncertainty about the server lives in `openart_tools.yaml` and the Behavior 1 fixtures; when OpenArt changes its tools, `walk doctor` shows `MISCONFIGURED` and a project override (`.ai/project/asset-providers.yaml`) restores service without a kernel release.
+- Synchronous maps lose an undownloaded result when the kernel restarts between `generate` and `download` (seconds); E08-S04 then blocks the task with the `AssetJobFailed` text — accepted rather than persisting results inside a provider.
+- `NEW NAME:` `OpenArtAssetProvider`, `OPENART_KINDS`, `OPENART_LICENSE_NOTE`, `OpenArtToolBinding`, `OpenArtResultPaths`, `OpenArtToolMap`, `SemanticArgument`, `OPENART_TOOLS_DEFAULT_PATH`, `ASSET_PROVIDERS_PROJECT_FILE`, `load_openart_tool_map`, `validate_tool_map`, kernel data `openart_tools.yaml`, project file `.ai/project/asset-providers.yaml`, `AssetPipelineStep` keyword `permissions`, escalation payload reason `provider_auth_required`, `build_fake_openart_server`.
+- Commit subject: `feat: add openart asset provider over remote mcp (E08-S03)`.
 
 #### Evidence (filled by implementer)
 _pending_
@@ -546,18 +664,23 @@ Assets are produced only by the kernel: one `DefaultAssetGenerator` (generate �
 # src/walk/workflow/models.py
 class StoryContract(WalkModel):
     ...
-    asset_request: JsonDict | None = Field(default=None, description="AssetRequest fields minus work_item_id (§78); set only on asset tasks")
+    asset_request: JsonDict | None = Field(
+        default=None,
+        description="AssetRequest fields minus work_item_id (§78); set only on asset tasks",
+    )
+
 
 # src/walk/integrations/assets/pipeline.py
 class AssetProcessingContext(FrozenModel):
     request: AssetRequest
     job: AssetJob
-    paths: list[str]                    # repo-relative POSIX paths inside worktree_path
+    paths: list[str]  # repo-relative POSIX paths inside worktree_path
     worktree_path: str
     feature_id: FeatureId | None
     phase_id: PhaseId | None
     actor: Actor
     attempt: int
+
 
 class AssetProcessingVerdict(FrozenModel):
     processor: str
@@ -565,12 +688,15 @@ class AssetProcessingVerdict(FrozenModel):
     reasons: list[str] = []
     evidence_ids: list[EvidenceId] = []
     evidence_kinds: list[EvidenceKind] = []
-    extra_paths: list[str] = []         # files the processor wrote that must be committed with the asset
+    extra_paths: list[str] = []  # files the processor wrote that must be committed with the asset
+
 
 @runtime_checkable
 class AssetPostProcessor(Protocol):
     name: str
+
     async def process(self, ctx: AssetProcessingContext) -> AssetProcessingVerdict: ...
+
 
 # src/walk/runtime/models.py
 class AssetGenerationResult(FrozenModel):
@@ -582,32 +708,73 @@ class AssetGenerationResult(FrozenModel):
     cost_credits: float | None
     attempt: int
     verdicts: list[AssetProcessingVerdict]
-    reused: bool                        # True when served from the idempotency store
+    reused: bool  # True when served from the idempotency store
+
 
 # src/walk/runtime/asset_tools.py
 ASSET_GENERATE_TOOL: Final = "asset.generate"
 ASSET_OUTPUT_ROOT: Final = "Assets/Generated"
 ASSET_POLL_INTERVAL_S: Final = 5.0
 ASSET_POLL_TIMEOUT_S: Final = 900.0
+
+
 class DefaultAssetGenerator:
-    def __init__(self, integrations: IntegrationManager, costs: CostManager, budgets: BudgetManager, *,
-                 sleep: Callable[[float], Awaitable[None]], post_processors: Sequence[AssetPostProcessor] = (),
-                 usd_per_credit: Mapping[str, float], project_key: ProjectKey,
-                 poll_interval_s: float = ASSET_POLL_INTERVAL_S, poll_timeout_s: float = ASSET_POLL_TIMEOUT_S) -> None: ...
-    def add_post_processor(self, processor: AssetPostProcessor) -> None: ...      # duplicate name -> ConfigError
-    async def generate(self, request: AssetRequest, *, actor: Actor, worktree_path: str, feature_id: FeatureId | None,
-                       phase_id: PhaseId | None, provider: str | None = None, attempt: int = 1) -> AssetGenerationResult: ...
-class AssetGenerateToolHandler:          # a KernelToolHandler (E01-S26)
-    def __init__(self, generator: DefaultAssetGenerator, runs: AgentRunRepository, workflow: WorkflowManager) -> None: ...
+    def __init__(
+        self,
+        integrations: IntegrationManager,
+        costs: CostManager,
+        budgets: BudgetManager,
+        *,
+        sleep: Callable[[float], Awaitable[None]],
+        post_processors: Sequence[AssetPostProcessor] = (),
+        usd_per_credit: Mapping[str, float],
+        project_key: ProjectKey,
+        poll_interval_s: float = ASSET_POLL_INTERVAL_S,
+        poll_timeout_s: float = ASSET_POLL_TIMEOUT_S,
+    ) -> None: ...
+    def add_post_processor(
+        self, processor: AssetPostProcessor
+    ) -> None: ...  # duplicate name -> ConfigError
+    async def generate(
+        self,
+        request: AssetRequest,
+        *,
+        actor: Actor,
+        worktree_path: str,
+        feature_id: FeatureId | None,
+        phase_id: PhaseId | None,
+        provider: str | None = None,
+        attempt: int = 1,
+    ) -> AssetGenerationResult: ...
+
+
+class AssetGenerateToolHandler:  # a KernelToolHandler (E01-S26)
+    def __init__(
+        self, generator: DefaultAssetGenerator, runs: AgentRunRepository, workflow: WorkflowManager
+    ) -> None: ...
     async def __call__(self, request: ToolCallRequest) -> JsonDict: ...
+
     # arguments: {kind, prompt, reference_artifact_ids?, constraints?, provider?}; returns AssetGenerationResult.model_dump(mode="json")
+
 
 # src/walk/orchestrator/asset_step.py
 MAX_ASSET_ATTEMPTS: Final = 2
+
+
 class AssetPipelineStep:
-    def __init__(self, workflow: WorkflowManager, generator: DefaultAssetGenerator, git: GitProvider, clock: Clock, *,
-                 worktrees: "<E03-S12 worktree helper> (verify)", max_attempts: int = MAX_ASSET_ATTEMPTS) -> None: ...
-    def handles(self, item: WorkItem) -> bool: ...          # TASK with contract.asset_request and state in {READY, REWORK}
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        generator: DefaultAssetGenerator,
+        git: GitProvider,
+        clock: Clock,
+        *,
+        worktrees: "<E03-S12 worktree helper> (verify)",
+        max_attempts: int = MAX_ASSET_ATTEMPTS,
+    ) -> None: ...
+    def handles(
+        self, item: WorkItem
+    ) -> bool: ...  # TASK with contract.asset_request and state in {READY, REWORK}
     async def run(self, task: Task) -> WorkItemTransition: ...
 ```
 Idempotency keys (ARCHITECTURE §4.4; second one `NEW NAME:`):
@@ -709,15 +876,26 @@ Every generated asset carries a `<asset>.provenance.yaml` (INTERFACES §2.5 `Ass
 ```python
 # src/walk/integrations/assets/provenance.py
 PROVENANCE_SUFFIX: Final = ".provenance.yaml"
+
+
 def provenance_path_for(asset_path: str) -> str:
     """'Assets/Generated/TASK-0003/job/model.fbx' -> 'Assets/Generated/TASK-0003/job/model.fbx.provenance.yaml'."""
+
+
 def write_provenance(provenance: AssetProvenance, worktree_path: Path) -> str:
     """yaml.safe_dump(provenance.model_dump(mode="json"), sort_keys=True) to <worktree>/<provenance_path_for(asset_path)> via tmp + os.replace; returns repo-relative path."""
+
+
 def read_provenance(path: Path) -> AssetProvenance:
     """Parse + validate; malformed -> OutputInvalid naming the file."""
-class ProvenanceRecorder:                   # AssetPostProcessor, name = "provenance"
-    def __init__(self, providers: Mapping[str, AssetProvider], evidence: EvidenceManager) -> None: ...
+
+
+class ProvenanceRecorder:  # AssetPostProcessor, name = "provenance"
+    def __init__(
+        self, providers: Mapping[str, AssetProvider], evidence: EvidenceManager
+    ) -> None: ...
     async def process(self, ctx: AssetProcessingContext) -> AssetProcessingVerdict: ...
+
 
 # src/walk/orchestrator/asset_provenance.py
 class AssetProvenanceAnswer(FrozenModel):
@@ -734,10 +912,16 @@ class AssetProvenanceAnswer(FrozenModel):
     approved_artifact_id: ApprovedArtifactId | None
     approved_by: Actor | None
     evidence_ids: list[EvidenceId]
-    def to_markdown(self) -> str: ...       # four §80 questions as H3 headings, answers below, in §80 order
+
+    def to_markdown(
+        self,
+    ) -> str: ...  # four §80 questions as H3 headings, answers below, in §80 order
+
 
 class AssetProvenanceQuery:
-    def __init__(self, db: Database, repo_root: Path) -> None: ...      # read-only SQL on approved_artifacts, evidence
+    def __init__(
+        self, db: Database, repo_root: Path
+    ) -> None: ...  # read-only SQL on approved_artifacts, evidence
     def describe(self, asset_path: str) -> AssetProvenanceAnswer: ...
     def list(self, *, work_item_id: WorkItemId | None = None) -> list[AssetProvenanceAnswer]: ...
 ```
@@ -801,7 +985,7 @@ Every generated asset is imported and measured by Unity through `com.walk.ci` (`
 
 #### Scope
 - In: C# `WalK.CI.ValidateAssets` and metrics collector; `UnityBatchProvider.validate_assets`; `AssetMetrics` parsing; rule model, kernel default rules file, project override loader, evaluator; `AssetValidationProcessor` post-processor; `FakeUnityProvider.validate_assets` scripting; one `@pytest.mark.integration` test against a real Unity install.
-- Out: provenance (E08-S05); Art Director judgement (E08-S07 — a passing validation is necessary, not sufficient, §10.5); Unity MCP screenshots (E08-S08, optional alternative source); performance budgets at scene level (Stage 9+ perf work).
+- Out: provenance (E08-S05); Art Director judgement (E08-S07 — a passing validation is necessary, not sufficient, §10.5); on-demand scene/prefab screenshots for reviewers (E08-S08 `unity.screenshot`); performance budgets at scene level (Stage 9+ perf work).
 
 #### Files
 | Path | Action | Public symbols |
@@ -846,6 +1030,8 @@ class TextureMetrics(FrozenModel):
     path: str
     width: int
     height: int
+
+
 class AssetMetrics(FrozenModel):
     path: str
     type: Literal["model", "texture", "other"]
@@ -857,11 +1043,16 @@ class AssetMetrics(FrozenModel):
     bones: int | None
     textures: list[TextureMetrics]
     bounds_size: tuple[float, float, float] | None
-    pivot_offset: tuple[float, float, float] | None     # pivot minus bottom-centre of bounds, metres
+    pivot_offset: tuple[float, float, float] | None  # pivot minus bottom-centre of bounds, metres
     animation_clips: list[str]
     platform_issues: dict[str, list[str]]
     preview: str | None
-def parse_asset_validation_result(path: Path) -> list[AssetMetrics]: ...   # malformed -> OutputInvalid
+
+
+def parse_asset_validation_result(
+    path: Path,
+) -> list[AssetMetrics]: ...  # malformed -> OutputInvalid
+
 
 # src/walk/integrations/assets/rules.py
 class AssetKindRules(FrozenModel):
@@ -870,28 +1061,42 @@ class AssetKindRules(FrozenModel):
     max_bones: int | None = None
     max_texture_px: int | None = None
     require_power_of_two: bool = False
-    scale_m: tuple[float, float] | None = None          # allowed range of the largest bounds dimension
+    scale_m: tuple[float, float] | None = None  # allowed range of the largest bounds dimension
     pivot: Literal["bottom_center", "center", "any"] = "any"
     pivot_tolerance_m: float = 0.05
     required_clips: list[str] = []
     require_import_ok: bool = True
-    platforms: list[str] = []                           # BuildTarget values whose platform_issues must be empty
+    platforms: list[str] = []  # BuildTarget values whose platform_issues must be empty
+
+
 class AssetRuleSet(FrozenModel):
     version: str
-    kinds: dict[str, AssetKindRules]                    # keys = AssetRequest.kind
+    kinds: dict[str, AssetKindRules]  # keys = AssetRequest.kind
+
+
 class AssetRuleViolation(FrozenModel):
     asset_path: str
     rule: str
     expected: str
     actual: str
-    def __str__(self) -> str: ...                       # "<asset_path>: <rule> expected <expected>, got <actual>"
-ASSET_RULES_DEFAULT_PATH: Final[Path]                   # package data asset_rules.yaml
+
+    def __str__(self) -> str: ...  # "<asset_path>: <rule> expected <expected>, got <actual>"
+
+
+ASSET_RULES_DEFAULT_PATH: Final[Path]  # package data asset_rules.yaml
+
+
 def load_asset_rules(default_path: Path, project_path: Path | None) -> AssetRuleSet: ...
-def evaluate_asset_metrics(kind: str, metrics: list[AssetMetrics], rules: AssetRuleSet, constraints: JsonDict) -> list[AssetRuleViolation]: ...
+def evaluate_asset_metrics(
+    kind: str, metrics: list[AssetMetrics], rules: AssetRuleSet, constraints: JsonDict
+) -> list[AssetRuleViolation]: ...
+
 
 # src/walk/integrations/assets/validation.py
-class AssetValidationProcessor:                         # AssetPostProcessor, name = "validation"
-    def __init__(self, unity: UnityProvider | None, evidence: EvidenceManager, rules: AssetRuleSet) -> None: ...
+class AssetValidationProcessor:  # AssetPostProcessor, name = "validation"
+    def __init__(
+        self, unity: UnityProvider | None, evidence: EvidenceManager, rules: AssetRuleSet
+    ) -> None: ...
     async def process(self, ctx: AssetProcessingContext) -> AssetProcessingVerdict: ...
 ```
 Project override file: `.ai/project/asset-rules.yaml` (same schema; read-only for the kernel; per-kind fields replace kernel defaults field by field).
@@ -980,32 +1185,55 @@ Asset tasks are created in a normalised shape (implementer `KERNEL`, reviewer AR
 #### Interface contract
 ```python
 # src/walk/workflow/protocols.py (WorkflowManager additions; implemented in DefaultWorkflowManager)
-async def update_contract(self, work_item_id: WorkItemId, contract: StoryContract, *, actor: AgentRole) -> WorkItem:
+async def update_contract(
+    self, work_item_id: WorkItemId, contract: StoryContract, *, actor: AgentRole
+) -> WorkItem:
     """Replace the contract of a STORY/TASK/BUG in work_items (state and state_version unchanged). No ledger event of its own:
     the triggering run's AGENT_RUN_ENDED carries the findings; actor == USER additionally writes USER_OVERRIDE (§93).
     Raises ConfigError for kinds without a contract."""
-async def set_applicable_dimensions(self, feature_id: FeatureId, dimensions: list[DoneDimension]) -> Feature:
+
+
+async def set_applicable_dimensions(
+    self, feature_id: FeatureId, dimensions: list[DoneDimension]
+) -> Feature:
     """Replace Feature.applicable_dimensions (deduplicated, enum order); existing done_dimensions entries are kept."""
+
 
 # src/walk/runtime/output_applier.py
 ASSET_TASK_REQUIRED_EVIDENCE: Final = (EvidenceKind.LOG, EvidenceKind.SCREENSHOT)
 REVIEW_TOOLS_BY_ROLE: Final[dict[AgentRole, tuple[ToolName, ToolName]]] = {
     AgentRole.LEAD_DEV: ("review.approve", "review.reject"),
     AgentRole.ART_DIRECTOR: ("art.approve", "art.reject"),
-    AgentRole.DESIGN_LEADER: ("review.approve", "review.reject"),   # see Notes
+    AgentRole.DESIGN_LEADER: ("review.approve", "review.reject"),  # see Notes
 }
 
 # src/walk/orchestrator/art_dimensions.py
 DESIGN_REVIEW_HOLD_LABEL: Final = "design-review-hold"
-def applicable_dimensions_for(feature: Feature, *, design_leader_enabled: bool, art_director_enabled: bool,
-                              has_asset_children: bool) -> list[DoneDimension]:
+
+
+def applicable_dimensions_for(
+    feature: Feature,
+    *,
+    design_leader_enabled: bool,
+    art_director_enabled: bool,
+    has_asset_children: bool,
+) -> list[DoneDimension]:
     """feature.applicable_dimensions ∪ {DESIGN_VALIDATED if design_leader_enabled} ∪ {ART_COMPLETE if art_director_enabled and
     (has_asset_children or ART_LABEL in feature.labels)}; pure."""
+
+
 class ArtDimensionTracker:
-    def __init__(self, workflow: WorkflowManager, evidence: EvidenceManager, db: Database,
-                 enabled_roles: Callable[[], list[AgentRole]]) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        evidence: EvidenceManager,
+        db: Database,
+        enabled_roles: Callable[[], list[AgentRole]],
+    ) -> None: ...
     async def refresh_applicability(self, feature_id: FeatureId) -> Feature: ...
-    async def on_transition(self, item: WorkItem, to_state: WorkItemState) -> None: ...   # called by the builtin hook
+    async def on_transition(
+        self, item: WorkItem, to_state: WorkItemState
+    ) -> None: ...  # called by the builtin hook
 ```
 `ApprovedArtifact` for an approved asset (DOMAIN-MODEL §4.7): `id="APR-0000"` (allocated), `kind=ASSET`, `title=task.title`, `status=APPROVED`, `scope=<parent FEAT id>`, `version` per E02-S12, `approved_by=Actor(ART_DIRECTOR, model_id, run_id)`, `related_requirements=contract.source_requirements`, `payload_paths` = files of the newest `asset(<task id>):` commit on the task branch, `supersedes` = the task's previous APPROVED ASSET artifact if any.
 
@@ -1058,134 +1286,195 @@ _pending_
 
 ---
 
-### E08-S08 — Unity MCP provider (`ToolKind.MCP`)
+### E08-S08 — Unity inspection tools via batchmode CLI (screenshot, console, asset inspection)
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §30, §31, §62, §6.6, §79 (visual checks), §91, §129, ADR-0009 D-6 (deferred item), §137 (Inv. 7, 11)
-**Depends on:** E08-X01, E01-S14
-**Effort:** HIGH   **Risk:** HIGH
+**Requirements:** §30, §31, §62, §6.6, §79 (visual checks), §129, §137 (Inv. 7, 9), ADR-0015
+**Depends on:** E08-S06, E01-S14
+**Effort:** HIGH   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
 
 #### Goal
-The kernel can talk to a running Unity Editor through an MCP server as an optional provider: MCP tools are declared in the tool registry as `ToolKind.MCP`, authorised and metered at the same `ToolInvoker` enforcement point as KERNEL tools, executed by a kernel-side MCP client (agents never connect to the server), and image results become `SCREENSHOT` evidence — giving agents read-only visual inspection (screenshots, console, asset inspection) without changing the batchmode-first CI path.
+Reviewing agents can inspect a Unity project without a running editor: three KERNEL tools — `unity.screenshot`, `unity.console`, `unity.inspect_asset` — are authorised and metered at `ToolInvoker.invoke` and executed by the kernel through new `UnityBatchProvider` methods that run `com.walk.ci` editor methods in batchmode on the calling run's worktree; the results are recorded as `SCREENSHOT`, `LOG` and `PROJECT_DATA` evidence (ADR-0015).
 
 #### Scope
-- In: ADR-0015 (decision record); minimal MCP client over stdio (JSON-RPC 2.0: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`); `UnityMcpProvider` with a configurable kernel-tool → server-tool map; three read-only MCP tools; `ToolInvoker.invoke` accepting `ToolKind.MCP`; `McpToolHandler` (evidence for images); permission defaults for the MCP tools; preflight readiness; fake transport; one `@pytest.mark.integration` test against a real server.
-- Out: scene-mutating MCP tools (create/modify GameObjects, play mode) — not in Stage 8; MCP servers other than Unity; exposing kernel tools to agents through an MCP server (ADR-0006 alternative, still deferred); replacing `UnityBatchProvider` for CI (ADR-0009 D-6 keeps batchmode); wiring MCP screenshots into the asset pipeline (E08-S06 uses batchmode previews; agents may call `unity_mcp.screenshot` during review).
+- In: C# `WalK.CI.CaptureScreenshot`, `WalK.CI.CaptureConsole`, `WalK.CI.InspectAsset` and their helper classes; `UnityProvider.capture_screenshot/capture_console/inspect_asset` and their `UnityBatchProvider` implementations; result models and parsers; `JobResult.job_kind` and `UnityResultFile.job` values `screenshot`, `console`, `asset_inspection`; three KERNEL tool rows and permission defaults; `UnityInspectionToolHandler` with evidence; `FakeUnityProvider` methods; one `@pytest.mark.integration` test against a real Unity install.
+- Out: any MCP server or client (rejected, ADR-0015); scene- or asset-mutating operations; play-mode capture; wiring screenshots into the asset pipeline (E08-S06 already records previews); CI job orchestration (E03-S11).
 
 #### Files
 | Path | Action | Public symbols |
 |---|---|---|
-| `docs/01-architecture/adr/ADR-0015-unity-mcp-provider.md` | modify | — (exists as `Proposed`, 2026-10-06; record the acceptance-checklist results and set `Accepted`) |
-| `src/walk/integrations/unity_mcp/__init__.py` | create | re-exports |
-| `src/walk/integrations/unity_mcp/client.py` | create | `McpTransport`, `StdioMcpTransport`, `McpClient`, `McpToolResult`, `MCP_PROTOCOL_VERSION` |
-| `src/walk/integrations/unity_mcp/provider.py` | create | `UnityMcpProvider`, `UNITY_MCP_TOOLS` |
-| `src/walk/integrations/errors.py` | modify | `McpProtocolError` |
-| `src/walk/integrations/service.py` | modify | `DefaultIntegrationManager.__init__` (`unity_mcp` parameter), `DefaultIntegrationManager.preflight` (`tools["unity_mcp"]`) |
-| `src/walk/tools/builtin/tools_mcp.yaml` | create | — (3 MCP tool rows) |
-| `src/walk/permissions/defaults_unity_mcp.yaml` | create | — |
-| `src/walk/permissions/loader.py` | modify | `load_defaults` (accepts additional default files) |
-| `src/walk/runtime/tool_invoker.py` | modify | `DefaultToolInvoker.invoke` (`ToolKind.MCP` dispatch) |
-| `src/walk/runtime/mcp_tools.py` | create | `McpToolHandler` |
+| `unity/com.walk.ci/Editor/WalkCI.cs` | modify | `WalK.CI.CaptureScreenshot`, `WalK.CI.CaptureConsole`, `WalK.CI.InspectAsset` (C#) |
+| `unity/com.walk.ci/Editor/ScreenshotCapture.cs` | create | `WalK.ScreenshotCapture` (C#) |
+| `unity/com.walk.ci/Editor/ConsoleCapture.cs` | create | `WalK.ConsoleCapture` (C#) |
+| `unity/com.walk.ci/Editor/AssetInspector.cs` | create | `WalK.AssetInspector` (C#) |
+| `unity/com.walk.ci/Tests/Editor/InspectionTests.cs` | create | — (Unity EditMode tests, run by the owner) |
+| `unity/com.walk.ci/README.md` | modify | — (three methods, arguments, result `metrics` schemas) |
+| `src/walk/integrations/protocols.py` | modify `(verify: E01-S23)` | `UnityProvider.capture_screenshot`, `UnityProvider.capture_console`, `UnityProvider.inspect_asset` |
+| `src/walk/integrations/models.py` | modify `(verify: E01-S23)` | `JobResult.job_kind` (adds `screenshot`, `console`, `asset_inspection`) |
+| `src/walk/integrations/unity/results.py` | modify | `UnityResultFile.job` (same three values) |
+| `src/walk/integrations/unity/inspection.py` | create | `ConsoleEntry`, `HierarchyNode`, `AssetInspection`, `parse_console_entries`, `parse_asset_inspections` |
+| `src/walk/integrations/unity/provider.py` | modify | `UnityBatchProvider.capture_screenshot`, `UnityBatchProvider.capture_console`, `UnityBatchProvider.inspect_asset`, `UNITY_METHODS` |
+| `src/walk/integrations/unity/__init__.py` | modify | re-exports `ConsoleEntry`, `AssetInspection` |
+| `src/walk/tools/builtin/tools.yaml` | modify | — (rows `unity.screenshot`, `unity.console`, `unity.inspect_asset`) |
+| `src/walk/permissions/defaults.yaml` | modify | — (ALLOW rows for ART_DIRECTOR, DESIGN_LEADER, LEAD_DEV, QC) |
+| `src/walk/runtime/unity_tools.py` | create | `UNITY_INSPECTION_TOOLS`, `UNITY_INSPECTION_TIMEOUT_S`, `UnityInspectionToolHandler` |
 | `src/walk/runtime/__init__.py` | modify | re-exports |
-| `src/walk/cli/composition.py` | modify | `KernelSettings.unity_mcp_command`, `KernelSettings.unity_mcp_tool_map` (loads `tools_mcp.yaml`, the MCP permission file, registers handlers) |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `ToolInvoker.invoke` docstring: KERNEL or MCP; §2.4 note on optional Unity MCP provider) |
-| `tests/fakes/fake_mcp_transport.py` | create | `FakeMcpTransport` |
-| `tests/integrations/unity_mcp/__init__.py` | create | — |
-| `tests/integrations/unity_mcp/test_client.py` | create | — |
-| `tests/integrations/unity_mcp/test_provider.py` | create | — |
-| `tests/integrations/unity_mcp/test_unity_mcp_live.py` | create | — (`@pytest.mark.integration`) |
-| `tests/integrations/test_preflight_unity_mcp.py` | create | — |
-| `tests/tools/test_builtin_tools_mcp.py` | create | — |
-| `tests/permissions/test_defaults_unity_mcp.py` | create | — |
-| `tests/runtime/test_tool_invoker_mcp.py` | create | — |
-| `tests/runtime/test_mcp_tools.py` | create | — |
+| `src/walk/cli/composition.py` | modify | — (registers `UnityInspectionToolHandler` for the three tools when a `UnityProvider` is configured) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§2.4 three `UnityProvider` methods and `job_kind` values) |
+| `tests/fakes/fake_unity_provider.py` | modify | `FakeUnityProvider.capture_screenshot`, `FakeUnityProvider.capture_console`, `FakeUnityProvider.inspect_asset`, `FakeUnityProvider.console_entries`, `FakeUnityProvider.inspections` |
+| `tests/fakes/test_fake_unity_provider.py` | modify | — |
+| `tests/integrations/unity/fixtures/screenshot_result.json`, `console_result.json`, `inspect_result.json` | create | — |
+| `tests/integrations/unity/test_inspection.py` | create | — |
+| `tests/integrations/unity/test_provider_inspection.py` | create | — |
+| `tests/integrations/unity/test_inspection_live.py` | create | — (`@pytest.mark.integration`) |
+| `tests/tools/test_builtin_tools.py` | modify | — |
+| `tests/permissions/test_defaults_unity_inspection.py` | create | — |
+| `tests/runtime/test_unity_tools.py` | create | — |
 
 #### Interface contract
-```python
-# src/walk/integrations/unity_mcp/client.py
-MCP_PROTOCOL_VERSION: Final = "2025-06-18"          # confirmed in ADR-0015
-class McpTransport(Protocol):
-    async def send(self, message: JsonDict) -> None: ...
-    async def receive(self) -> JsonDict: ...
-    async def close(self) -> None: ...
-class StdioMcpTransport:                            # newline-delimited JSON over a child process' stdin/stdout
-    def __init__(self, command: list[str], *, cwd: str, env: Mapping[str, str]) -> None: ...
-class McpToolResult(FrozenModel):
-    is_error: bool
-    text: list[str]
-    images: list[JsonDict]                          # {"mime_type": str, "data_b64": str}
-class McpClient:
-    def __init__(self, transport: McpTransport, *, request_timeout_s: float = 30.0) -> None: ...
-    async def initialize(self) -> JsonDict: ...     # returns serverInfo + capabilities
-    async def list_tools(self) -> list[JsonDict]: ...
-    async def call_tool(self, name: str, arguments: JsonDict) -> McpToolResult: ...
-    async def close(self) -> None: ...
-
-# src/walk/integrations/unity_mcp/provider.py
-UNITY_MCP_TOOLS: Final = ("unity_mcp.screenshot", "unity_mcp.console", "unity_mcp.inspect_asset")
-class UnityMcpProvider:
-    provider: str = "unity_mcp"
-    def __init__(self, client_factory: Callable[[], Awaitable[McpClient]], tool_map: Mapping[str, str]) -> None: ...
-    async def health(self) -> ComponentStatus: ...
-    async def call(self, tool: ToolName, arguments: JsonDict) -> McpToolResult: ...
-    async def close(self) -> None: ...
-
-# src/walk/integrations/errors.py
-class McpProtocolError(PermanentError): ...         # JSON-RPC error object, malformed message, version mismatch
-
-# src/walk/runtime/mcp_tools.py
-class McpToolHandler:                               # a KernelToolHandler registered for each UNITY_MCP_TOOLS name
-    def __init__(self, provider: UnityMcpProvider, evidence: EvidenceManager, runs: AgentRunRepository, cache_dir: Path) -> None: ...
-    async def __call__(self, request: ToolCallRequest) -> JsonDict: ...   # {"ok", "text", "evidence_ids"}
+Unity invocations through `UnityBatchProvider.command_for` (E03-S10); `CaptureScreenshot` uses the graphics-enabled variant E08-S06 introduced for previews (no `-nographics`), the other two keep `-nographics`:
 ```
-`tools_mcp.yaml` rows: `name | kind=MCP | provider=unity_mcp | requires_env=[unity_mcp] | cost_dimension=TOOL_CALLS | cost_category=COMPUTE`. `KernelSettings.unity_mcp_command: list[str] | None` (None = provider disabled), `KernelSettings.unity_mcp_tool_map: dict[str, str]` (kernel tool → server tool name; defaults fixed by ADR-0015 for the chosen server).
+<unity> -batchmode -projectPath <worktree> -executeMethod WalK.CI.CaptureScreenshot -logFile <log> -walkResult <json>
+        -walkTarget <Assets/....unity|.prefab> [-walkCamera <GameObject name>] -walkResolution 1280x720
+        -walkPreviewDir <.walk/cache/unity-inspect/<run_id>/>
+<unity> -batchmode -nographics -projectPath <worktree> -executeMethod WalK.CI.CaptureConsole -logFile <log> -walkResult <json>
+        -walkLogTypes Error,Warning -walkMaxEntries 200
+<unity> -batchmode -nographics -projectPath <worktree> -executeMethod WalK.CI.InspectAsset -logFile <log> -walkResult <json>
+        -walkAssets <comma-separated repo-relative paths>
+```
+`UnityResultFile.metrics` per job (`artifacts` relative to the project root):
+```json
+{"screenshot": {"target": "Assets/Scenes/Main.unity", "camera": "Main Camera", "width": 1280, "height": 720},
+ "console": {"entries": [{"type": "Error", "message": "CS0103: ...", "file": "Assets/Scripts/A.cs", "line": 12}], "truncated": false},
+ "asset_inspection": {"assets": [{"path": "Assets/Generated/TASK-0003/job/model.fbx", "guid": "0f3a...", "type": "Model",
+   "main_object_type": "GameObject", "importer": {"type": "ModelImporter", "json": "{...}"}, "labels": [],
+   "dependencies": ["Assets/Generated/TASK-0003/job/texture.png"], "sub_assets": ["Mesh:model"],
+   "hierarchy": [{"path": "model", "components": ["Transform", "MeshFilter", "MeshRenderer"]}],
+   "hierarchy_truncated": false, "file_size_bytes": 48211}]}}
+```
+```python
+# src/walk/integrations/protocols.py (UnityProvider additions; INTERFACES §2.4)
+class UnityProvider(Protocol):
+    async def capture_screenshot(
+        self,
+        project_path: str,
+        target: str,
+        output_dir: str,
+        *,
+        camera: str | None = None,
+        width: int = 1280,
+        height: int = 720,
+        timeout_s: int | None = None,
+    ) -> JobResult: ...  # job_kind="screenshot"; artifact_paths = [absolute png path]
+
+    async def capture_console(
+        self,
+        project_path: str,
+        *,
+        log_types: tuple[str, ...] = ("Error", "Warning"),
+        max_entries: int = 200,
+        timeout_s: int | None = None,
+    ) -> JobResult: ...  # job_kind="console"; metrics = {"entries": [...], "truncated": bool}
+
+    async def inspect_asset(
+        self, project_path: str, paths: list[str], *, timeout_s: int | None = None
+    ) -> JobResult: ...  # job_kind="asset_inspection"; metrics = {"assets": [...]}
+
+
+# src/walk/integrations/unity/inspection.py
+class ConsoleEntry(FrozenModel):
+    type: Literal["Error", "Warning", "Log", "Exception", "Assert"]
+    message: str
+    file: str | None = None
+    line: int | None = None
+
+
+class HierarchyNode(FrozenModel):
+    path: str  # "Root/Child/Leaf"
+    components: list[str]
+
+
+class AssetInspection(FrozenModel):
+    path: str
+    guid: str
+    type: str
+    main_object_type: str
+    importer: JsonDict  # {"type": <importer class>, "json": <EditorJsonUtility text, at most 16 KB>}
+    labels: list[str]
+    dependencies: list[str]  # direct only
+    sub_assets: list[str]  # "<Type>:<name>"
+    hierarchy: list[HierarchyNode]  # GameObject main assets only, depth-first, at most 500 nodes
+    hierarchy_truncated: bool
+    file_size_bytes: int
+
+
+def parse_console_entries(metrics: JsonDict) -> list[ConsoleEntry]: ...  # malformed -> OutputInvalid
+def parse_asset_inspections(metrics: JsonDict) -> list[AssetInspection]: ...  # malformed -> OutputInvalid
+
+
+# src/walk/runtime/unity_tools.py
+UNITY_INSPECTION_TOOLS: Final = ("unity.screenshot", "unity.console", "unity.inspect_asset")
+UNITY_INSPECTION_TIMEOUT_S: Final = 900
+
+
+class UnityInspectionToolHandler:  # KernelToolHandler registered for each UNITY_INSPECTION_TOOLS name
+    def __init__(
+        self, unity: UnityProvider, evidence: EvidenceManager, runs: AgentRunRepository, cache_dir: Path
+    ) -> None: ...
+    async def __call__(self, request: ToolCallRequest) -> JsonDict: ...  # {"ok", "summary", "data", "evidence_ids"}
+```
+Tool arguments: `unity.screenshot {target: str, camera?: str, width?: int 64..4096, height?: int 64..4096}`; `unity.console {log_types?: list[str], max_entries?: int 1..1000}`; `unity.inspect_asset {paths: list[str], 1..50 items}`. `tools.yaml` rows: `name | kind=KERNEL | provider=unity | requires_env=[unity] | cost_dimension=TOOL_CALLS | cost_category=COMPUTE`, no `protected_action`; each row's description tells agents that a call starts a batchmode editor and that paths should be batched.
 
 #### Behavior
-1. `McpClient.initialize` sends `initialize` (`protocolVersion`, `capabilities: {}`, `clientInfo: {name: "walk", version}`), awaits the response, sends `notifications/initialized`; a server `protocolVersion` the client does not accept → `McpProtocolError`. Request ids are sequential integers; responses are matched by id; notifications from the server are logged and skipped; no response within `request_timeout_s` → `Timeout`.
-2. `call_tool` sends `tools/call {name, arguments}`; JSON-RPC `error` → `McpProtocolError(code, message)`; `result.isError == true` → `McpToolResult(is_error=True, …)` (not an exception); `content` items of type `text` → `text`, type `image` → `images`; other types are ignored with a DEBUG log.
-3. `StdioMcpTransport` starts the process with `asyncio.create_subprocess_exec` (cwd = game repo, env = the scrubbed agent env allowlist from E02-S01 plus the variables named in ADR-0015), writes one JSON object per line, reads stdout line by line; process exit → `ProviderUnavailable` on the next receive; `close` terminates the process (kill after 5 s).
-4. `UnityMcpProvider.call(tool, arguments)`: `tool` not in `UNITY_MCP_TOOLS` or not in `tool_map` → `NotSupported`; connects lazily (one client per provider, re-created after `ProviderUnavailable`), maps the name, delegates to `call_tool`.
-5. `health()`: command not configured → `MISSING`; initialize + `tools/list` succeed and every mapped server tool is listed → `READY` (`version` = server version); some mapped tools absent → `MISCONFIGURED` with the missing names; connection failure → `UNKNOWN`; never raises.
-6. Preflight writes `EnvironmentManifest.tools["unity_mcp"]`; `unity_mcp` is a ready env key only when `READY`, so `ToolRegistry.available` hides the MCP tools otherwise (E01-S14 `requires_env`).
-7. `ToolInvoker.invoke` accepts `kind in {KERNEL, MCP}` with identical authorise → meter `TOOL_CALLS` → dispatch → `TOOL_INVOKED(phase=post)` → `ON_TOOL_AFTER` semantics (E01-S26 Behavior 2); `PROVIDER_NATIVE`/`CLI` still → `ConfigError`.
-8. `McpToolHandler`: calls the provider; each image is decoded and written to `<cache_dir>/<run_id>/<seq>.png` (only `image/png` and `image/jpeg` accepted; other MIME types skipped with a WARNING) and recorded as `EvidenceDraft(kind=SCREENSHOT, description="unity_mcp <tool>", metrics={"tool", "server_tool"})` on the run's work item; returns `{"ok": not is_error, "text": "\n".join(text), "evidence_ids": [...]}`.
-9. Permission defaults (`defaults_unity_mcp.yaml`, loaded after the main defaults): ALLOW the three MCP tools for ART_DIRECTOR, DESIGN_LEADER, LEAD_DEV, QC; all other roles fall to default deny. All three tools are read-only; none is a protected action.
-10. With `unity_mcp_command = None` nothing is started, no handler is registered, and the kernel behaves exactly as before (regression test via the composition root).
+1. C# `CaptureScreenshot`: `-walkTarget` ending `.unity` → `EditorSceneManager.OpenScene(target, OpenSceneMode.Single)`; camera = the `Camera` on the GameObject named by `-walkCamera`, else `Camera.main`, else the first enabled camera; none → `ok=false, summary="no camera"`. Ending `.prefab` → a new unsaved scene with one directional light, the instantiated prefab and a temporary camera framing the combined renderer bounds (same framing as the E08-S06 preview). Renders into a `RenderTexture` of `-walkResolution`, `ReadPixels`, `EncodeToPNG`, writes `<walkPreviewDir>/<target file stem>.png` and lists it in `artifacts`. `SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null` → `ok=false, summary="no graphics device"`; any other extension → `ok=false, summary="unsupported target"`. Never calls a save API (ADR-0015 D-3).
+2. C# `CaptureConsole`: subscribes to `Application.logMessageReceivedThreaded` and `CompilationPipeline.assemblyCompilationFinished` (compiler messages carry file and line), then runs `AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)` and waits for script compilation to finish; keeps entries whose type is in `-walkLogTypes`, the first `-walkMaxEntries` in arrival order, `truncated=true` when more arrived; `ok=true` even when error entries exist (errors are data).
+3. C# `InspectAsset`: per path, `AssetDatabase.AssetPathToGUID` empty → no asset entry and an `errors` item `<path>: not found`; otherwise fills the `AssetInspection` fields (`AssetDatabase.GetMainAssetTypeAtPath`, `AssetImporter.GetAtPath`, `AssetDatabase.GetLabels`, `AssetDatabase.GetDependencies(path, false)` minus the path itself, `AssetDatabase.LoadAllAssetRepresentationsAtPath`, hierarchy via `PrefabUtility.LoadPrefabContents`/`UnloadPrefabContents` for prefabs and the loaded main `GameObject` for models); `ok = errors is empty`.
+4. `UnityBatchProvider` methods build the command with `command_for` and `UNITY_METHODS` (`screenshot`, `console`, `asset_inspection` → the three C# methods) and follow E03-S10 Behaviors 2–4 (result path per job, `UnityJobFailed` on a missing result, `UnityNotFound` before spawning when `unity_path` is `None`, subprocess `Timeout` propagated); `timeout_s` overrides the provider default for that call.
+5. Argument validation before spawning: `target` must be repo-relative under `Assets/`, contain no `..` and no drive or root prefix (`BoundaryViolation` otherwise) and end with `.unity` or `.prefab` (`OutputInvalid` otherwise); `width`/`height` within 64..4096; `log_types` ⊆ `ConsoleEntry.type` values and `max_entries` within 1..1000; `paths` 1..50 items, each under `Assets/` or `Packages/` without `..` (`BoundaryViolation`); violations → `OutputInvalid` unless stated.
+6. Results: `capture_screenshot` with `ok=true` but no artifact → `ok=False`, summary `screenshot produced no image`; artifact paths absolute. `capture_console` and `inspect_asset` validate their `metrics` with `parse_console_entries`/`parse_asset_inspections` (malformed → `OutputInvalid`).
+7. `UnityInspectionToolHandler`: resolves the run from `request.run_id` → worktree path and `work_item_id`; validates arguments as in Behavior 5 (`OutputInvalid`); calls the provider with `timeout_s=UNITY_INSPECTION_TIMEOUT_S`; screenshot output dir `<cache_dir>/<run_id>/`.
+8. Evidence on the run's work item: `unity.screenshot` → one `EvidenceDraft(kind=SCREENSHOT, description="unity.screenshot <target>", metrics={"tool", "target", "camera", "width", "height"})` per image; `unity.console` → one `LOG` evidence on the Unity log file with `metrics={"tool", "error_count", "warning_count", "truncated"}`; `unity.inspect_asset` → one `PROJECT_DATA` evidence on the result JSON with `metrics={"tool", "paths"}`. Returns `{"ok": job.ok, "summary": job.summary, "data": <{"image": repo-relative png} | entries | inspections, JSON>, "evidence_ids": [...]}`.
+9. `UnityJobFailed` and `Timeout` are returned as `{"ok": false, "summary": "<error text>", "data": null, "evidence_ids": []}` (an agent gets an answer, not a crashed tool call); other exceptions propagate to `ToolInvoker.invoke`.
+10. The three tools are dispatched by the existing KERNEL path of `ToolInvoker.invoke` (E01-S26: authorise → meter `TOOL_CALLS` → handler → `TOOL_INVOKED(phase=post)` → `ON_TOOL_AFTER`); `ToolInvoker` is not modified. They are available only when the manifest's `unity` key is ready (`requires_env`).
+11. Permission defaults: ALLOW `unity.screenshot`, `unity.console`, `unity.inspect_asset` for ART_DIRECTOR, DESIGN_LEADER, LEAD_DEV and QC; other roles fall to default deny; none is a protected action (ADR-0015 D-3/D-4).
+12. `FakeUnityProvider`: `capture_screenshot` writes a 1×1 PNG `<output_dir>/<target stem>.png` and returns `ok=True`; `capture_console` returns the scripted `console_entries` (default empty); `inspect_asset` returns `inspections[path]` when scripted, else a default `AssetInspection` with `guid = "fake-" + sha1(path)[:8]`; every call is appended to `calls`.
+13. Nothing in this story imports `mcp` or starts any process other than the Unity executable through `SubprocessRunner`.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
-| 1 | Given a `FakeMcpTransport` scripted with an initialize response When `initialize` Then requests `initialize` then `notifications/initialized` in order and server info returned | `tests/integrations/unity_mcp/test_client.py::test_initialize_handshake_order` |
-| 2 | Given a server answering an unsupported protocol version When `initialize` Then `McpProtocolError` | `tests/integrations/unity_mcp/test_client.py::test_initialize_rejects_unsupported_version` |
-| 3 | Given a `tools/call` result with text and a PNG image When `call_tool` Then `McpToolResult` with one text and one image | `tests/integrations/unity_mcp/test_client.py::test_call_tool_parses_content` |
-| 4 | Given a JSON-RPC error / `isError: true` When `call_tool` Then `McpProtocolError` / `is_error=True` without exception | `tests/integrations/unity_mcp/test_client.py::test_call_tool_errors` |
-| 5 | Given an interleaved server notification and no reply within the timeout When calling Then notification skipped and `Timeout` raised | `tests/integrations/unity_mcp/test_client.py::test_notifications_skipped_and_timeout` |
-| 6 | Given a tool map for two of three tools When `call("unity_mcp.console")` unmapped Then `NotSupported`; mapped Then delegated with the server tool name | `tests/integrations/unity_mcp/test_provider.py::test_call_maps_tool_names` |
-| 7 | Given no command / all mapped tools listed / one missing When `health` Then `MISSING` / `READY` / `MISCONFIGURED` naming it | `tests/integrations/unity_mcp/test_provider.py::test_health_states` |
-| 8 | Given the transport raising `ProviderUnavailable` once When `call` twice Then the second call uses a new client | `tests/integrations/unity_mcp/test_provider.py::test_reconnects_after_unavailable` |
-| 9 | Given a READY Unity MCP provider When preflight runs Then `tools["unity_mcp"]` is READY and the MCP tools become available | `tests/integrations/test_preflight_unity_mcp.py::test_preflight_marks_unity_mcp_ready` |
-| 10 | Given `tools_mcp.yaml` When loaded with the builtin catalogue Then three MCP tools with provider `unity_mcp` and `requires_env == ["unity_mcp"]` | `tests/tools/test_builtin_tools_mcp.py::test_mcp_tools_declared` |
-| 11 | Given default permissions When ART_DIRECTOR / SENIOR_DEV requests `unity_mcp.screenshot` Then ALLOW / DENY | `tests/permissions/test_defaults_unity_mcp.py::test_mcp_tool_permissions_by_role` |
-| 12 | Given an MCP tool request and a registered handler When `invoke` Then authorised, `TOOL_CALLS` metered, `TOOL_INVOKED(phase=post)` written; a PROVIDER_NATIVE request still `ConfigError` | `tests/runtime/test_tool_invoker_mcp.py::test_invoke_dispatches_mcp_kind` |
-| 13 | Given a screenshot result with one PNG When the handler runs Then the file is written under the cache dir and one `SCREENSHOT` evidence recorded on the run's work item | `tests/runtime/test_mcp_tools.py::test_handler_records_screenshot_evidence` |
-| 14 | Given an image with MIME `image/gif` When the handler runs Then skipped with a warning and no evidence | `tests/runtime/test_mcp_tools.py::test_handler_skips_unsupported_mime` |
-| 15 | Given `WALK_UNITY_MCP_COMMAND` and a running editor When the live test runs Then `health()` is `READY` and `unity_mcp.console` returns text | `tests/integrations/unity_mcp/test_unity_mcp_live.py::test_unity_mcp_live_console` |
+| 1 | Given the console and inspect fixtures When parsed Then entries and inspections with the fixture values; a fixture missing `guid` Then `OutputInvalid` | `tests/integrations/unity/test_inspection.py::test_parse_console_and_inspections` |
+| 2 | Given a fake runner and `screenshot_result.json` When `capture_screenshot` Then argv has `-executeMethod WalK.CI.CaptureScreenshot`, `-walkTarget`, `-walkResolution 1280x720`, `-walkPreviewDir` and no `-nographics`, `job_kind=="screenshot"`, the artifact path is absolute | `tests/integrations/unity/test_provider_inspection.py::test_capture_screenshot_command_and_result` |
+| 3 | Given target `../x.unity` / `Assets/readme.txt` When `capture_screenshot` Then `BoundaryViolation` / `OutputInvalid` and the runner was not called | `tests/integrations/unity/test_provider_inspection.py::test_screenshot_rejects_bad_target` |
+| 4 | Given a screenshot result with `ok=true` and no artifacts When `capture_screenshot` Then `ok=False`, summary `screenshot produced no image` | `tests/integrations/unity/test_provider_inspection.py::test_screenshot_without_image_is_failure` |
+| 5 | Given `console_result.json` When `capture_console` Then argv has `-nographics`, `-walkLogTypes Error,Warning`, `-walkMaxEntries 200` and entries are parsed; log type `Verbose` Then `OutputInvalid` | `tests/integrations/unity/test_provider_inspection.py::test_capture_console_command_and_validation` |
+| 6 | Given two paths When `inspect_asset` Then argv has `-walkAssets <a>,<b>` and `job_kind=="asset_inspection"`; 51 paths Then `OutputInvalid` | `tests/integrations/unity/test_provider_inspection.py::test_inspect_asset_command_and_limits` |
+| 7 | Given `unity_path=None` When each of the three methods runs Then `UnityNotFound` and the runner was not called | `tests/integrations/unity/test_provider_inspection.py::test_inspection_requires_unity` |
+| 8 | Given `tools.yaml` When loaded Then the three tools are KERNEL, provider `unity`, `requires_env == ["unity"]`, without `protected_action` | `tests/tools/test_builtin_tools.py::test_unity_inspection_tools_registered` |
+| 9 | Given default permissions When ART_DIRECTOR / QC / SENIOR_DEV requests `unity.screenshot` Then ALLOW / ALLOW / DENY | `tests/permissions/test_defaults_unity_inspection.py::test_unity_inspection_permissions_by_role` |
+| 10 | Given `FakeUnityProvider` and a run on TASK-0003 When the handler serves `unity.screenshot` Then one `SCREENSHOT` evidence on TASK-0003, `ok` true and `timeout_s == UNITY_INSPECTION_TIMEOUT_S` passed | `tests/runtime/test_unity_tools.py::test_screenshot_records_screenshot_evidence` |
+| 11 | Given two scripted error entries When the handler serves `unity.console` Then one `LOG` evidence with `error_count == 2` and the entries in `data` | `tests/runtime/test_unity_tools.py::test_console_records_log_evidence` |
+| 12 | Given two paths When the handler serves `unity.inspect_asset` Then one `PROJECT_DATA` evidence and two inspections in `data` | `tests/runtime/test_unity_tools.py::test_inspect_records_project_data_evidence` |
+| 13 | Given the provider raising `UnityJobFailed` / `Timeout` When the handler runs Then `ok` false with the error text, no evidence, no exception | `tests/runtime/test_unity_tools.py::test_unity_failure_returns_not_ok` |
+| 14 | Given a QC run and the registered handler When `ToolInvoker.invoke(unity.inspect_asset)` Then authorised, `TOOL_CALLS` metered and `TOOL_INVOKED(phase=post)` written | `tests/runtime/test_unity_tools.py::test_invoked_through_tool_invoker` |
+| 15 | Given `FakeUnityProvider` with a scripted inspection When the three methods run Then a PNG exists, scripted entries and inspection are returned, and `calls` has three entries | `tests/fakes/test_fake_unity_provider.py::test_fake_unity_inspection_methods` |
+| 16 | Given `WALK_UNITY_PATH` and the sample project When the live test captures the sample scene, inspects the bundled cube and captures the console Then a non-empty PNG, a non-empty `guid`, `ok` console, and `git status` of the project unchanged | `tests/integrations/unity/test_inspection_live.py::test_inspection_with_real_unity` |
 
 #### Evidence required
 - Quality gate output; live test listed as skipped.
-- ADR-0015 committed with status `Accepted` (or the story stays `BLOCKED`).
-- Owner-run transcript with a real editor: `walk doctor` → `unity_mcp: ready (<server> <version>)`; `uv run pytest -m integration tests/integrations/unity_mcp`.
-- Demo without a server: `walk doctor` → `unity_mcp: missing` and `walk run --once` unaffected.
+- Owner-run transcript: Unity EditMode tests `InspectionTests` green in the sample project; `uv run pytest -m integration tests/integrations/unity/test_inspection_live.py` with the PNG attached.
+- Demo: on the fixture repo with `FakeUnityProvider`, a QC run calling `unity.screenshot` → `walk ledger query --item TASK-0003 --kind EVIDENCE_RECORDED` lists the `SCREENSHOT` evidence.
 
 #### Notes
-- ADR-0015 exists as `Proposed` (architect, 2026-10-06) with recommendations: in-house stdio client (no new dependency); accepted protocol versions `MCP_ACCEPTED_PROTOCOL_VERSIONS`; no compiled-in server, reference server MCP for Unity pinned at acceptance; kernel tool → `McpToolBinding(tool, fixed_arguments)` so read-only is enforced by fixed operation arguments; server env = scrubbed allowlist only; server `ping` answered, other server requests → `-32601`. On acceptance its Consequences section lists the contract deltas to apply here (`unity_mcp_tool_map: dict[str, McpToolBinding]` replaces `dict[str, str]`). Still `BLOCKING` until the owner accepts it: ADR-0015 decides (a) in-house minimal stdio client (this story's contract; no new dependency) versus the `mcp` Python SDK (new dependency → ADR-0001 amendment, and `client.py` becomes a thin wrapper with the same public names); (b) the default Unity MCP server and its tool names for `unity_mcp_tool_map`; (c) `MCP_PROTOCOL_VERSION` accepted range; (d) the environment variables passed to the server process. Implementation starts only with ADR-0015 `Accepted`.
-- ADR-0009 D-6 (MCP deferred to Stage 8 "as an additional `ToolKind.MCP` provider"); ADR-0006 D-1 (single enforcement point) and D-2 (kernel performs side effects — agents never get the MCP connection); ADR-0001 (Unity MCP later).
-- ARCHITECTURE §2.3 row "Unity MCP server process and MCP client → `walk/integrations/unity_mcp/`" — applied to ARCHITECTURE §2.3 by the architect 2026-10-06.
-- Shared files with E08-S02 (parallel set): `src/walk/integrations/service.py` and `src/walk/cli/composition.py` — wiring-only edits; E08-X01 sequences S08 after S02 if a rebase is undesirable.
-- `NEW NAME:` ADR-0015, `McpTransport`, `StdioMcpTransport`, `McpClient`, `McpToolResult`, `MCP_PROTOCOL_VERSION`, `UnityMcpProvider`, `UNITY_MCP_TOOLS`, `McpProtocolError`, `McpToolHandler`, tools `unity_mcp.screenshot`/`unity_mcp.console`/`unity_mcp.inspect_asset`, `tools_mcp.yaml`, `defaults_unity_mcp.yaml`, `load_defaults` extra files, `KernelSettings.unity_mcp_command`/`unity_mcp_tool_map`, `FakeMcpTransport`, manifest key `tools["unity_mcp"]`.
-- Commit subject: `feat: add unity mcp provider as mcp tool kind (E08-S08)`.
+- ADR-0015 D-1…D-7 (owner decision 2026-10-06: Unity Editor automation via CLI, MCP rejected); ADR-0006 D-1 (single enforcement point) and D-2 (kernel performs side effects); ADR-0009 D-6 (`com.walk.ci`).
+- Sequenced after E08-S06 instead of running in parallel: both edit `WalkCI.cs`, `unity/provider.py`, `FakeUnityProvider` and INTERFACES §2.4, and this story reuses the S06 graphics-enabled command variant and preview framing (keep the framing code in one place if S06 made it reusable; otherwise copy the few lines and note it for E08-R01).
+- Pitfalls (E03-S10 Notes): never pass `-quit` with `-executeMethod`; Unity locks the project path, so inspection runs on the run's worktree only (ADR-0015 D-6) — an editor open on that worktree makes the call fail with `ok=false`, not hang.
+- Performance: each call boots a batchmode editor, and the first call on a fresh worktree imports the whole project into `Library/`; `UNITY_INSPECTION_TIMEOUT_S` (900 s) bounds it, and the tool descriptions ask agents to batch paths into one call.
+- `ToolKind.MCP` stays in DOMAIN-MODEL §3 unused (ADR-0015 D-7); `ToolInvoker.invoke` keeps rejecting non-KERNEL kinds.
+- `NEW NAME:` KERNEL tools `unity.screenshot`, `unity.console`, `unity.inspect_asset`; `UnityProvider.capture_screenshot`/`capture_console`/`inspect_asset` (and `UnityBatchProvider` implementations); `JobResult.job_kind` and `UnityResultFile.job` values `screenshot`, `console`, `asset_inspection`; `ConsoleEntry`, `HierarchyNode`, `AssetInspection`, `parse_console_entries`, `parse_asset_inspections`; `UNITY_INSPECTION_TOOLS`, `UNITY_INSPECTION_TIMEOUT_S`, `UnityInspectionToolHandler`; C# `WalK.CI.CaptureScreenshot`/`CaptureConsole`/`InspectAsset`, `WalK.ScreenshotCapture`, `WalK.ConsoleCapture`, `WalK.AssetInspector`; Unity arguments `-walkTarget`, `-walkCamera`, `-walkResolution`, `-walkLogTypes`, `-walkMaxEntries`; `FakeUnityProvider.console_entries`/`inspections`.
+- Commit subject: `feat: add unity inspection tools via batchmode cli (E08-S08)`.
 
 #### Evidence (filled by implementer)
 _pending_
@@ -1206,7 +1495,7 @@ One end-to-end scenario with fakes proves Stage 8: a feature that needs art gets
 
 #### Scope
 - In: `tests/e2e/test_e08_gate.py`; `e08_scenario` fixture and its scripted fake outputs; a small concept image used as the approved `ART_DIRECTION` payload.
-- Out: production code (defects → `E08-Bxx` bugfix stories); OpenArt (E08-S03) and Unity MCP (E08-S08) — not on the gate path; real providers and Unity (integration tests of S02/S03/S06/S08).
+- Out: production code (defects → `E08-Bxx` bugfix stories); OpenArt and its MCP login (E08-S03, E08-S10) and the Unity inspection tools (E08-S08) — not on the gate path; real providers and Unity (integration tests of S02/S03/S06/S08/S10).
 
 #### Files
 | Path | Action | Public symbols |
@@ -1265,6 +1554,256 @@ _pending_
 
 ---
 
+### E08-S10 — MCP streamable-HTTP client and OAuth login (`walk auth login`)
+
+**Status:** TODO
+**Type:** feat
+**Requirements:** §78, §91, §26, §129, §137 (Inv. 1, 11), ADR-0017
+**Depends on:** E08-X01, E02-S01
+**Effort:** HIGH   **Risk:** HIGH
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+The kernel has a generic client for remote MCP servers over streamable HTTP built on the official `mcp` SDK, an OAuth 2.1 PKCE login (`walk auth login|logout|status`) that keeps the dynamic client registration and the refresh token only in the OS keyring through `CredentialStore`, and non-interactive token refresh for kernel runs (ADR-0017) — so E08-S03 can call OpenArt tools and its first step can read the real `tools/list`.
+
+#### Scope
+- In: `mcp` runtime dependency and its confinement rule; `walk.integrations.mcp` (`McpServerSpec`, `MCP_SERVERS` with `openart`, `McpHttpClient.list_tools/call_tool`, result models); OAuth glue (`KeyringTokenStorage`, `LoopbackCallback`, `build_oauth_auth`, `run_oauth_login`, `oauth_logout`); `CredentialStore` keyring write path and keyring-only names; `ProviderAuthRequired`, `McpProtocolError`; `walk auth` CLI group; fakes (in-memory MCP server, fake OAuth authorization server); one `@pytest.mark.integration` `tools/list` test against the real server.
+- Out: the OpenArt adapter, its tool map, `health()` and the asset-pipeline escalation (E08-S03); MCP servers other than OpenArt (a later `McpServerSpec` entry); stdio MCP and Unity MCP (rejected, ADR-0015); offering MCP tools to agents (`ToolKind.MCP` stays unused, ADR-0015 D-7); proxy configuration.
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/integrations/mcp/__init__.py` | create | re-exports `McpServerSpec`, `McpToolInfo`, `McpImage`, `McpToolResult`, `McpHttpClient`, `MCP_SERVERS`, `run_oauth_login`, `oauth_logout` |
+| `src/walk/integrations/mcp/client.py` | create | `McpServerSpec`, `McpToolInfo`, `McpImage`, `McpToolResult`, `McpSessionFactory`, `McpHttpClient` |
+| `src/walk/integrations/mcp/oauth.py` | create | `OAUTH_CALLBACK_PATH`, `KeyringTokenStorage`, `LoopbackCallback`, `McpLoginResult`, `build_oauth_auth`, `run_oauth_login`, `oauth_logout` |
+| `src/walk/integrations/mcp/servers.py` | create | `OPENART_MCP_SERVER`, `MCP_SERVERS` |
+| `src/walk/integrations/credentials.py` | modify | `KEYRING_ONLY_CREDENTIALS`, `KeyringBackend.set_password`, `KeyringBackend.delete_password`, `SystemKeyringBackend.set_password`, `SystemKeyringBackend.delete_password`, `CredentialStore.set`, `CredentialStore.delete` |
+| `src/walk/integrations/errors.py` | modify | `ProviderAuthRequired`, `McpProtocolError` |
+| `src/walk/integrations/__init__.py` | modify | re-exports `ProviderAuthRequired`, `McpProtocolError`, `KEYRING_ONLY_CREDENTIALS` |
+| `src/walk/cli/cmd_auth.py` | create | `auth_app` (`login`, `logout`, `status`), `AuthDeps`, `build_auth_deps` |
+| `src/walk/cli/app.py` | modify | — (registers `auth_app` as `walk auth`) |
+| `pyproject.toml` | modify | — (runtime dependency `mcp>=1.12,<2`; ruff `banned-api`: `mcp` allowed only under `walk.integrations.mcp` and `walk.integrations.assets.openart`) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§6 CLI rows `walk auth login/logout/status` `[Stage 8]`) |
+| `tests/fakes/fake_keyring.py` | modify | `FakeKeyringBackend.set_password`, `FakeKeyringBackend.delete_password` |
+| `tests/fakes/fake_mcp_server.py` | create | `FakeMcpTool`, `build_fake_mcp_server`, `in_memory_session_factory` |
+| `tests/fakes/fake_oauth_server.py` | create | `FakeOAuthServer` |
+| `tests/integrations/mcp/__init__.py` | create | — |
+| `tests/integrations/mcp/test_client.py` | create | — |
+| `tests/integrations/mcp/test_oauth.py` | create | — |
+| `tests/integrations/mcp/test_mcp_live.py` | create | — (`@pytest.mark.integration`) |
+| `tests/integrations/test_credentials_write.py` | create | — |
+| `tests/cli/test_cmd_auth.py` | create | — |
+| `tests/test_import_contracts.py` | modify | — (`mcp` confinement assertion) |
+
+#### Interface contract
+SDK names (`ClientSession`, the streamable HTTP client function, `OAuthClientProvider`, `TokenStorage`, `OAuthToken`, `OAuthClientInformationFull`) are those of the pinned `mcp` release; they appear only in `client.py` and `oauth.py`.
+```python
+# src/walk/integrations/credentials.py (deltas to E02-S01)
+KEYRING_ONLY_CREDENTIALS: frozenset[str] = frozenset({"OPENART_OAUTH_CLIENT", "OPENART_OAUTH_REFRESH_TOKEN"})
+
+
+class KeyringBackend(Protocol):
+    def get_password(self, service: str, username: str) -> str | None: ...
+    def set_password(self, service: str, username: str, password: str) -> None: ...
+    def delete_password(self, service: str, username: str) -> None: ...
+
+
+class CredentialStore:
+    def set(self, name: str, value: SecretStr) -> None:
+        """Keyring write. Name not in KEYRING_ONLY_CREDENTIALS or no backend -> ConfigError."""
+
+    def delete(self, name: str) -> None:
+        """Keyring delete; an absent entry is not an error; same name rule as set."""
+
+
+# src/walk/integrations/errors.py
+class ProviderAuthRequired(ConfigError): ...  # message names `walk auth login <server>`; never a token value
+
+
+class McpProtocolError(PermanentError): ...  # JSON-RPC error object or malformed MCP result
+
+
+# src/walk/integrations/mcp/client.py
+class McpServerSpec(FrozenModel):
+    name: str  # registry key and CLI argument, e.g. "openart"
+    url: str  # streamable HTTP endpoint
+    scope: str
+    client_credential: str  # CREDENTIAL_NAMES entry holding the client registration JSON
+    refresh_credential: str  # CREDENTIAL_NAMES entry holding the refresh token
+    client_name: str = "WAL-K"
+
+
+class McpToolInfo(FrozenModel):
+    name: str
+    description: str
+    input_schema: JsonDict
+
+
+class McpImage(FrozenModel):
+    mime_type: str
+    data_b64: str
+
+
+class McpToolResult(FrozenModel):
+    is_error: bool
+    text: list[str]
+    structured: JsonDict | None  # structuredContent
+    images: list[McpImage]
+    resource_uris: list[str]  # resource_link and embedded-resource URIs
+
+
+McpSessionFactory = Callable[[], AbstractAsyncContextManager["ClientSession"]]  # yields an initialized SDK session
+
+
+class McpHttpClient:
+    def __init__(
+        self,
+        spec: McpServerSpec,
+        credentials: CredentialStore,
+        *,
+        timeout_s: float = 60.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+        session_factory: McpSessionFactory | None = None,
+    ) -> None: ...
+    def logged_in(self) -> bool: ...  # refresh credential present; no network
+    async def list_tools(self) -> list[McpToolInfo]: ...
+    async def call_tool(self, name: str, arguments: JsonDict) -> McpToolResult: ...
+
+
+# src/walk/integrations/mcp/servers.py
+OPENART_MCP_SERVER: Final = McpServerSpec(
+    name="openart",
+    url="https://mcp.openart.ai/mcp",
+    scope="full_access",
+    client_credential="OPENART_OAUTH_CLIENT",
+    refresh_credential="OPENART_OAUTH_REFRESH_TOKEN",
+)
+MCP_SERVERS: Final[Mapping[str, McpServerSpec]] = {"openart": OPENART_MCP_SERVER}
+
+
+# src/walk/integrations/mcp/oauth.py
+OAUTH_CALLBACK_PATH: Final = "/callback"
+
+
+class KeyringTokenStorage:  # implements the SDK TokenStorage protocol
+    def __init__(self, spec: McpServerSpec, credentials: CredentialStore) -> None: ...
+    async def get_tokens(self) -> "OAuthToken | None": ...
+    async def set_tokens(self, tokens: "OAuthToken") -> None: ...
+    async def get_client_info(self) -> "OAuthClientInformationFull | None": ...
+    async def set_client_info(self, client_info: "OAuthClientInformationFull") -> None: ...
+
+
+class LoopbackCallback:
+    def __init__(self, *, host: str = "127.0.0.1", port: int = 0, timeout_s: float = 300.0) -> None: ...
+    async def __aenter__(self) -> "LoopbackCallback": ...
+    async def __aexit__(self, *exc: object) -> None: ...
+    @property
+    def redirect_uri(self) -> str: ...  # http://127.0.0.1:<bound port>/callback
+    async def wait(self) -> tuple[str, str | None]: ...  # (code, state)
+
+
+class McpLoginResult(FrozenModel):
+    server: str
+    client_id: str
+    scope: str
+    tool_count: int
+
+
+def build_oauth_auth(
+    spec: McpServerSpec,
+    storage: KeyringTokenStorage,
+    *,
+    open_browser: Callable[[str], bool] | None = None,  # None -> non-interactive: authorization needed -> ProviderAuthRequired
+    callback: LoopbackCallback | None = None,
+) -> httpx.Auth: ...
+
+
+async def run_oauth_login(
+    spec: McpServerSpec,
+    credentials: CredentialStore,
+    *,
+    open_browser: Callable[[str], bool],
+    callback_factory: Callable[[], LoopbackCallback] = LoopbackCallback,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> McpLoginResult: ...
+
+
+async def oauth_logout(
+    spec: McpServerSpec, credentials: CredentialStore, *, transport: httpx.AsyncBaseTransport | None = None
+) -> bool: ...  # True when the revocation endpoint accepted the token; entries are deleted either way
+
+
+# src/walk/cli/cmd_auth.py
+@dataclass(frozen=True)
+class AuthDeps:
+    credentials: CredentialStore
+    open_browser: Callable[[str], bool]  # webbrowser.open in production
+    client_factory: Callable[[McpServerSpec], McpHttpClient]
+    login: Callable[..., Awaitable[McpLoginResult]]  # run_oauth_login in production
+    logout: Callable[..., Awaitable[bool]]  # oauth_logout in production
+
+
+def build_auth_deps() -> AuthDeps: ...  # CredentialStore(os.environ, SystemKeyringBackend()); tests monkeypatch this
+```
+
+#### Behavior
+1. Every `McpHttpClient` operation opens one session, initializes it, performs one request and closes it (ADR-0017 D-6): with `session_factory` the factory's session is used (tests; no HTTP, no OAuth); otherwise the SDK streamable HTTP client connects to `spec.url` with `auth=build_oauth_auth(spec, storage)` (non-interactive), `timeout_s`, and `transport` when given. One `KeyringTokenStorage` instance lives as long as the client, so the in-memory access token is reused across sessions.
+2. `list_tools` follows `nextCursor` until exhausted and maps each tool to `McpToolInfo(name, description or "", input_schema)`.
+3. `call_tool`: SDK JSON-RPC error → `McpProtocolError("<code>: <message>")`; `isError: true` → `McpToolResult(is_error=True, ...)` without exception; content `text` → `text`, `image` → `images`, `resource_link` and embedded `resource` → `resource_uris`; `structuredContent` → `structured`; other content types are skipped with a DEBUG log.
+4. Error mapping, applied also when the error is raised inside the SDK's task group (the first matching leaf of an `ExceptionGroup` is re-raised bare): `httpx.TimeoutException` → `Timeout`; `httpx.TransportError` → `ProviderUnavailable`; HTTP 429 → `RateLimited`; HTTP 5xx → `ProviderUnavailable`; `ProviderAuthRequired` unchanged.
+5. Non-interactive auth: no stored refresh token → `ProviderAuthRequired("<server>: not logged in; run walk auth login <server>")` before any network call. `KeyringTokenStorage.get_tokens` returns the in-memory token when present, otherwise a token built from the stored refresh token whose access part is already expired, so the SDK refreshes before the first request (the implementer confirms the trigger for the pinned SDK release and records it in Evidence). `set_tokens` keeps the access token in memory only and writes `refresh_credential` only when the refresh token changed.
+6. Refresh rejected (`invalid_grant`, or `401` after a refresh): the stored refresh credential is re-read once; if it differs from the one just used (another kernel process rotated it), the operation is retried once with the new value; otherwise `ProviderAuthRequired("<server>: authorization expired; run walk auth login <server>")`.
+7. `run_oauth_login`: deletes the server's stored entries, enters a `LoopbackCallback`, builds an interactive auth (`open_browser` + callback) and performs `list_tools`. The SDK flow then: `401` → protected-resource metadata from `WWW-Authenticate` → authorization-server metadata → dynamic registration with `client_name`, `redirect_uris=[callback.redirect_uri]`, `grant_types=["authorization_code", "refresh_token"]`, `response_types=["code"]`, `token_endpoint_auth_method="none"`, `scope=spec.scope` → `open_browser(<authorize URL with code_challenge_method=S256, state, scope, resource>)` → `callback.wait()` → `state` checked → code exchange → `set_client_info` + `set_tokens`. Returns `McpLoginResult(server, client_id, scope, tool_count=len(tools))`. A token response without `refresh_token` → `ConfigError("<server>: no refresh token issued; non-interactive use impossible")` and both entries deleted.
+8. `LoopbackCallback` binds only `127.0.0.1` (port 0 → ephemeral), answers `GET /callback` with a short HTML page ("Login complete. You can close this window.") and every other path with 404; `error=<code>` → `ConfigError("<server>: authorization denied: <code>")`; missing `code` → `ConfigError`; no callback within `timeout_s` → `Timeout`; the listener is closed on exit in every case.
+9. `oauth_logout`: when a refresh token is stored, discovers the revocation endpoint (protected-resource metadata → authorization-server metadata) and POSTs `token=<refresh>`, `token_type_hint=refresh_token`, `client_id`; any failure is logged at WARNING without the token; both entries are deleted in every case; returns whether the endpoint answered 200.
+10. `CredentialStore` with `KEYRING_ONLY_CREDENTIALS`: `get` of such a name ignores the environment and reads the keyring only; `set`/`delete` accept only these names (`ConfigError` otherwise) and require a backend; a backend exception on `set` → `ConfigError("credential <name> could not be stored")` (never the value); `presence()` includes both names. `CREDENTIAL_NAMES` already lists them (E02-S01).
+11. Secrecy: no access token, refresh token, authorization code, PKCE verifier or client registration appears in a log record, exception message, model `repr`, CLI output or `.ai/` file; the CLI prints at most the first 8 characters of `client_id`.
+12. `walk auth login SERVER`: unknown server → exit 1 listing `MCP_SERVERS` keys; runs `login` with `open_browser`; when the opener returns `False`, prints `Open this URL to log in: <url>` and keeps waiting; success → `openart: logged in (client 1a2b3c4d…, <n> tools)`. `walk auth logout SERVER` → `openart: logged out` (plus `(revocation not confirmed)` when `logout` returned `False`). `walk auth status SERVER [--tools]` → `openart: logged in` / `openart: not logged in (run walk auth login openart)`; with `--tools` and logged in, lists `name — first description line` per tool, and with global `--json` prints the full `McpToolInfo` list including `input_schema` (the input of E08-S03 Behavior 1). `ProviderAuthRequired`/`ConfigError` → exit 1 (INTERFACES §6).
+13. `mcp` is imported only under `walk/integrations/mcp/` and `walk/integrations/assets/openart/`; `webbrowser` only in `walk/cli/cmd_auth.py`.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a fake MCP server with two tools across two pages When `list_tools` via `in_memory_session_factory` Then two `McpToolInfo` with names, descriptions and input schemas | `tests/integrations/mcp/test_client.py::test_list_tools_paginates_and_maps_schema` |
+| 2 | Given a tool returning text, structured content, a PNG image and a resource link When `call_tool` Then each lands in its `McpToolResult` field | `tests/integrations/mcp/test_client.py::test_call_tool_maps_content` |
+| 3 | Given a tool result with `isError` / a JSON-RPC error When `call_tool` Then `is_error=True` without exception / `McpProtocolError` | `tests/integrations/mcp/test_client.py::test_call_tool_errors` |
+| 4 | Given a transport raising `httpx.ConnectTimeout` inside the SDK task group When `list_tools` Then a bare `Timeout` is raised, not an exception group | `tests/integrations/mcp/test_client.py::test_errors_unwrapped_from_exception_group` |
+| 5 | Given no stored refresh token When `list_tools` over HTTP Then `ProviderAuthRequired` naming `walk auth login openart` and no HTTP request recorded | `tests/integrations/mcp/test_client.py::test_not_logged_in_raises_before_network` |
+| 6 | Given a stored refresh token and `FakeOAuthServer` When `list_tools` twice on one client Then one refresh grant, both calls succeed, the rotated refresh token is stored and no access token is in the keyring | `tests/integrations/mcp/test_oauth.py::test_refresh_once_and_rotate` |
+| 7 | Given the fake authorization server rejecting the refresh with `invalid_grant` When `list_tools` Then `ProviderAuthRequired` with `authorization expired` | `tests/integrations/mcp/test_oauth.py::test_revoked_refresh_raises_auth_required` |
+| 8 | Given the stored refresh token replaced by another process before the rejection When `list_tools` Then exactly one retry with the new token succeeds | `tests/integrations/mcp/test_oauth.py::test_rotated_by_other_process_retried_once` |
+| 9 | Given `FakeOAuthServer` and a fake browser that follows the authorize URL When `run_oauth_login` Then registration uses `token_endpoint_auth_method="none"` and the loopback redirect URI, the authorize URL carries `code_challenge_method=S256`, `state`, `resource` and scope `full_access`, client info and refresh token are stored, and `tool_count` matches | `tests/integrations/mcp/test_oauth.py::test_login_flow_pkce_registration_and_storage` |
+| 10 | Given a callback with a wrong `state` / with `error=access_denied` When logging in Then `ConfigError` and no entry stored | `tests/integrations/mcp/test_oauth.py::test_login_rejects_bad_state_or_denial` |
+| 11 | Given a token response without a refresh token When logging in Then `ConfigError` and no entry stored | `tests/integrations/mcp/test_oauth.py::test_login_requires_refresh_token` |
+| 12 | Given stored entries When `oauth_logout` Then the refresh token is posted to the revocation endpoint and both entries deleted; given a revocation 500 Then entries still deleted and `False` returned | `tests/integrations/mcp/test_oauth.py::test_logout_revokes_and_deletes` |
+| 13 | Given refresh token `rt-secret` and code `code-secret` When login, refresh and failure paths run Then neither value appears in any log record, exception text or model repr | `tests/integrations/mcp/test_oauth.py::test_tokens_never_leak` |
+| 14 | Given env `OPENART_OAUTH_REFRESH_TOKEN=x` and keyring `y` When `get` Then `y`; `set("JIRA_API_TOKEN", ...)` Then `ConfigError`; a backend raising on `set` Then `ConfigError` naming the credential without the value | `tests/integrations/test_credentials_write.py::test_keyring_only_names_and_write_rules` |
+| 15 | Given `build_auth_deps` patched with a fake client When `walk --json auth status openart --tools` Then exit 0 and a JSON list of tools with `input_schema`; `walk auth login nope` Then exit 1 listing `openart` | `tests/cli/test_cmd_auth.py::test_auth_status_tools_and_unknown_server` |
+| 16 | Given a fake login result When `walk auth login openart` Then output `openart: logged in (client ` and the opener called once; given an opener returning `False` Then the authorize URL is printed | `tests/cli/test_cmd_auth.py::test_auth_login_output_and_browser_fallback` |
+| 17 | Given `pyproject.toml` When the ruff `banned-api` table is read Then `mcp` is allowed only under `walk.integrations.mcp` and `walk.integrations.assets.openart` | `tests/test_import_contracts.py::test_mcp_sdk_confinement_configured` |
+| 18 | Given a prior `walk auth login openart` on the owner machine When the live test runs Then `list_tools()` returns at least one tool | `tests/integrations/mcp/test_mcp_live.py::test_openart_tools_list_live` |
+
+#### Evidence required
+- Quality gate output; live test listed as skipped.
+- Resolved `mcp` version (`uv pip show mcp`) and the check that this release's OAuth client discovers the authorization server through protected-resource metadata (ADR-0017 D-1); the refresh trigger used by Behavior 5.
+- Owner-run transcript: `walk auth login openart` (browser consent) → `openart: logged in (...)`; `walk --json auth status openart --tools` output saved as the E08-S03 Behavior 1 input; `uv run pytest -m integration tests/integrations/mcp`.
+- Demo without a login: `walk auth status openart` → `openart: not logged in (run walk auth login openart)`.
+
+#### Notes
+- ADR-0017 D-1…D-7 and D-9; ADR-0009 D-8 (keyring service `walk`, username = credential name); ARCHITECTURE §2.3 (`mcp` row).
+- Pitfall: SDK entry points have been renamed between releases (streamable HTTP client function, OAuth provider module); use the pinned release's names and keep them inside `client.py`/`oauth.py`, so an SDK bump touches two files.
+- Pitfall: the SDK runs the transport in an anyio task group, so errors surface as `ExceptionGroup`s (Behavior 4); unwrap them or callers cannot map `TransientError`s.
+- Pitfall: Windows Credential Manager limits an entry to 2560 bytes — never persist access tokens (ADR-0017 D-5); Behavior 10 turns an oversize write into a clear `ConfigError`.
+- Pitfall: the loopback flow needs a browser on the same machine as the kernel; over SSH the printed URL is opened locally but the redirect must still reach `127.0.0.1` on the kernel machine (port forwarding) — documented limitation, no device-code grant is offered by OpenArt.
+- `walk auth` does not need a game repository or a running daemon; it builds its own `CredentialStore` (`build_auth_deps`).
+- `NEW NAME:` `walk.integrations.mcp` package (`McpServerSpec`, `McpToolInfo`, `McpImage`, `McpToolResult`, `McpSessionFactory`, `McpHttpClient`, `OPENART_MCP_SERVER`, `MCP_SERVERS`, `OAUTH_CALLBACK_PATH`, `KeyringTokenStorage`, `LoopbackCallback`, `McpLoginResult`, `build_oauth_auth`, `run_oauth_login`, `oauth_logout`), `ProviderAuthRequired`, `McpProtocolError`, `KEYRING_ONLY_CREDENTIALS`, `CredentialStore.set`/`delete`, `KeyringBackend.set_password`/`delete_password`, credentials `OPENART_OAUTH_CLIENT`/`OPENART_OAUTH_REFRESH_TOKEN`, CLI `walk auth login/logout/status` (`walk.cli.cmd_auth.auth_app`, `AuthDeps`, `build_auth_deps`), dependency `mcp` (ADR-0017), fakes `FakeMcpTool`/`build_fake_mcp_server`/`in_memory_session_factory`/`FakeOAuthServer`.
+- Commit subject: `feat: add mcp http client and oauth login (E08-S10)`.
+
+#### Evidence (filled by implementer)
+_pending_
+
+---
+
 ### E08-R01 — Review E08
 
 **Status:** TODO
@@ -1278,7 +1817,7 @@ _pending_
 An independent agent instance (different model than the E08 implementer where possible, §23) verifies every E08 story against the Definition of Done, the SDK-confinement and secret rules for asset providers, and Invariants 4, 7, 9, 10, recording defects as `bugfix` stories.
 
 #### Scope
-- In: stories E08-S01…S09 and their commits; `INTERFACES.md`/`DOMAIN-MODEL.md`/ADR-0015 deltas; WBS §6 register entries from this epic; architecture tests added by the reviewer.
+- In: stories E08-S01…S10 and their commits; `INTERFACES.md`/`DOMAIN-MODEL.md`/ADR-0015/ADR-0017 deltas; WBS §6 register entries from this epic; architecture tests added by the reviewer.
 - Out: fixing defects (each becomes `E08-Bxx`); E09 files (parallel epic, reviewed by E09-R01).
 
 #### Files
@@ -1286,7 +1825,7 @@ An independent agent instance (different model than the E08 implementer where po
 |---|---|---|
 | `docs/02-work-breakdown/EPIC-08-art-design.md` | modify | — (review record appended; `E08-Bxx` stories appended if any) |
 | `docs/02-work-breakdown/WBS.md` | modify | — (status rows, §6 register) |
-| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/adr/ADR-0015-unity-mcp-provider.md` | modify (only if drift found) | — |
+| `docs/01-architecture/INTERFACES.md`, `docs/01-architecture/DOMAIN-MODEL.md`, `docs/01-architecture/adr/ADR-0015-unity-editor-automation-via-cli.md`, `docs/01-architecture/adr/ADR-0017-openart-via-remote-mcp.md` | modify (only if drift found) | — |
 | `tests/architecture/test_asset_sdk_confinement.py` | create | — |
 | `tests/architecture/test_asset_secrets.py` | create | — |
 
@@ -1295,34 +1834,35 @@ Reviewer protocol, IMPLEMENTATION-PROTOCOL.md "Reviewer protocol" steps 1–5.
 
 #### Behavior
 1. For each story: `git show <sha>`; Files table == changed files (extra files need commit-body justification; the composition-root, `integrations/service.py` and `pyproject.toml` overlaps declared in this file are accepted); every acceptance-criterion test exists and passes; coverage ≥ 90 % for touched modules; integration tests are marked and skipped by default.
-2. SDK confinement (ARCHITECTURE §2.3 as amended by the `RELOCATE:` rows): `httpx` imported only under `walk/integrations/jira/` and `walk/integrations/assets/`; MCP subprocess started only under `walk/integrations/unity_mcp/`; `yaml` under `walk/integrations/` only in `assets/`.
-3. Secrets (§91, ADR-0009 D-8): `MESHY_API_KEY`/`OPENART_API_KEY` read only via `CredentialStore`; no provenance file, evidence, ledger payload or log fixture contains a value matching the kernel secret patterns.
+2. SDK confinement (ARCHITECTURE §2.3 as amended by the `RELOCATE:` rows): `httpx` imported only under `walk/integrations/jira/`, `walk/integrations/assets/` and `walk/integrations/mcp/` (OAuth transport); `mcp` imported only under `walk/integrations/mcp/` and `walk/integrations/assets/openart/`; no MCP server process is started anywhere; `yaml` under `walk/integrations/` only in `assets/`.
+3. Secrets (§91, ADR-0009 D-8, ADR-0017 D-5): `MESHY_API_KEY`, `OPENART_OAUTH_CLIENT` and `OPENART_OAUTH_REFRESH_TOKEN` read and written only via `CredentialStore` (the OAuth entries keyring-only; access tokens never persisted); no provenance file, evidence, ledger payload or log fixture contains a value matching the kernel secret patterns.
 4. Invariant 4: no asset task has `reviewer_role == implementer_role`; the gate's ledger shows `KERNEL` as implementer and `ART_DIRECTOR` as reviewer.
-5. Invariant 7/§31: `asset.generate`, `art.*` and `unity_mcp.*` calls all pass through `ToolInvoker` (grep for direct handler invocation outside `asset_step.py` and tests).
+5. Invariant 7/§31: `asset.generate`, `art.*` and `unity.screenshot`/`unity.console`/`unity.inspect_asset` calls all pass through `ToolInvoker` (grep for direct handler invocation outside `asset_step.py` and tests).
 6. Invariant 9: the asset code writes no SQL against `ledger_events`/`cost_records` other than through `LedgerManager`/`CostManager`.
 7. Invariant 10: `.ai/approved/` is written only by `approve_artifact`; ART_DIRECTOR cannot approve `ART_DIRECTION` (E08-S01 test present and green).
-8. `NEW NAME:`/`RELOCATE:` items of E08 are present in WBS §6 or listed in the review note for the architect; ADR-0015 status is `Accepted`.
-9. Defects → `E08-Bxx` stories using the template; commit `docs: review epic 08 stories E08-S01..S09 (E08-R01)`.
+8. `NEW NAME:`/`RELOCATE:` items of E08 are present in WBS §6 or listed in the review note for the architect; ADR-0015 and ADR-0017 are `Accepted` and match the code.
+9. Defects → `E08-Bxx` stories using the template; commit `docs: review epic 08 stories E08-S01..S10 (E08-R01)`.
 
 #### Acceptance criteria
 | # | Given / When / Then | Test |
 |---|---|---|
 | 1 | Given each E08 story When the DoD checklist is applied Then every box is checked or an `E08-Bxx` story exists | manual checklist recorded in Evidence |
-| 2 | Given `src/walk` When imports are parsed Then `httpx` appears only under `integrations/jira` and `integrations/assets`, and `yaml` under `integrations` only in `integrations/assets` | `tests/architecture/test_asset_sdk_confinement.py::test_httpx_and_yaml_confined` |
-| 3 | Given `src/walk` When grepping for `MESHY_API_KEY`/`OPENART_API_KEY` Then only `integrations/credentials.py` and the two provider modules reference them, the providers only through `CredentialStore.get` | `tests/architecture/test_asset_secrets.py::test_asset_credentials_only_via_credential_store` |
+| 2 | Given `src/walk` When imports are parsed Then `httpx` appears only under `integrations/jira`, `integrations/assets` and `integrations/mcp`, and `yaml` under `integrations` only in `integrations/assets` | `tests/architecture/test_asset_sdk_confinement.py::test_httpx_and_yaml_confined` |
+| 3 | Given `src/walk` When grepping for `MESHY_API_KEY`, `OPENART_OAUTH_CLIENT` and `OPENART_OAUTH_REFRESH_TOKEN` Then only `integrations/credentials.py`, `integrations/mcp/servers.py` and the Meshy provider reference them, all reads and writes going through `CredentialStore` | `tests/architecture/test_asset_secrets.py::test_asset_credentials_only_via_credential_store` |
 | 4 | Given the gate scenario ledger When asset-task transitions are read Then implementer `KERNEL` and reviewer `ART_DIRECTOR` on every review | manual checklist recorded in Evidence |
 | 5 | Given the quality gate on `main` Then green with overall coverage ≥ 85 % | manual checklist recorded in Evidence |
+| 6 | Given `src/walk` When imports are parsed Then `mcp` appears only under `integrations/mcp` and `integrations/assets/openart`, and no module starts an MCP server process | `tests/architecture/test_asset_sdk_confinement.py::test_mcp_sdk_confined` |
 
 #### Evidence required
 - Checklist per story (ID → DoD items → OK/defect id).
 - Quality gate output on `main` after the review commit.
 - List of `E08-Bxx` stories created (or "none").
-- Demo: `walk doctor` on the gate fixture repo (asset providers, Unity MCP and ART_DIRECTOR lines) and `walk artifacts list`.
+- Demo: `walk doctor` on the gate fixture repo (asset providers incl. `openart`, `unity` and ART_DIRECTOR lines), `walk auth status openart` and `walk artifacts list`.
 
 #### Notes
 - Tests 2–3 are architecture tests created by the reviewer (review tasks may add tests, never production code).
 - E08-R01 and E09-R01 may run concurrently (different epics, disjoint files); E11-X01 waits for both (WBS §5).
-- Commit subject: `docs: review epic 08 stories E08-S01..S09 (E08-R01)`.
+- Commit subject: `docs: review epic 08 stories E08-S01..S10 (E08-R01)`.
 
 #### Evidence (filled by implementer)
 _pending_

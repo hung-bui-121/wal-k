@@ -139,16 +139,19 @@ The `UA_RELEASE` role exists as a kernel-default constitution, runtime policy an
 ```python
 # src/walk/workflow/release.py
 class ReleaseStep(StrEnum):
-    QC = "qc"                 # final QC run (E11-S04)
-    UA_REVIEW = "ua-review"   # store metadata review (E11-S05)
-    PUBLISH = "publish"       # approval-gated publish run (E11-S06)
+    QC = "qc"  # final QC run (E11-S04)
+    UA_REVIEW = "ua-review"  # store metadata review (E11-S05)
+    PUBLISH = "publish"  # approval-gated publish run (E11-S06)
 
-RELEASE_LABEL_PREFIX = "walk-release:"            # + ReleaseCandidateId
+
+RELEASE_LABEL_PREFIX = "walk-release:"  # + ReleaseCandidateId
 RELEASE_STEP_LABEL_PREFIX = "walk-release-step:"  # + ReleaseStep value
+
 
 def release_labels(rc_id: ReleaseCandidateId, step: ReleaseStep) -> list[str]: ...
 def rc_id_of(item: WorkItem) -> ReleaseCandidateId | None: ...
 def release_step_of(item: WorkItem) -> ReleaseStep | None: ...
+
 
 # src/walk/orchestrator/router.py
 RELEASE_ROUTES: dict[ReleaseStep, tuple[AgentRole, str]] = {
@@ -251,30 +254,53 @@ Release candidates are created, inspected and advanced through one kernel servic
 `ReleaseCandidate`, `ReleaseCandidateState` per DOMAIN-MODEL §4.1/§3; `rc_workflow` per INTERFACES §3.6; `BuildTarget` per INTERFACES §2.4.
 ```python
 # src/walk/orchestrator/release.py
-RELEASE_CONFIG_PATH: str = "project/release.yaml"          # relative to .ai/
+RELEASE_CONFIG_PATH: str = "project/release.yaml"  # relative to .ai/
+
 
 class ReleaseConfig(WalkModel):
-    targets: list[BuildTarget] = Field(min_length=1, description="§62/§77 targets every RC must build, e.g. [Android, iOS]")
-    release_branch: str = Field(default="main", description="branch whose HEAD is the default RC commit")
+    targets: list[BuildTarget] = Field(
+        min_length=1, description="§62/§77 targets every RC must build, e.g. [Android, iOS]"
+    )
+    release_branch: str = Field(
+        default="main", description="branch whose HEAD is the default RC commit"
+    )
     output_dir: str = Field(default=".walk/release", description="build/output root, gitignored")
 
-async def rc_payload(rc: ReleaseCandidate, *, config: ReleaseConfig, evidence: EvidenceManager, workflow: WorkflowManager,
-                     permissions: PermissionManager) -> JsonDict: ...
+
+async def rc_payload(
+    rc: ReleaseCandidate,
+    *,
+    config: ReleaseConfig,
+    evidence: EvidenceManager,
+    workflow: WorkflowManager,
+    permissions: PermissionManager,
+) -> JsonDict: ...
+
 
 # src/walk/orchestrator/protocols.py
 class ReleaseManager(Protocol):
     """§76. Hosted by walk.orchestrator. Owns RC creation and RC events; WorkflowManager.rc_event stays the only state change."""
-    async def create(self, *, commit: Sha | None, targets: list[BuildTarget] | None, actor: Actor) -> ReleaseCandidate: ...
+
+    async def create(
+        self, *, commit: Sha | None, targets: list[BuildTarget] | None, actor: Actor
+    ) -> ReleaseCandidate: ...
     async def get(self, rc_id: ReleaseCandidateId) -> ReleaseCandidate: ...
     async def list(self) -> list[ReleaseCandidate]: ...
-    async def current(self) -> ReleaseCandidate | None: ...           # latest RC not RELEASED
-    async def event(self, rc_id: ReleaseCandidateId, event: str, *, actor: Actor, extra: JsonDict | None = None) -> ReleaseCandidate: ...
+    async def current(self) -> ReleaseCandidate | None: ...  # latest RC not RELEASED
+    async def event(
+        self, rc_id: ReleaseCandidateId, event: str, *, actor: Actor, extra: JsonDict | None = None
+    ) -> ReleaseCandidate: ...
     def config(self) -> ReleaseConfig: ...
 
+
 # src/walk/workflow/service.py — DefaultWorkflowManager additions
-async def create_rc(self, project_key: ProjectKey, number: int, commit: Sha) -> ReleaseCandidate: ...   # RC-NN, BUILDING, ledger RC_TRANSITION{event: "create"}
+async def create_rc(
+    self, project_key: ProjectKey, number: int, commit: Sha
+) -> ReleaseCandidate: ...  # RC-NN, BUILDING, ledger RC_TRANSITION{event: "create"}
 async def get_rc(self, rc_id: ReleaseCandidateId) -> ReleaseCandidate: ...
 async def list_rcs(self) -> list[ReleaseCandidate]: ...
+
+
 # rc_event(): when ctx.payload contains "rc_fields" (keys ⊆ {build_evidence_ids, qc_report_evidence_id, rejection_bug_ids}),
 # those fields are set on the RC in the same transaction as the state change; any other key → ConfigError.
 ```
@@ -562,31 +588,60 @@ class LocalizedListing(WalkModel):
     release_notes: str
     keywords: list[str] = Field(default_factory=list)
 
+
 class StoreMetadata(WalkModel):
     """§77 store listing content. Paths are repo-relative and must exist."""
+
     default_locale: str = Field(description="BCP 47 tag, e.g. 'en-US'")
-    listings: dict[str, LocalizedListing] = Field(description="locale → listing; must contain default_locale")
-    screenshots: dict[str, list[str]] = Field(description="BuildTarget value or 'all' → image paths")
+    listings: dict[str, LocalizedListing] = Field(
+        description="locale → listing; must contain default_locale"
+    )
+    screenshots: dict[str, list[str]] = Field(
+        description="BuildTarget value or 'all' → image paths"
+    )
     icons: list[str]
 
+
 # src/walk/memory/sections.py
-STORE_METADATA_SECTIONS = ("App Title", "Short Description", "Full Description", "Release Notes", "Keywords",
-                           "Screenshots", "Icons", "Review Notes")    # localized variants as '### <locale>' sub-sections
+STORE_METADATA_SECTIONS = (
+    "App Title",
+    "Short Description",
+    "Full Description",
+    "Release Notes",
+    "Keywords",
+    "Screenshots",
+    "Icons",
+    "Review Notes",
+)  # localized variants as '### <locale>' sub-sections
 
 # src/walk/memory/store_metadata.py
-STORE_METADATA_PATH: str = "release/store-metadata.md"      # relative to .ai/
-STORE_FIELD_LIMITS: dict[str, int] = {"title": 30, "short_description": 80, "full_description": 4000,
-                                      "release_notes": 500, "keywords": 100}   # characters; keywords = joined with ","
+STORE_METADATA_PATH: str = "release/store-metadata.md"  # relative to .ai/
+STORE_FIELD_LIMITS: dict[str, int] = {
+    "title": 30,
+    "short_description": 80,
+    "full_description": 4000,
+    "release_notes": 500,
+    "keywords": 100,
+}  # characters; keywords = joined with ","
+
+
 def store_metadata_document(meta: StoreMetadata, *, title: str) -> MemoryDocument: ...
 def store_metadata_from_document(doc: MemoryDocument) -> StoreMetadata: ...
-def validate_store_metadata(meta: StoreMetadata, repo_root: Path) -> list[str]: ...     # [] when valid
+def validate_store_metadata(meta: StoreMetadata, repo_root: Path) -> list[str]: ...  # [] when valid
+
 
 # src/walk/orchestrator/store_metadata.py
 class StoreMetadataReview:
-    def __init__(self, memory: MemoryManager, workflow: WorkflowManager, repo_root: Path, clock: Clock) -> None: ...
-    async def init_draft(self, *, actor: Actor) -> MemoryDocument: ...          # skeleton from ProjectContext; refuses to overwrite
+    def __init__(
+        self, memory: MemoryManager, workflow: WorkflowManager, repo_root: Path, clock: Clock
+    ) -> None: ...
+    async def init_draft(
+        self, *, actor: Actor
+    ) -> MemoryDocument: ...  # skeleton from ProjectContext; refuses to overwrite
     async def request_review(self, rc_id: ReleaseCandidateId, *, actor: Actor) -> WorkItem: ...
-    async def on_review_completed(self, item: WorkItem, output: AgentOutput) -> ApprovedArtifact | None: ...
+    async def on_review_completed(
+        self, item: WorkItem, output: AgentOutput
+    ) -> ApprovedArtifact | None: ...
 ```
 CLI: `walk store metadata init`; `walk store metadata show [--json]` (parsed model + validation problems); `walk store metadata review RC_ID` (prints the carrier id).
 
@@ -800,24 +855,28 @@ After functional GDD completion the user can create a dedicated polish phase fro
 `Phase`, `WorkItemDraft`, `StoryContract` per DOMAIN-MODEL §4.1; `WorkflowManager.create_phase` (E01-S11), `create`, `gdd_coverage` per INTERFACES §1.3.
 ```python
 # src/walk/workflow/phase_templates.py
-PHASE_TEMPLATES_DIR: str = "workflow/phase_templates"          # package-relative
+PHASE_TEMPLATES_DIR: str = "workflow/phase_templates"  # package-relative
+
 
 class PhaseTemplateArea(WalkModel):
-    key: str                      # snake_case, unique
+    key: str  # snake_case, unique
     title: str
-    intent: str                   # feature description seed
-    acceptance_hints: list[str]   # become contract.acceptance_criteria seeds
+    intent: str  # feature description seed
+    acceptance_hints: list[str]  # become contract.acceptance_criteria seeds
+
 
 class PhaseTemplate(WalkModel):
-    name: str                     # "polish"
-    version: str                  # "MAJOR.MINOR"
-    phase_name: str               # "Polish"
-    goal: str                     # §75 "Does it work?" → "Is it good?"
+    name: str  # "polish"
+    version: str  # "MAJOR.MINOR"
+    phase_name: str  # "Polish"
+    goal: str  # §75 "Does it work?" → "Is it good?"
     epic_title: str
     areas: list[PhaseTemplateArea]
     requires_gdd_coverage: float = Field(ge=0.0, le=1.0, description="warn below this §74 coverage")
 
+
 def load_phase_template(name: str, *, root: Path | None = None) -> PhaseTemplate: ...
+
 
 # src/walk/orchestrator/phase_templates.py
 class PhaseTemplateResult(FrozenModel):
@@ -826,8 +885,16 @@ class PhaseTemplateResult(FrozenModel):
     feature_ids: list[FeatureId]
     warnings: list[str]
 
-async def instantiate_phase_template(workflow: WorkflowManager, template: PhaseTemplate, *, project_key: ProjectKey,
-                                     ordinal: int | None, areas: list[str] | None, name: str | None) -> PhaseTemplateResult: ...
+
+async def instantiate_phase_template(
+    workflow: WorkflowManager,
+    template: PhaseTemplate,
+    *,
+    project_key: ProjectKey,
+    ordinal: int | None,
+    areas: list[str] | None,
+    name: str | None,
+) -> PhaseTemplateResult: ...
 ```
 `polish.yaml` areas (§75 verbatim order): `game_feel`, `vfx`, `animation`, `sound`, `ux`, `pacing`, `clarity`, `balance`, `performance`, `stability`, `device_compatibility`, `technical_debt`; `goal: "Shift from 'Does it work?' to 'Is it good?' (§75)"`; `requires_gdd_coverage: 1.0`.
 

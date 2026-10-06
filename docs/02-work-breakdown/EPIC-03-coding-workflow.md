@@ -80,6 +80,7 @@ See `INTERFACES.md` §2.3 `GitProvider` (`push`, `open_pr`, `merge`, `squash_wip
 ```python
 class LocalPrStub(FrozenModel):
     """Local stand-in for a hosted PR when `gh` is absent (dev / tests). Stored at <repo>/.walk/prs/<branch>.json."""
+
     branch: str
     base: str
     head: Sha
@@ -88,8 +89,11 @@ class LocalPrStub(FrozenModel):
     created_at: datetime
     merged_sha: Sha | None = None
 
+
 class GitCliProvider:
-    async def detect_gh(self) -> bool: ...   # `gh --version` exit 0 and `gh auth status` exit 0, cached per instance
+    async def detect_gh(
+        self,
+    ) -> bool: ...  # `gh --version` exit 0 and `gh auth status` exit 0, cached per instance
 ```
 
 `ProtectedBranchRefused(PermissionDenied)` carries `branch: str` and `pattern: str`.
@@ -169,12 +173,21 @@ See `INTERFACES.md` §2.2 `WorkProvider`. Implementation:
 ```python
 class LocalWorkProvider:
     provider: str = "local"
-    def __init__(self, db: Database, repo_path: Path, clock: Clock, uow_factory: Callable[[], UnitOfWork]) -> None: ...
+
+    def __init__(
+        self, db: Database, repo_path: Path, clock: Clock, uow_factory: Callable[[], UnitOfWork]
+    ) -> None: ...
     # all WorkProvider methods; parse_webhook raises NotSupported
-    def status_map(self) -> dict[WorkItemState, str]: ...   # LOCAL_STATUS_MAP: identity names, e.g. IMPLEMENTING -> "IMPLEMENTING"
+    def status_map(
+        self,
+    ) -> dict[
+        WorkItemState, str
+    ]: ...  # LOCAL_STATUS_MAP: identity names, e.g. IMPLEMENTING -> "IMPLEMENTING"
+
 
 class WorkProviderContract:
     """Subclass per provider; override `make_provider()`; scenarios are async test methods prefixed `test_`."""
+
     async def make_provider(self) -> WorkProvider: ...
 ```
 
@@ -261,16 +274,31 @@ See `INTERFACES.md` §1.12 `IntegrationManager` (`ingest`, `reconcile`, `with_id
 
 ```python
 class WorkPoller:
-    def __init__(self, integrations: IntegrationManager, sync_repo: WorkProviderSyncRepository, clock: Clock, poll_interval_s: int = 60) -> None: ...
-    async def start(self) -> None: ...          # creates the asyncio task; first iteration = startup reconcile since last_sync_at
+    def __init__(
+        self,
+        integrations: IntegrationManager,
+        sync_repo: WorkProviderSyncRepository,
+        clock: Clock,
+        poll_interval_s: int = 60,
+    ) -> None: ...
+    async def start(
+        self,
+    ) -> (
+        None
+    ): ...  # creates the asyncio task; first iteration = startup reconcile since last_sync_at
     async def stop(self) -> None: ...
-    async def poll_once(self) -> int: ...       # returns ingested count
+    async def poll_once(self) -> int: ...  # returns ingested count
+
 
 class ExternalEventMap(FrozenModel):
     """(from_state, to_state) -> event name, loaded from workflow/tables/external_events.yaml per WorkItemKind."""
+
     version: str
     entries: dict[WorkItemKind, dict[tuple[WorkItemState, WorkItemState], str]]
-    def event_for(self, kind: WorkItemKind, from_state: WorkItemState, to_state: WorkItemState) -> str | None: ...
+
+    def event_for(
+        self, kind: WorkItemKind, from_state: WorkItemState, to_state: WorkItemState
+    ) -> str | None: ...
 ```
 
 `external_events.yaml` shape: `version: "1.0"`, `story: [{from: READY, to: IMPLEMENTING, event: start_implementation}, …]`, `feature: […]`, `bug: […]` covering every (from,to) pair in INTERFACES §3.1–§3.3 whose `Who` includes a human/agent role (KERNEL-only transitions are not externally triggerable and are absent on purpose).
@@ -354,26 +382,53 @@ See `INTERFACES.md` §2.2 `WorkProvider`.
 ```python
 class WorkProviderConfig(WalkModel):
     """`.ai/project/work-provider.yaml`."""
+
     provider: Literal["local", "jira"] = "local"
     jira_project_key: str | None = None
-    issue_types: dict[WorkItemKind, str] = Field(default_factory=lambda: {EPIC: "Epic", FEATURE: "Story", STORY: "Sub-task", TASK: "Sub-task", BUG: "Bug"})
+    issue_types: dict[WorkItemKind, str] = Field(
+        default_factory=lambda: {
+            EPIC: "Epic",
+            FEATURE: "Story",
+            STORY: "Sub-task",
+            TASK: "Sub-task",
+            BUG: "Bug",
+        }
+    )
     status_map: dict[WorkItemState, str] = Field(default_factory=lambda: dict(DEFAULT_STATUS_MAP))
     assignee_accounts: dict[AgentRole, str] = Field(default_factory=dict)
-    kernel_id_field: str | None = Field(default=None, description="Custom field id; None = label walk:<ID>")
-    priority_map: dict[Priority, str] = Field(default_factory=lambda: {P0: "Highest", P1: "High", P2: "Medium", P3: "Low"})
+    kernel_id_field: str | None = Field(
+        default=None, description="Custom field id; None = label walk:<ID>"
+    )
+    priority_map: dict[Priority, str] = Field(
+        default_factory=lambda: {P0: "Highest", P1: "High", P2: "Medium", P3: "Low"}
+    )
+
 
 class JiraClient:
-    def __init__(self, base_url: str, email: str, token: SecretStr, transport: httpx.AsyncBaseTransport | None = None, clock: Clock | None = None) -> None: ...
+    def __init__(
+        self,
+        base_url: str,
+        email: str,
+        token: SecretStr,
+        transport: httpx.AsyncBaseTransport | None = None,
+        clock: Clock | None = None,
+    ) -> None: ...
     async def get(self, path: str, **params: object) -> JsonDict: ...
     async def post(self, path: str, body: JsonDict) -> JsonDict: ...
     async def put(self, path: str, body: JsonDict) -> JsonDict: ...
-    async def search(self, jql: str, fields: list[str], max_results: int = 200) -> list[JsonDict]: ...
+    async def search(
+        self, jql: str, fields: list[str], max_results: int = 200
+    ) -> list[JsonDict]: ...
+
 
 class JiraWorkProvider:
     provider: str = "jira"
+
     def __init__(self, client: JiraClient, mapping: JiraMapping, clock: Clock) -> None: ...
     @classmethod
-    def from_credentials(cls, store: CredentialStore, config: WorkProviderConfig, clock: Clock) -> "JiraWorkProvider": ...
+    def from_credentials(
+        cls, store: CredentialStore, config: WorkProviderConfig, clock: Clock
+    ) -> "JiraWorkProvider": ...
 ```
 
 #### Behavior
@@ -458,22 +513,41 @@ The kernel optionally listens for Jira webhooks (and serves a read-only `/status
 #### Interface contract
 ```python
 class HttpRequest(FrozenModel):
-    method: str; path: str; query: dict[str, str]; headers: dict[str, str]; body: bytes
+    method: str
+    path: str
+    query: dict[str, str]
+    headers: dict[str, str]
+    body: bytes
+
 
 class HttpResponse(FrozenModel):
-    status: int; body: bytes; content_type: str = "application/json"
+    status: int
+    body: bytes
+    content_type: str = "application/json"
+
 
 class WebhookReceiver:
     """Minimal HTTP/1.1 server on asyncio.start_server. Routes: POST /webhooks/jira, GET /status. Everything else -> 404."""
-    def __init__(self, port: int, secret: SecretStr | None, jwt_secret: SecretStr | None, integrations: IntegrationManager,
-                 status_provider: Callable[[], KernelStatus], max_body_bytes: int = 1_048_576) -> None: ...
+
+    def __init__(
+        self,
+        port: int,
+        secret: SecretStr | None,
+        jwt_secret: SecretStr | None,
+        integrations: IntegrationManager,
+        status_provider: Callable[[], KernelStatus],
+        max_body_bytes: int = 1_048_576,
+    ) -> None: ...
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-    async def handle(self, request: HttpRequest) -> HttpResponse: ...   # pure routing, unit-testable
+    async def handle(self, request: HttpRequest) -> HttpResponse: ...  # pure routing, unit-testable
+
 
 class JiraWorkProvider:
     def parse_webhook(self, headers: dict[str, str], body: bytes) -> list[WorkProviderEvent]: ...
-    async def missing_statuses(self) -> list[str]: ...  # status_map values absent from the project's workflow statuses
+    async def missing_statuses(
+        self,
+    ) -> list[str]: ...  # status_map values absent from the project's workflow statuses
 ```
 
 `IntegrationManager.validate_work_provider() -> list[str]` returns missing statuses (empty for local).
@@ -651,14 +725,22 @@ See `INTERFACES.md` §1.1 `TaskRouter` (`route`, `can_run_parallel`) and §4 rou
 
 ```python
 class DefaultTaskRouter:
-    def __init__(self, scheduled_states: Path, agents: AgentManager, runs: AgentRunRepository, workflow: WorkflowManager) -> None: ...
+    def __init__(
+        self,
+        scheduled_states: Path,
+        agents: AgentManager,
+        runs: AgentRunRepository,
+        workflow: WorkflowManager,
+    ) -> None: ...
     def route(self, item: WorkItem, state: WorkItemState) -> RouteDecision: ...
     def can_run_parallel(self, a: WorkItem, b: WorkItem) -> bool: ...
     async def implementer_of(self, item: WorkItem) -> tuple[AgentRole, ModelId] | None:
         """(role, model_id) of the latest run with purpose IMPLEMENT on `item` (for FEATURE: over its children); None when no such run."""
 
+
 def contract_paths(item: WorkItem) -> set[str]:
     """Repo-relative paths mentioned in contract.goal/acceptance_criteria/constraints/description matching PATH_PATTERN."""
+
 
 class Scheduler:
     def check_cross_model(self, route: RouteDecision, routing: RoutingDecision) -> None:
@@ -747,26 +829,49 @@ See `INTERFACES.md` §1.13 `OutputApplier.apply(run, output) -> AppliedEffects` 
 ```python
 class ChangeDiscrepancy(FrozenModel):
     path: str
-    declared: Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None   # None = changed on disk but not declared
-    observed: Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None   # None = declared but not changed on disk
+    declared: (
+        Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None
+    )  # None = changed on disk but not declared
+    observed: (
+        Literal["ADDED", "MODIFIED", "DELETED", "RENAMED"] | None
+    )  # None = declared but not changed on disk
+
 
 class OutputApplyReport(FrozenModel):
     effects: AppliedEffects
     discrepancies: list[ChangeDiscrepancy]
-    denied_intents: list[str]            # e.g. "jira.create_bug", recorded as findings on the run
-    guard_rejection: str | None          # reason when the implied event was rejected
+    denied_intents: list[str]  # e.g. "jira.create_bug", recorded as findings on the run
+    guard_rejection: str | None  # reason when the implied event was rejected
+
 
 class OutputEventTable(FrozenModel):
     version: str
-    def event_for(self, kind: WorkItemKind, state: WorkItemState, purpose: str, status: AgentOutputStatus) -> str | None: ...
 
-def load_output_event_table(path: Path = OUTPUT_EVENTS_PATH) -> OutputEventTable: ...   # every (kind, state, event) must exist in the workflow tables → ConfigError otherwise
+    def event_for(
+        self, kind: WorkItemKind, state: WorkItemState, purpose: str, status: AgentOutputStatus
+    ) -> str | None: ...
+
+
+def load_output_event_table(
+    path: Path = OUTPUT_EVENTS_PATH,
+) -> (
+    OutputEventTable
+): ...  # every (kind, state, event) must exist in the workflow tables → ConfigError otherwise
+
 
 class DefaultOutputApplier:
-    async def apply(self, run: AgentRun, output: AgentOutput) -> AppliedEffects: ...          # protocol method; stores the OutputApplyReport on run.output metadata
-    async def reconcile_changes(self, run: AgentRun, output: AgentOutput) -> list[ChangeDiscrepancy]: ...
-    async def commit_changes(self, run: AgentRun, item: WorkItem, output: AgentOutput) -> Sha | None: ...
-    def guard_payload(self, run: AgentRun, output: AgentOutput, evidence_kinds: list[EvidenceKind]) -> JsonDict: ...
+    async def apply(
+        self, run: AgentRun, output: AgentOutput
+    ) -> AppliedEffects: ...  # protocol method; stores the OutputApplyReport on run.output metadata
+    async def reconcile_changes(
+        self, run: AgentRun, output: AgentOutput
+    ) -> list[ChangeDiscrepancy]: ...
+    async def commit_changes(
+        self, run: AgentRun, item: WorkItem, output: AgentOutput
+    ) -> Sha | None: ...
+    def guard_payload(
+        self, run: AgentRun, output: AgentOutput, evidence_kinds: list[EvidenceKind]
+    ) -> JsonDict: ...
 ```
 
 `output_events.yaml` (`NEW NAME:`; `version: "1.0"`):
@@ -897,37 +1002,92 @@ A user feature entered with `walk feature add` becomes `Feature(IDEA)` with a fe
 
 ```python
 # src/walk/workflow/branches.py
-BRANCH_PREFIXES: dict[WorkItemKind, str] = {FEATURE: "feat", STORY: "story", TASK: "task", BUG: "bug"}
-def slugify(title: str, *, max_len: int = 40) -> str: ...            # lowercase ASCII, [a-z0-9-], runs of '-' collapsed, trimmed; "" → "item"
-def branch_name_for(item: WorkItem) -> str: ...                      # f"{BRANCH_PREFIXES[kind]}/{item.id}-{slugify(item.title)}"; EPIC → ConfigError
-def base_branch_for(item: WorkItem, parent_feature: Feature | None, default_branch: str) -> str: ...
+BRANCH_PREFIXES: dict[WorkItemKind, str] = {
+    FEATURE: "feat",
+    STORY: "story",
+    TASK: "task",
+    BUG: "bug",
+}
+
+
+def slugify(
+    title: str, *, max_len: int = 40
+) -> str: ...  # lowercase ASCII, [a-z0-9-], runs of '-' collapsed, trimmed; "" → "item"
+def branch_name_for(
+    item: WorkItem,
+) -> str: ...  # f"{BRANCH_PREFIXES[kind]}/{item.id}-{slugify(item.title)}"; EPIC → ConfigError
+def base_branch_for(item: WorkItem, parent_feature: Feature | None, default_branch: str) -> str:
+    ...
     # FEATURE → default_branch; STORY/TASK → parent_feature.branch (ConfigError when None); BUG → related feature branch or default_branch
+
 
 # src/walk/workflow/repository.py
 class WorkflowRepository:
-    async def set_branch(self, work_item_id: WorkItemId, branch: str) -> None: ...   # no transition, no ledger; updates updated_at
+    async def set_branch(
+        self, work_item_id: WorkItemId, branch: str
+    ) -> None: ...  # no transition, no ledger; updates updated_at
+
 
 # src/walk/orchestrator/completion.py
 class CompletionContext(FrozenModel):
     run: AgentRun
-    item: WorkItem                      # re-read after OutputApplier.apply
+    item: WorkItem  # re-read after OutputApplier.apply
     effects: AppliedEffects
+
+
 class RunCompletionHandler:
     """Single post-apply dispatch point: (item.kind, run.purpose, effects.workflow_event) -> flow callable. Later stories register entries."""
-    def register(self, kind: WorkItemKind, purpose: str, event: str | None, fn: Callable[[CompletionContext], Awaitable[None]]) -> None: ...
-    async def handle(self, run: AgentRun, effects: AppliedEffects) -> None: ...      # duplicate registration → ConfigError
+
+    def register(
+        self,
+        kind: WorkItemKind,
+        purpose: str,
+        event: str | None,
+        fn: Callable[[CompletionContext], Awaitable[None]],
+    ) -> None: ...
+    async def handle(
+        self, run: AgentRun, effects: AppliedEffects
+    ) -> None: ...  # duplicate registration → ConfigError
+
 
 # src/walk/orchestrator/feature_flow.py
 USER_FEATURE_LABEL = "user-feature"
-FEATURE_CONTEXT_SKELETON_SECTIONS: tuple[str, ...] = ("Intent", "Design Goal", "Relevant GDD", "Current Status", "Architecture",
-    "Affected Systems", "Dependencies", "Relevant Files", "Important Decisions", "Implementation Notes", "Known Risks",
-    "QC Notes", "Evidence", "Remaining Work")                                          # §37 order
+FEATURE_CONTEXT_SKELETON_SECTIONS: tuple[str, ...] = (
+    "Intent",
+    "Design Goal",
+    "Relevant GDD",
+    "Current Status",
+    "Architecture",
+    "Affected Systems",
+    "Dependencies",
+    "Relevant Files",
+    "Important Decisions",
+    "Implementation Notes",
+    "Known Risks",
+    "QC Notes",
+    "Evidence",
+    "Remaining Work",
+)  # §37 order
+
+
 class FeatureFlow:
-    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, memory: MemoryManager, integrations: IntegrationManager,
-                 git: GitProvider, project: Project, clock: Clock) -> None: ...
-    async def create_user_feature(self, title: str, description: str, gdd_refs: list[GddRef]) -> Feature: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        repo: WorkflowRepository,
+        memory: MemoryManager,
+        integrations: IntegrationManager,
+        git: GitProvider,
+        project: Project,
+        clock: Clock,
+    ) -> None: ...
+    async def create_user_feature(
+        self, title: str, description: str, gdd_refs: list[GddRef]
+    ) -> Feature: ...
     async def on_design_approved(self, ctx: CompletionContext) -> None: ...
-    def register(self, handler: RunCompletionHandler) -> None: ...                     # registers (FEATURE, "DESIGN", "design_approved")
+    def register(
+        self, handler: RunCompletionHandler
+    ) -> None: ...  # registers (FEATURE, "DESIGN", "design_approved")
 ```
 
 Command row `feature.add` payload: `{"title", "description", "gdd": [str], "execute": bool}`; result `{"feature_id", "external_ref"}`.
@@ -998,7 +1158,7 @@ The kernel can compile, run EditMode/PlayMode tests and build a Unity project in
 
 #### Scope
 - In: `UnityBatchProvider.detect/compile/run_tests/build`; result-file schema and parser; `com.walk.ci` C# package (`WalK.CI.Compile`, `RunTests`, `Build`, `ValidateAssets` stub); packaging of the package as kernel data; `install_ci_package` + bootstrap call; preflight `unity` component uses `detect`; `FakeUnityProvider`.
-- Out: job orchestration, ledger `BUILD_RESULT`/`TEST_RESULT` and evidence (E03-S11 — this provider writes no ledger events); asset validation logic (E08-S06; here `ValidateAssets` writes a `not_implemented` result and `validate_assets` raises `NotSupported`); Unity MCP (Stage 8).
+- Out: job orchestration, ledger `BUILD_RESULT`/`TEST_RESULT` and evidence (E03-S11 — this provider writes no ledger events); asset validation logic (E08-S06; here `ValidateAssets` writes a `not_implemented` result and `validate_assets` raises `NotSupported`); screenshot/console/asset inspection methods (E08-S08, ADR-0015).
 
 #### Files
 | Path | Action | Public symbols |
@@ -1030,34 +1190,70 @@ The kernel can compile, run EditMode/PlayMode tests and build a Unity project in
 ```python
 # results.py
 RESULT_SCHEMA_VERSION = "1"
+
+
 class UnityTestCase(FrozenModel):
     name: str
     outcome: Literal["Passed", "Failed", "Skipped", "Inconclusive"]
     duration_s: float
     message: str = ""
+
+
 class UnityResultFile(FrozenModel):
     """JSON written by WalK.CI to the path given by -walkResult."""
+
     schema_version: str
     job: Literal["compile", "editmode_tests", "playmode_tests", "build", "asset_validation"]
     ok: bool
     summary: str
     errors: list[str] = []
     tests: list[UnityTestCase] = []
-    artifacts: list[str] = []          # paths relative to the project root
-    metrics: JsonDict = {}             # e.g. {"passed": 12, "failed": 0, "build_size_bytes": 123}
-def parse_result_file(path: Path) -> UnityResultFile: ...   # missing / invalid / schema_version mismatch → OutputInvalid
+    artifacts: list[str] = []  # paths relative to the project root
+    metrics: JsonDict = {}  # e.g. {"passed": 12, "failed": 0, "build_size_bytes": 123}
+
+
+def parse_result_file(
+    path: Path,
+) -> UnityResultFile: ...  # missing / invalid / schema_version mismatch → OutputInvalid
+
 
 # provider.py
-UNITY_METHODS = {"compile": "WalK.CI.Compile", "tests": "WalK.CI.RunTests", "build": "WalK.CI.Build", "asset_validation": "WalK.CI.ValidateAssets"}
+UNITY_METHODS = {
+    "compile": "WalK.CI.Compile",
+    "tests": "WalK.CI.RunTests",
+    "build": "WalK.CI.Build",
+    "asset_validation": "WalK.CI.ValidateAssets",
+}
+
+
 class UnityBatchProvider:
-    def __init__(self, runner: SubprocessRunner, clock: Clock, *, unity_path: Path | None, results_dir: Path, timeout_s: int = 3600) -> None: ...
-    def command_for(self, project_path: str, method: str, result_path: Path, log_path: Path, extra: list[str]) -> list[str]: ...
+    def __init__(
+        self,
+        runner: SubprocessRunner,
+        clock: Clock,
+        *,
+        unity_path: Path | None,
+        results_dir: Path,
+        timeout_s: int = 3600,
+    ) -> None: ...
+    def command_for(
+        self, project_path: str, method: str, result_path: Path, log_path: Path, extra: list[str]
+    ) -> list[str]: ...
+
     # UnityProvider methods per INTERFACES §2.4
+
 
 # install.py
 CI_PACKAGE_NAME = "com.walk.ci"
-def ci_package_source() -> Path: ...                         # importlib.resources path of walk/_data/com.walk.ci (repo checkout: <repo>/unity/com.walk.ci)
-def install_ci_package(project_path: Path) -> str: ...      # copies into Packages/com.walk.ci/ when absent or older; returns installed version
+
+
+def ci_package_source() -> (
+    Path
+): ...  # importlib.resources path of walk/_data/com.walk.ci (repo checkout: <repo>/unity/com.walk.ci)
+def install_ci_package(
+    project_path: Path,
+) -> str: ...  # copies into Packages/com.walk.ci/ when absent or older; returns installed version
+
 
 # tests/fakes/fake_unity_provider.py
 class FakeUnityJob(WalkModel):
@@ -1065,10 +1261,23 @@ class FakeUnityJob(WalkModel):
     summary: str = "ok"
     tests_passed: int = 3
     tests_failed: int = 0
+
+
 class FakeUnityProvider:
-    def __init__(self, clock: Clock, log_dir: Path, *, jobs: dict[str, FakeUnityJob] | None = None, status: ReadinessState = ReadinessState.READY) -> None: ...
-    calls: list[tuple[str, str, JsonDict]]                   # (method, project_path, args) assertion helper
-    def script(self, job_kind: str, job: FakeUnityJob, *, times: int | None = None) -> None: ...   # override next `times` calls (None = always)
+    def __init__(
+        self,
+        clock: Clock,
+        log_dir: Path,
+        *,
+        jobs: dict[str, FakeUnityJob] | None = None,
+        status: ReadinessState = ReadinessState.READY,
+    ) -> None: ...
+
+    calls: list[tuple[str, str, JsonDict]]  # (method, project_path, args) assertion helper
+
+    def script(
+        self, job_kind: str, job: FakeUnityJob, *, times: int | None = None
+    ) -> None: ...  # override next `times` calls (None = always)
 ```
 
 Command line (`command_for`): `<unity_path> -batchmode -nographics -projectPath <project> -executeMethod <method> -logFile <log_path> -walkResult <result_path> [extra]`; `run_tests` adds `-walkTestMode EditMode|PlayMode` and optional `-walkTestFilter <filter>`; `build` adds `-walkBuildTarget <BuildTarget value> -walkOutput <output_path> [-walkDevelopment]`. `-quit` is never passed: `WalK.CI` calls `EditorApplication.Exit(code)` itself after writing the result (test runs are asynchronous).
@@ -1160,33 +1369,75 @@ _pending_
 `CiProvider.run_pipeline` per `INTERFACES.md` §2.4 plus one keyword-only argument (INTERFACES §2.4 already carries it):
 
 ```python
-async def run_pipeline(self, worktree_path: str, commit: Sha, jobs: list[str], *, idempotency_key: str,
-                       work_item_id: WorkItemId | None = None) -> list[JobResult]: ...
+async def run_pipeline(
+    self,
+    worktree_path: str,
+    commit: Sha,
+    jobs: list[str],
+    *,
+    idempotency_key: str,
+    work_item_id: WorkItemId | None = None,
+) -> list[JobResult]: ...
 ```
 
 ```python
 CI_CONFIG_PATH = ".ai/project/ci.yaml"
+
+
 class CiJobSpec(FrozenModel):
     runner: Literal["unity", "shell"]
-    kind: Literal["compile", "editmode_tests", "playmode_tests", "build", "asset_validation", "static_check", "perf_smoke"]
-    command: list[str] = []            # shell only; argv, executed with cwd=worktree_path
+    kind: Literal[
+        "compile",
+        "editmode_tests",
+        "playmode_tests",
+        "build",
+        "asset_validation",
+        "static_check",
+        "perf_smoke",
+    ]
+    command: list[str] = []  # shell only; argv, executed with cwd=worktree_path
     timeout_s: int = 1800
-    required: bool = True              # a failing non-required job is reported but does not fail the pipeline verdict
+    required: bool = (
+        True  # a failing non-required job is reported but does not fail the pipeline verdict
+    )
+
+
 class CiConfig(FrozenModel):
     version: str
     story_jobs: list[str]
     feature_jobs: list[str]
     jobs: dict[str, CiJobSpec]
-    def resolve(self, name: str) -> CiJobSpec: ...   # "build:<BuildTarget>" → unity/build spec; unknown → CiJobUnknown
-def load_ci_config(repo_root: Path) -> CiConfig: ...  # project file if present else kernel default; invalid → ConfigError
+
+    def resolve(
+        self, name: str
+    ) -> CiJobSpec: ...  # "build:<BuildTarget>" → unity/build spec; unknown → CiJobUnknown
+
+
+def load_ci_config(
+    repo_root: Path,
+) -> CiConfig: ...  # project file if present else kernel default; invalid → ConfigError
 def job_kind_for(name: str, config: CiConfig) -> str: ...
 
+
 class LocalCiProvider:
-    def __init__(self, unity: UnityProvider | None, runner: SubprocessRunner, evidence: EvidenceManager, ledger: LedgerManager,
-                 hooks: HookManager, idempotency: IdempotencyStore, clock: Clock, *, repo_root: Path, project_key: ProjectKey,
-                 results_dir: Path) -> None: ...
+    def __init__(
+        self,
+        unity: UnityProvider | None,
+        runner: SubprocessRunner,
+        evidence: EvidenceManager,
+        ledger: LedgerManager,
+        hooks: HookManager,
+        idempotency: IdempotencyStore,
+        clock: Clock,
+        *,
+        repo_root: Path,
+        project_key: ProjectKey,
+        results_dir: Path,
+    ) -> None: ...
     @staticmethod
-    def verdict(results: list[JobResult], config: CiConfig, jobs: list[str]) -> bool: ...   # all required jobs ok
+    def verdict(
+        results: list[JobResult], config: CiConfig, jobs: list[str]
+    ) -> bool: ...  # all required jobs ok
 ```
 
 Kernel default `ci.yaml`:
@@ -1283,16 +1534,18 @@ Transitions `INTEGRATION → integration_passed (ci_green) → QC` and `INTEGRAT
 async def merge_base(self, a: str, b: str, path: str) -> Sha:
     """`git merge-base a b`; refs or shas; no common ancestor → GitError."""
 
+
 # src/walk/orchestrator/integration.py
 class IntegrationOutcome(StrEnum):
-    PASSED = "PASSED"                      # CI green, merged (or merge pending approval on a protected base)
+    PASSED = "PASSED"  # CI green, merged (or merge pending approval on a protected base)
     CI_FAILED = "CI_FAILED"
     MERGE_CONFLICT = "MERGE_CONFLICT"
+
 
 class IntegrationResult(FrozenModel):
     work_item_id: WorkItemId
     outcome: IntegrationOutcome
-    head: Sha                              # squashed head of the item branch
+    head: Sha  # squashed head of the item branch
     base_branch: str
     pr: PullRequestRef | None
     merged_sha: Sha | None
@@ -1300,15 +1553,38 @@ class IntegrationResult(FrozenModel):
     pending_approval_id: ApprovalRequestId | None
     reason: str | None
 
-def squash_message(item: WorkItem) -> str: ...      # f"{item.kind.lower()}({item.id}): {item.title[:60]}"
+
+def squash_message(
+    item: WorkItem,
+) -> str: ...  # f"{item.kind.lower()}({item.id}): {item.title[:60]}"
+
 
 class IntegrationStep:
-    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, integrations: IntegrationManager, git: GitProvider,
-                 ci: CiProvider, ci_config: CiConfig, memory: MemoryManager, permissions: PermissionManager,
-                 telemetry: TelemetryManager, project: Project, clock: Clock, *, worktrees_root: Path) -> None: ...
-    def start(self, item: WorkItem) -> bool: ...                       # schedules run(item) as a task; False when already in flight for (item.id, state_version)
-    async def run(self, item: WorkItem) -> IntegrationResult: ...      # the step itself (tests call it directly)
-    async def complete_protected_merges(self) -> int: ...              # merges PRs whose PROTECTED_ACTION approval is APPROVED; returns count
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        repo: WorkflowRepository,
+        integrations: IntegrationManager,
+        git: GitProvider,
+        ci: CiProvider,
+        ci_config: CiConfig,
+        memory: MemoryManager,
+        permissions: PermissionManager,
+        telemetry: TelemetryManager,
+        project: Project,
+        clock: Clock,
+        *,
+        worktrees_root: Path,
+    ) -> None: ...
+    def start(
+        self, item: WorkItem
+    ) -> bool: ...  # schedules run(item) as a task; False when already in flight for (item.id, state_version)
+    async def run(
+        self, item: WorkItem
+    ) -> IntegrationResult: ...  # the step itself (tests call it directly)
+    async def complete_protected_merges(
+        self,
+    ) -> int: ...  # merges PRs whose PROTECTED_ACTION approval is APPROVED; returns count
     def in_flight(self) -> list[WorkItemId]: ...
 ```
 
@@ -1392,25 +1668,49 @@ Transitions `READY_FOR_REVIEW → start_review → LEAD_DEV_REVIEW`, `LEAD_DEV_R
 ```python
 # src/walk/orchestrator/scheduler.py
 ADMISSION_EVENTS: dict[tuple[WorkItemKind, WorkItemState], str] = {
-    (STORY, READY): "start_implementation", (STORY, REWORK): "start_implementation",
-    (TASK, READY): "start_implementation",  (TASK, REWORK): "start_implementation",
-    (STORY, READY_FOR_REVIEW): "start_review", (TASK, READY_FOR_REVIEW): "start_review",
+    (STORY, READY): "start_implementation",
+    (STORY, REWORK): "start_implementation",
+    (TASK, READY): "start_implementation",
+    (TASK, REWORK): "start_implementation",
+    (STORY, READY_FOR_REVIEW): "start_review",
+    (TASK, READY_FOR_REVIEW): "start_review",
     (BUG, READY_FOR_REVIEW): "start_review",
-}   # E03-S15 adds (BUG, READY|REWORK) → "start_fix"; FEATURE rows have no admission event (the run's output raises the event)
+}  # E03-S15 adds (BUG, READY|REWORK) → "start_fix"; FEATURE rows have no admission event (the run's output raises the event)
+
 
 class Scheduler:
-    def admission_payload(self, item: WorkItem, route: RouteDecision, routing: RoutingDecision, *, cross_model_override: bool) -> JsonDict:
+    def admission_payload(
+        self,
+        item: WorkItem,
+        route: RouteDecision,
+        routing: RoutingDecision,
+        *,
+        cross_model_override: bool,
+    ) -> JsonDict:
         """start_review: {implementer_role, reviewer_role, implementer_model_id, reviewer_model_id, cross_model_review, expected_state_version};
         start_implementation/start_fix: {budget_ok, branch_available, expected_state_version} (E01-S29 keys, unchanged)."""
 
+
 # src/walk/orchestrator/review_flow.py
-REVIEW_FINDINGS_SECTION = "Implementation Notes"          # BUG documents use "Investigations"
+REVIEW_FINDINGS_SECTION = "Implementation Notes"  # BUG documents use "Investigations"
+
+
 class ReviewFlow:
-    def __init__(self, workflow: WorkflowManager, integrations: IntegrationManager, memory: MemoryManager, git: GitProvider,
-                 telemetry: TelemetryManager, orchestrator_wake: Callable[[], Awaitable[None]]) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        integrations: IntegrationManager,
+        memory: MemoryManager,
+        git: GitProvider,
+        telemetry: TelemetryManager,
+        orchestrator_wake: Callable[[], Awaitable[None]],
+    ) -> None: ...
     async def on_review_rejected(self, ctx: CompletionContext) -> None: ...
     async def on_review_approved(self, ctx: CompletionContext) -> None: ...
-    def register(self, handler: RunCompletionHandler) -> None: ...   # (STORY|TASK|BUG, "REVIEW", review_rejected|review_approved)
+    def register(
+        self, handler: RunCompletionHandler
+    ) -> None: ...  # (STORY|TASK|BUG, "REVIEW", review_rejected|review_approved)
+
 
 # src/walk/runtime/output_applier.py
 READ_ONLY_PURPOSES: frozenset[str] = frozenset({"REVIEW", "QC", "TRIAGE", "PLAN"})
@@ -1495,19 +1795,47 @@ Transitions per `INTERFACES.md` §3.2 (`QC → qc_passed → COMPLETE`, `QC → 
 
 ```python
 # src/walk/orchestrator/qc_flow.py
-BUG_CONTEXT_INTAKE_SECTIONS = ("Problem", "Reproduction", "Expected Behavior", "Observed Behavior")   # §38 names, filled from BugDraft
+BUG_CONTEXT_INTAKE_SECTIONS = (
+    "Problem",
+    "Reproduction",
+    "Expected Behavior",
+    "Observed Behavior",
+)  # §38 names, filled from BugDraft
+
 
 class QcFlow:
-    def __init__(self, workflow: WorkflowManager, integrations: IntegrationManager, ledger: LedgerManager,
-                 checkpoints: CheckpointManager, telemetry: TelemetryManager, clock: Clock) -> None: ...
-    async def on_qc_completed(self, ctx: CompletionContext) -> None: ...       # any kind, purpose QC, event in {qc_passed, qc_rejected, verified, reopen}
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        integrations: IntegrationManager,
+        ledger: LedgerManager,
+        checkpoints: CheckpointManager,
+        telemetry: TelemetryManager,
+        clock: Clock,
+    ) -> None: ...
+    async def on_qc_completed(
+        self, ctx: CompletionContext
+    ) -> None: ...  # any kind, purpose QC, event in {qc_passed, qc_rejected, verified, reopen}
     def register(self, handler: RunCompletionHandler) -> None: ...
 
+
 class BugIntake:
-    def __init__(self, workflow: WorkflowManager, memory: MemoryManager, ledger: LedgerManager, git: GitProvider) -> None: ...
-    async def on_bugs_created(self, ctx: CompletionContext) -> None: ...       # any purpose; acts on BUG ids in effects.created_work_items
-    async def intake(self, bug: Bug, *, run: AgentRun | None) -> None: ...     # triage event + BUG_CREATED ledger (idempotent)
-    def register(self, handler: RunCompletionHandler) -> None: ...            # registered as a catch-all entry (event=None matches any)
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        memory: MemoryManager,
+        ledger: LedgerManager,
+        git: GitProvider,
+    ) -> None: ...
+    async def on_bugs_created(
+        self, ctx: CompletionContext
+    ) -> None: ...  # any purpose; acts on BUG ids in effects.created_work_items
+    async def intake(
+        self, bug: Bug, *, run: AgentRun | None
+    ) -> None: ...  # triage event + BUG_CREATED ledger (idempotent)
+    def register(
+        self, handler: RunCompletionHandler
+    ) -> None: ...  # registered as a catch-all entry (event=None matches any)
 ```
 
 `RunCompletionHandler.register(kind, purpose, event=None, …)` with `event=None` is a wildcard entry that runs after the exact-match entry (extension of E03-S09, same class).
@@ -1603,24 +1931,45 @@ Bug lifecycle `bug_workflow v1.0` per `INTERFACES.md` §3.3; routing §4 (BUG `D
 # src/walk/agents/models.py
 class TriageVerdict(WalkModel):
     """Structured TRIAGE result (§10.8: QC finds severity; Lead Dev triages owner and may confirm or change severity)."""
+
     severity: Severity
     owner_role: AgentRole
     rationale: str
     propose_wont_fix: bool = False
 
+
 class AgentOutput(WalkModel):  # existing; two new fields
-    triage: TriageVerdict | None = Field(default=None, description="Required for purpose TRIAGE with status COMPLETED")
-    reopen_bugs: list[BugId] = Field(default_factory=list, description="QC only: closed bugs that regressed (raises regression_reopen)")
+    triage: TriageVerdict | None = Field(
+        default=None, description="Required for purpose TRIAGE with status COMPLETED"
+    )
+    reopen_bugs: list[BugId] = Field(
+        default_factory=list,
+        description="QC only: closed bugs that regressed (raises regression_reopen)",
+    )
+
 
 # src/walk/workflow/repository.py
 class WorkflowRepository:
-    async def apply_triage(self, bug_id: BugId, severity: Severity, owner_role: AgentRole) -> Bug: ...  # sets severity, owner_role, contract.owner_role, priority from severity
+    async def apply_triage(
+        self, bug_id: BugId, severity: Severity, owner_role: AgentRole
+    ) -> Bug: ...  # sets severity, owner_role, contract.owner_role, priority from severity
+
 
 # src/walk/orchestrator/bug_flow.py
 BUG_OWNER_ROLES: frozenset[AgentRole] = frozenset({AgentRole.SENIOR_DEV, AgentRole.LEAD_DEV})
+
+
 class BugFlow:
-    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, integrations: IntegrationManager, memory: MemoryManager,
-                 permissions: PermissionManager, checkpoints: CheckpointManager, git: GitProvider) -> None: ...
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        repo: WorkflowRepository,
+        integrations: IntegrationManager,
+        memory: MemoryManager,
+        permissions: PermissionManager,
+        checkpoints: CheckpointManager,
+        git: GitProvider,
+    ) -> None: ...
     async def on_triaged(self, ctx: CompletionContext) -> None: ...
     async def on_wont_fix_proposed(self, ctx: CompletionContext) -> None: ...
     async def on_verified(self, ctx: CompletionContext) -> None: ...
@@ -1717,17 +2066,24 @@ QC rejection loops are bounded: when a story/task/feature hits `max_fix_loops` o
 ```python
 # src/walk/agents/models.py
 class CircuitBreakerLimits(FrozenModel):
-    max_fix_loops: int = Field(default=3, ge=1, description="QC rejections per STORY/TASK/FEATURE before BLOCKED (§138)")
-    max_reopen: int = Field(default=3, ge=1, description="QC re-test rejections per BUG before BLOCKED (§138)")
+    max_fix_loops: int = Field(
+        default=3, ge=1, description="QC rejections per STORY/TASK/FEATURE before BLOCKED (§138)"
+    )
+    max_reopen: int = Field(
+        default=3, ge=1, description="QC re-test rejections per BUG before BLOCKED (§138)"
+    )
+
 
 # src/walk/agents/policy_loader.py
-def load_circuit_breakers(kernel_default: Path, project_file: Path | None) -> CircuitBreakerLimits: ...
+def load_circuit_breakers(kernel_default: Path, project_file: Path | None) -> CircuitBreakerLimits:
+    ...
     # project value may only be <= kernel default (narrowing, same rule as ADR-0013 D-4); larger → ConfigError
+
 
 # src/walk/orchestrator/service.py
 class DefaultOrchestrator:
-    async def force_review(self, work_item_id: WorkItemId) -> None: ...                 # protocol method
-    async def resolve_root_cause_escalations(self) -> int: ...                         # returns number of items unblocked
+    async def force_review(self, work_item_id: WorkItemId) -> None: ...  # protocol method
+    async def resolve_root_cause_escalations(self) -> int: ...  # returns number of items unblocked
 ```
 
 Effect `store_resume_state_rework` (`NEW NAME:`, registered next to `store_resume_state`): writes `resume_state = REWORK` into the transition payload and on the item, so `unblock` (pseudo-target `PREVIOUS`, E01-S09 rule 4) returns the item to `REWORK`.
@@ -1819,11 +2175,15 @@ A feature follows its children through the rest of `feature_workflow`: it starts
 # src/walk/workflow/protocols.py (WorkflowManager)
 async def children_states(self, feature_id: FeatureId) -> dict[WorkItemId, WorkItemState]:
     """Child STORY/TASK items plus BUGs with related_feature_id == feature_id; CANCELLED items excluded."""
+
+
 async def open_blocker_bug_count(self, feature_id: FeatureId) -> int:
     """BUGs with related_feature_id == feature_id, severity BLOCKER, state not in {COMPLETE, CANCELLED}."""
 
+
 # src/walk/orchestrator/feature_progress.py
 FEATURE_REQUIRED_EVIDENCE: tuple[EvidenceKind, ...] = (EvidenceKind.AUTOMATED_TEST,)
+
 
 class FeatureCiResult(FrozenModel):
     feature_id: FeatureId
@@ -1832,14 +2192,32 @@ class FeatureCiResult(FrozenModel):
     job_results: list[JobResult]
     evidence_ids: list[EvidenceId]
 
+
 class FeatureProgress:
-    def __init__(self, workflow: WorkflowManager, repo: WorkflowRepository, git: GitProvider, ci: CiProvider, ci_config: CiConfig,
-                 evidence: EvidenceManager, memory: MemoryManager, integrations: IntegrationManager,
-                 permissions: PermissionManager, project: Project, clock: Clock, *, worktrees_root: Path) -> None: ...
-    async def sync_all(self) -> int: ...                           # features in READY/IMPLEMENTING/INTEGRATION/COMPLETE; returns transitions raised
-    async def sync(self, feature: Feature) -> str | None: ...      # event raised or None
+    def __init__(
+        self,
+        workflow: WorkflowManager,
+        repo: WorkflowRepository,
+        git: GitProvider,
+        ci: CiProvider,
+        ci_config: CiConfig,
+        evidence: EvidenceManager,
+        memory: MemoryManager,
+        integrations: IntegrationManager,
+        permissions: PermissionManager,
+        project: Project,
+        clock: Clock,
+        *,
+        worktrees_root: Path,
+    ) -> None: ...
+    async def sync_all(
+        self,
+    ) -> int: ...  # features in READY/IMPLEMENTING/INTEGRATION/COMPLETE; returns transitions raised
+    async def sync(self, feature: Feature) -> str | None: ...  # event raised or None
     async def run_feature_ci(self, feature: Feature) -> FeatureCiResult: ...
-    async def plan_rework(self, feature_id: FeatureId, *, actor_role: AgentRole, run_id: RunId | None) -> bool: ...
+    async def plan_rework(
+        self, feature_id: FeatureId, *, actor_role: AgentRole, run_id: RunId | None
+    ) -> bool: ...
 ```
 
 Done-dimension setting points (`NEW NAME:` rule set; MVP default `applicable_dimensions = [FUNCTIONAL, INTEGRATED, TESTED, QC_ACCEPTED]`):
@@ -1932,28 +2310,33 @@ Scheduler tick per `INTERFACES.md` §5.1 (steps 3–6), ordering rule and limits
 # src/walk/orchestrator/models.py
 class TickReport(FrozenModel):
     at: datetime
-    considered: list[WorkItemId]                         # in admission order
+    considered: list[WorkItemId]  # in admission order
     admitted: list[tuple[WorkItemId, RunId]]
-    skipped: list[tuple[WorkItemId, str]]                # (item, SkipReason value)
+    skipped: list[tuple[WorkItemId, str]]  # (item, SkipReason value)
+
 
 # src/walk/orchestrator/scheduler.py
 class SkipReason(StrEnum):
-    CAPACITY = "capacity"                 # running_count >= max_parallel_agents
-    ROLE_BUSY = "role_busy"               # running_by_role[role] >= RuntimePolicy.max_parallel_runs
-    CONFLICT = "conflict"                 # not can_run_parallel with a running item
-    ITEM_RUNNING = "item_running"         # item already has an active run
+    CAPACITY = "capacity"  # running_count >= max_parallel_agents
+    ROLE_BUSY = "role_busy"  # running_by_role[role] >= RuntimePolicy.max_parallel_runs
+    CONFLICT = "conflict"  # not can_run_parallel with a running item
+    ITEM_RUNNING = "item_running"  # item already has an active run
     ALREADY_SCHEDULED = "already_scheduled"
     ADMISSION_REJECTED = "admission_rejected"
     CROSS_MODEL = "cross_model"
     BUDGET = "budget"
-    PARKED = "parked"                     # e.g. wont_fix proposal pending (E03-S15)
+    PARKED = "parked"  # e.g. wont_fix proposal pending (E03-S15)
+
 
 ORDER_GROUPS = ("UNBLOCKED", "BUG", "OTHER")
 
+
 class Scheduler:
-    def order(self, items: list[WorkItem], *, unblocked_ids: set[WorkItemId]) -> list[WorkItem]: ...
+    def order(self, items: list[WorkItem], *, unblocked_ids: set[WorkItemId]) -> list[WorkItem]:
+        ...
         # key = (group index, severity rank for BUG (BLOCKER=0..TRIVIAL=3) else 0, priority (P0=0..P3=3), created_at, id)
-    def running_by_role(self) -> dict[AgentRole, int]: ...      # from AgentExecutor.running()
+
+    def running_by_role(self) -> dict[AgentRole, int]: ...  # from AgentExecutor.running()
     @property
     def last_report(self) -> TickReport | None: ...
 ```
@@ -2027,31 +2410,54 @@ Uses only public kernel APIs: `build_kernel(settings, overrides=KernelOverrides(
 
 ```python
 # tests/fakes/fake_model_adapter.py
-class FakeScript(WalkModel):                      # existing (E01-S19) + three fields
-    path_template: str = "src/Fake{i}.cs"         # formatted with i (1-based tool call) and item (work item id)
-    writes_files: bool = True                     # False → ALLOWed tool calls write nothing (REVIEW/QC/PLAN/TRIAGE runs)
-    evidence_files: dict[str, str] = {}           # relative path under the worktree's .walk/evidence/ → content, written before FINAL_OUTPUT
+class FakeScript(WalkModel):  # existing (E01-S19) + three fields
+    path_template: str = (
+        "src/Fake{i}.cs"  # formatted with i (1-based tool call) and item (work item id)
+    )
+    writes_files: bool = (
+        True  # False → ALLOWed tool calls write nothing (REVIEW/QC/PLAN/TRIAGE runs)
+    )
+    evidence_files: dict[
+        str, str
+    ] = {}  # relative path under the worktree's .walk/evidence/ → content, written before FINAL_OUTPUT
+
 
 class ScriptBook:
     """Callable[[AgentInput], FakeScript] for FakeModelAdapter: picks the script by (role, purpose, item id, visit)."""
+
     def __init__(self) -> None: ...
-    def add(self, role: AgentRole, purpose: str, item_id: str | None, script: FakeScript | Callable[[AgentInput], FakeScript], *, visit: int | None = None) -> None: ...
-    def __call__(self, agent_input: AgentInput) -> FakeScript: ...        # no match → AssertionError naming (role, purpose, item, visit)
-    visits: dict[tuple[str, str, str], int]                                  # (role, purpose, item) → runs served
+    def add(
+        self,
+        role: AgentRole,
+        purpose: str,
+        item_id: str | None,
+        script: FakeScript | Callable[[AgentInput], FakeScript],
+        *,
+        visit: int | None = None,
+    ) -> None: ...
+    def __call__(
+        self, agent_input: AgentInput
+    ) -> FakeScript: ...  # no match → AssertionError naming (role, purpose, item, visit)
+
+    visits: dict[tuple[str, str, str], int]  # (role, purpose, item) → runs served
+
 
 # tests/e2e/conftest.py
-class E03Scenario(WalkModel):                     # arbitrary_types_allowed
+class E03Scenario(WalkModel):  # arbitrary_types_allowed
     handle: KernelHandle
     repo: Path
     remote: Path
-    codex: FakeModelAdapter                       # provider "fake-codex", descriptor fake-codex/sim
-    claude: FakeModelAdapter                      # provider "fake-claude", descriptor fake-claude/sim
+    codex: FakeModelAdapter  # provider "fake-codex", descriptor fake-codex/sim
+    claude: FakeModelAdapter  # provider "fake-claude", descriptor fake-claude/sim
     unity: FakeUnityProvider
     book: ScriptBook
     feature_id: str
     story_ids: list[str]
     bug_id: str | None
-async def run_until_idle(handle: KernelHandle, *, max_ticks: int = 300) -> int: ...
+
+
+async def run_until_idle(handle: KernelHandle, *, max_ticks: int = 300) -> int:
+    ...
     # tick → await all runs/integration steps started by the tick → repeat until a tick admits nothing and no step is in flight; returns ticks used; exceeding max_ticks → AssertionError with the last TickReport
 ```
 
@@ -2138,11 +2544,20 @@ Recovery per ARCHITECTURE §5.3 and fallback per `INTERFACES.md` §5.3 (E01-S28)
 
 ```python
 # tests/fakes/fake_model_adapter.py
-class FakeScript(WalkModel):                         # + one field
-    hang_after_tool_calls: int | None = None         # after this many tool calls: set adapter.hung, then await forever (simulated hung process)
+class FakeScript(WalkModel):  # + one field
+    hang_after_tool_calls: int | None = (
+        None  # after this many tool calls: set adapter.hung, then await forever (simulated hung process)
+    )
+
+
 class FakeModelAdapter:
-    hung: asyncio.Event                              # set when a run hangs (test synchronisation)
-def interrupt_after_tool_calls(n: int, *, base: FakeScript) -> FakeScript: ...   # copy of base with hang_after_tool_calls=n (reused by E04-S15)
+    hung: asyncio.Event  # set when a run hangs (test synchronisation)
+
+
+def interrupt_after_tool_calls(
+    n: int, *, base: FakeScript
+) -> FakeScript: ...  # copy of base with hang_after_tool_calls=n (reused by E04-S15)
+
 
 # src/walk/cli/composition.py
 class KernelHandle:
@@ -2150,15 +2565,22 @@ class KernelHandle:
         """abandon_runs=True (tests only): cancel kernel tasks without checkpoints or run-state changes, close the DB and release
         KernelLock — the on-disk state equals a killed process. Default False = current graceful close."""
 
+
 # tests/e2e/conftest.py
-class FailoverScenario(WalkModel):                   # arbitrary_types_allowed
-    first: E03Scenario                               # handle before the crash (closed)
-    second: KernelHandle                             # restarted kernel, new kernel_instance
+class FailoverScenario(WalkModel):  # arbitrary_types_allowed
+    first: E03Scenario  # handle before the crash (closed)
+    second: KernelHandle  # restarted kernel, new kernel_instance
     story_id: str
     interrupted_run_id: str
-    checkpoint2_head: str                            # head_sha of the second PERIODIC checkpoint, captured before the crash
-async def simulate_crash(scenario: E03Scenario) -> None: ...          # await codex.hung; handle.close(abandon_runs=True)
-async def restart_kernel(scenario: E03Scenario) -> KernelHandle: ...  # build_kernel with the same repo/adapters, new kernel_instance
+    checkpoint2_head: str  # head_sha of the second PERIODIC checkpoint, captured before the crash
+
+
+async def simulate_crash(
+    scenario: E03Scenario,
+) -> None: ...  # await codex.hung; handle.close(abandon_runs=True)
+async def restart_kernel(
+    scenario: E03Scenario,
+) -> KernelHandle: ...  # build_kernel with the same repo/adapters, new kernel_instance
 ```
 
 #### Behavior
