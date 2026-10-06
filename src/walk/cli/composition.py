@@ -95,7 +95,7 @@ from walk.runtime import (
     PollingApprovalWaiter,
     RecoveryManager,
 )
-from walk.skills import DefaultSkillRegistry, SkillProjector
+from walk.skills import DefaultSkillRegistry, DriftReport, SkillProjector
 from walk.telemetry import (
     DefaultEvidenceManager,
     DefaultLedgerManager,
@@ -139,6 +139,8 @@ _JITTER: Final = 0.1  # ARCHITECTURE §5.1 retry backoff jitter: up to +10 %
 _NO_PROJECT: Final = "no project in .ai/kernel.db; run 'walk bootstrap'"
 _NO_DATABASE: Final = "no .ai/kernel.db; run 'walk bootstrap'"
 _GIT_EXCLUDE: Final = "info/exclude"
+PROJECTIONS_DIR: Final = Path(".walk") / "projections"
+"""Repo-level projection folder per provider (`walk skills sync`, startup drift check)."""
 _PROBE_TIMEOUT_S: Final = 30  # `claude --version` health probe
 
 
@@ -156,6 +158,9 @@ class KernelSettings(WalkModel):
         default=None, description="Jira webhook port (accepted, unused until E03-S05)."
     )
     skip_preflight: bool = Field(default=False, description="Skip the §26 preflight (E02-S02).")
+    strict: bool = Field(
+        default=False, description="Startup fails on skill projection drift (E02-S07)."
+    )
     json_output: bool = Field(default=False, description="Machine-readable CLI output.")
 
 
@@ -455,6 +460,7 @@ def build_kernel(
         project_key=key,
         kernel_instance=instance,
         poll_interval_s=settings.poll_interval_s,
+        startup_checks=_drift_check(skills, router, repo, strict=settings.strict),
     )
 
     async def wake_on_finish(run: AgentRun) -> None:
@@ -573,7 +579,7 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
         project_key=key,
     )
     renderer = TemplateRenderer(_AGENT_TEMPLATES, ai_root / "agents" / "templates")
-    skills = _skills(ai_root, policies, db, git)
+    skills = _skills(ai_root, policies, db, git, ledger=ledger, clock=clock, key=key)
     agents = DefaultAgentManager(
         constitutions, policies, permissions, tools, renderer, skills=skills
     )
@@ -581,7 +587,14 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
 
 
 def _skills(
-    ai_root: Path, policies: PolicyLoader, db: Database, git: GitProvider
+    ai_root: Path,
+    policies: PolicyLoader,
+    db: Database,
+    git: GitProvider,
+    *,
+    ledger: DefaultLedgerManager,
+    clock: Clock,
+    key: ProjectKey,
 ) -> DefaultSkillRegistry:
     """Kernel built-ins plus `.ai/agents/skills`; role defaults from the runtime policies.
 
@@ -602,6 +615,9 @@ def _skills(
         db=db,
         ai_root=ai_root,
         exclude_path=exclude_path,
+        ledger=ledger,
+        clock=clock,
+        project_key=key,
     )
 
 
@@ -647,7 +663,60 @@ def open_skill_registry(
     git = GitCliProvider(repo, runner, ledger, IdempotencyStore(db, time), time, project_key=key)
     ai_root = repo / _AI_DIR
     policies = PolicyLoader(_AGENT_DEFAULTS / "policies.yaml", ai_root / "agents" / "policies.yaml")
-    return _skills(ai_root, policies, db, git), db
+    return _skills(ai_root, policies, db, git, ledger=ledger, clock=time, key=key), db
+
+
+def skill_drift_reports(repo: Path) -> dict[str, DriftReport]:
+    """Drift of each kernel provider's projection under `PROJECTIONS_DIR` (no database).
+
+    Raises:
+        ConfigError: A skill file or the projection lock is invalid.
+    """
+    ai_root = repo / _AI_DIR
+    registry = DefaultSkillRegistry(
+        _BUILTIN_SKILLS, ai_root / "agents" / "skills", {}, ai_root=ai_root
+    )
+    reports: dict[str, DriftReport] = {}
+    for projector in skill_projectors():
+        worktree = repo / PROJECTIONS_DIR / projector.provider
+        reports[projector.provider] = asyncio.run(registry.check_drift([projector], str(worktree)))
+    return reports
+
+
+def _drift_check(
+    skills: DefaultSkillRegistry, router: DefaultModelRouter, repo: Path, *, strict: bool
+) -> Callable[[], Awaitable[None]]:
+    """ARCHITECTURE §3.4 step 3: skill projection drift of every configured provider.
+
+    Each provider's repo-level projection (`PROJECTIONS_DIR`) is checked; drift fails
+    startup when ``strict``, otherwise it is regenerated (one ``CONTEXT_UPDATED`` each).
+    """
+
+    async def check() -> None:
+        for projector in _configured_projectors(router):
+            worktree = repo / PROJECTIONS_DIR / projector.provider
+            worktree.mkdir(parents=True, exist_ok=True)
+            report = await skills.check_drift([projector], str(worktree))
+            if report.ok:
+                continue
+            if strict:
+                msg = f"skill projections drift for {projector.provider} (strict startup)"
+                raise ConfigError(
+                    msg, detail={"provider": projector.provider, **report.model_dump()}
+                )
+            await skills.regenerate([projector], str(worktree), report)
+
+    return check
+
+
+def _configured_projectors(router: DefaultModelRouter) -> list[SkillProjector]:
+    """One projector per provider that serves an enabled model."""
+    projectors: dict[str, SkillProjector] = {}
+    for descriptor in router.registry().models.values():
+        if descriptor.enabled and descriptor.provider not in projectors:
+            adapter = router.adapter_for(descriptor.id)
+            projectors[descriptor.provider] = adapter.skill_projector()
+    return list(projectors.values())
 
 
 def build_status_reader(repo: Path) -> StatusBuilder:

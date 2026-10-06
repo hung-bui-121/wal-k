@@ -107,3 +107,23 @@ def test_doctor_exit_one_on_non_config_errors(
 
     assert result.exit_code == 1
     assert "probe crashed" in result.stderr
+
+
+def test_doctor_prints_skills_drift_without_changing_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_work_provider(tmp_path, "local")
+    _use(monkeypatch, build_manager(tmp_path, script_environment(FakeSubprocessRunner())))
+
+    fresh = runner.invoke(app, ["doctor", "--repo", str(tmp_path)])
+    lock = tmp_path / ".ai" / "agents" / "projections.lock.yaml"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("projections: [broken\n", encoding="utf-8")
+    broken = runner.invoke(app, ["doctor", "--repo", str(tmp_path)])
+
+    assert fresh.exit_code == 0, fresh.output
+    assert "skills:" in fresh.stdout
+    assert "  claude: missing 5" in fresh.stdout
+    assert "  codex: missing 5" in fresh.stdout
+    assert broken.exit_code == 0, broken.output
+    assert "skills: error:" in broken.stdout

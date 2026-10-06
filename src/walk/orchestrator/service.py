@@ -1,12 +1,14 @@
 """`DefaultOrchestrator`: startup recovery, the tick loop with wake-ups, the status snapshot.
 
-ARCHITECTURE §3.4 steps 5-6 (E01-S29): steps 1-3 belong to the daemon (E01-S30) and E02;
+ARCHITECTURE §3.4 steps 5-6 (E01-S29), plus the injected step-3 checks (E02-S07); steps 1-2
+belong to the daemon (E01-S30) and E02;
 step 4 (builtin hooks) is done by the composition root before `start` (ADR-0016). Methods whose
 behaviour belongs to a later story raise ``ConfigError("implemented in <ID>")``.
 """
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from typing import Final, NoReturn
 
 from walk.common.clock import Clock
@@ -51,6 +53,7 @@ class DefaultOrchestrator:
         project_key: ProjectKey,
         kernel_instance: str,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+        startup_checks: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Wire the orchestrator.
 
@@ -65,6 +68,8 @@ class DefaultOrchestrator:
             project_key: Project of the kernel.
             kernel_instance: This kernel process.
             poll_interval_s: Seconds between ticks without a wake-up.
+            startup_checks: ARCHITECTURE §3.4 step 3 checks (skill drift, E02-S07), awaited
+                before recovery; an exception aborts startup before ``PROJECT_STARTED``.
         """
         self._scheduler = scheduler
         self._executor = executor
@@ -76,6 +81,7 @@ class DefaultOrchestrator:
         self._project_key = project_key
         self._kernel_instance = kernel_instance
         self._poll_interval_s = poll_interval_s
+        self._startup_checks = startup_checks
         self._wake = asyncio.Event()
         self._stopping = False
         self._loop_exited: asyncio.Event | None = None
@@ -243,7 +249,9 @@ class DefaultOrchestrator:
         _deferred("force_review", "E03-S16")
 
     async def _startup(self) -> None:
-        """ARCHITECTURE §3.4 steps 5-6: recovery, ``PROJECT_STARTED``, ``ON_PROJECT_START``."""
+        """ARCHITECTURE §3.4 steps 3, 5-6: checks, recovery, ``PROJECT_STARTED``, hook."""
+        if self._startup_checks is not None:
+            await self._startup_checks()
         report = await self._recovery.recover()
         payload: dict[str, object] = {
             "kernel_instance": self._kernel_instance,

@@ -104,6 +104,16 @@ class FakeSkillProjector:
             for skill in skills
         }
 
+    def scan(self, worktree_path: str) -> dict[str, str]:
+        """``.walk/fake-skills/<name>.md`` files present → sha256 of their bytes."""
+        root = Path(worktree_path) / ".walk" / "fake-skills"
+        if not root.is_dir():
+            return {}
+        return {
+            path.stem: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.glob("*.md"))
+        }
+
 
 def _fake_skill_path(worktree_path: str, skill: Skill) -> Path:
     return Path(worktree_path) / ".walk" / "fake-skills" / f"{skill.name}.md"

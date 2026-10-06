@@ -759,7 +759,7 @@ Level-0 decisions:
 
 ### E02-S06 — Skill projections for Claude and Codex, lock file, `walk skills list/sync`
 
-**Status:** DONE (pending)
+**Status:** DONE (11d1d66)
 **Type:** feat
 **Requirements:** §28, §29, §137, §138
 **Depends on:** E02-S05, E01-S21, E01-S22, E01-S25
@@ -945,7 +945,7 @@ For the owner:
 
 ### E02-S07 — Skill drift detection, `walk skills check-drift`, startup check
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §28, §27, §137, §138
 **Depends on:** E02-S06, E02-S02
@@ -970,6 +970,9 @@ For the owner:
 | `src/walk/cli/composition.py` | modify | `KernelSettings.strict: bool = False` |
 | `tests/skills/test_drift.py` | create | — |
 | `tests/cli/test_cmd_skills_drift.py` | create | — |
+| `src/walk/skills/protocols.py`, `src/walk/model_router/adapters/claude/projector.py`, `src/walk/model_router/adapters/codex/projector.py`, `tests/fakes/fake_model_adapter.py` | modify | `SkillProjector.scan` (contract addition, see Evidence) |
+| `docs/01-architecture/ARCHITECTURE.md`, `docs/01-architecture/INTERFACES.md` | modify | — (§4.3 write point, §1.11 `scan`) |
+| `tests/cli/test_cmd_doctor.py`, `tests/cli/test_cmd_work.py`, `tests/skills/test_service.py` | modify | — |
 
 #### Interface contract
 See INTERFACES.md §1.11 `SkillRegistry.check_drift`; DOMAIN-MODEL §4.6 `DriftReport`.
@@ -1024,11 +1027,53 @@ CLI: `walk skills check-drift [--strict] [--worktree PATH]` → exit 0 when `ok`
 
 #### Notes
 - ADR-0007 D-3; Invariant 11; ARCHITECTURE §3.4 step 3.
-- `NEW NAME:` `compute_drift`, `DefaultSkillRegistry.regenerate`, `KernelSettings.strict`.
+- `NEW NAME:` `compute_drift`, `DefaultSkillRegistry.regenerate`, `KernelSettings.strict`; from implementation: `SkillProjector.scan`, `DefaultSkillRegistry(ledger=, clock=, project_key=)`, `DefaultOrchestrator(startup_checks=)`, `PROJECTIONS_DIR`, `skill_drift_reports`, `skills_check_drift`.
 - Commit subject: `feat: add skill projection drift detection (E02-S07)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`):
+```
+362 files already formatted
+All checks passed!
+Success: no issues found in 360 source files
+Contracts: 20 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1131 passed, 3 deselected in 415.07s
+```
+Touched modules: `skills/drift.py`, `skills/protocols.py`, `orchestrator/service.py`, `cli/composition.py`, `cli/cmd_doctor.py`, `claude/projector.py` 100 %; `skills/service.py` 98 %; `cli/cmd_skills.py` 98 %; `codex/projector.py` 97 %.
+
+Demo on the E02-S06 scratch repository (seeded with the test helper, because bootstrap is BLOCKED):
+```
+$ walk skills sync --repo <tmp>/game
+projected 5 skills for 2 providers
+$ walk skills check-drift --repo <tmp>/game
+ok                                                       (exit 0)
+$ echo "hand edit" >> .walk/projections/claude/.claude/skills/git-hygiene/SKILL.md
+$ walk skills check-drift --strict --repo <tmp>/game
+modified: git-hygiene (projection edited)                (exit 1)
+$ walk skills check-drift --repo <tmp>/game
+modified: git-hygiene (projection edited)
+regenerated 1 projections                                (exit 0)
+$ walk skills check-drift --strict --repo <tmp>/game
+ok                                                       (exit 0)
+```
+
+Contract additions (INTERFACES / ARCHITECTURE updated in this commit):
+- **`SkillProjector.scan(worktree_path) -> dict[str, str]`** maps each skill projected on disk to the sha256 of its content, as `project` hashes it. Behavior 1 needs Codex drift attributed to one sub-section, and `walk.skills` cannot parse a provider format (the Codex markers live in `model_router`, which `skills` may not import). Implemented for Claude (`SKILL.md` file bytes), Codex (the entry text inside the managed block; headings tolerate CRLF, so a converted section reads as *modified*, not *missing*) and `FakeSkillProjector`.
+- **ARCHITECTURE §4.3** gains the write point `skills.SkillRegistry` (`DefaultSkillRegistry.regenerate`) → `CONTEXT_UPDATED` with payload `skills_drift`.
+- `DefaultSkillRegistry` gets keyword-only `ledger`, `clock` and `project_key` (needed by `regenerate`).
+- `DefaultOrchestrator` gets keyword-only `startup_checks`, awaited first in startup (before recovery, `PROJECT_STARTED` and `ON_PROJECT_START`). The composition root wires the drift check into it.
+- Composition gains `PROJECTIONS_DIR` and `skill_drift_reports(repo)` (used by doctor).
+
+Level-0 decisions:
+- **`compute_drift` key convention.** `on_disk` keys are `<target_path>#<skill>`: the target file, anchored to the skill's projected content. Codex entries all share `AGENTS.md`, so a bare target path could not carry per-skill hashes (Behavior 1). Keys of skills found on disk but not locked carry an empty target (`#<name>`). They are orphaned when not canonical, and missing (no lock entry) when canonical. A modified entry that is also missing counts as missing only.
+- `check_drift` runs `compute_drift` per projector over that provider's lock entries and merges the reports (sorted, de-duplicated). It never writes. It needs only `ai_root`, so doctor uses a registry without a database.
+- **`regenerate`.** Per provider it re-projects the canonical skills already locked for that provider, plus `missing` and `modified`. Unchanged files are rewritten byte-identical; the Codex section is rebuilt whole, which removes orphaned sub-sections. An orphaned entry's own file is deleted. When it lies in a folder named after the skill (`.claude/skills/<name>/`), the folder goes too, including copied `references/`/`scripts/`. Orphaned lock entries of the regenerated providers are pruned. One `CONTEXT_UPDATED` (actor KERNEL) is written per `regenerate` call. On-disk orphans with no lock entry are reported but not deleted (their location is provider-specific).
+- **Startup step 3.** One projector per provider that serves an enabled model (`router.adapter_for(...).skill_projector()`) is checked on `<repo>/.walk/projections/<provider>/`. `KernelSettings.strict=True` → `ConfigError("skill projections drift for <provider> (strict startup)")` before `PROJECT_STARTED`. Otherwise drift is regenerated, with one ledger event per drifted provider; a fresh repository therefore projects everything on first start. There is no `walk run --strict` flag (not in the Files table; E02-S15 owns strict mode in doctor).
+- **`walk skills check-drift`** checks both kernel providers (claude, codex), like `sync`, in `--worktree` or the repo-level folders. The cause of a modification is re-derived from the lock: a lock entry whose `generated_from_sha256` differs from the canonical sha means `canonical changed`, otherwise `projection edited`. `regenerated N projections` counts the drift items regenerated (missing + modified + orphaned, per provider).
+- **`walk doctor`** prints a `skills:` section with one line per provider: `ok` or `missing N, modified N, orphaned N`. A skills or lock error prints `skills: error: ...`. Neither changes the exit code, and `--json` output stays the manifest.
+- Superseded test: `tests/skills/test_service.py::test_drift_names_its_story` (deferred-method check) is removed; `tests/skills/test_drift.py::test_check_drift_and_regenerate_require_wiring` replaces it.
+- `tests/cli/test_cmd_work.py` `repo` fixture now runs `git init`. Its daemon test starts a kernel, and startup step 3 resolves `info/exclude` through git, so a kernel started outside a git repository now fails fast. A game repository is always a git repository (bootstrap and preflight require git).
 
 ---
 

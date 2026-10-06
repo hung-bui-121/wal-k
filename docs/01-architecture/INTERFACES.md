@@ -570,6 +570,12 @@ class SkillProjector(Protocol):
         `info/exclude` (via GitProvider.git_path), upserts `skill_projections` and merges the lock
         (`.ai/agents/projections.lock.yaml`, worktree-relative targets; unchanged entries keep `generated_at`)."""
 
+    def scan(self, worktree_path: str) -> dict[str, str]:
+        """E02-S07: skills projected in the worktree → sha256 of their on-disk content (the content `project`
+        hashes: a file, or a Codex `AGENTS.md` sub-section). `DefaultSkillRegistry.check_drift` keys it as
+        `<target_path>#<skill>` for `walk.skills.drift.compute_drift`; `DefaultSkillRegistry.regenerate` re-projects
+        drifted providers and appends one `CONTEXT_UPDATED` (`skills_drift`)."""
+
 
 class SkillRegistry(Protocol):
     """§28–§29. Hosted by walk.skills."""

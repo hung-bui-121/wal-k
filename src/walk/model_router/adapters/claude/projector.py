@@ -52,6 +52,16 @@ class ClaudeSkillProjector:
                     files[str(target / path.relative_to(source))] = path.read_bytes()
         return files
 
+    def scan(self, worktree_path: str) -> dict[str, str]:
+        """``.claude/skills/<name>/SKILL.md`` files present → sha256 of their bytes."""
+        root = Path(worktree_path) / ".claude" / "skills"
+        if not root.is_dir():
+            return {}
+        return {
+            path.parent.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.glob("*/SKILL.md"))
+        }
+
 
 def _skill_dir(worktree_path: str, skill: Skill) -> Path:
     return Path(worktree_path) / ".claude" / "skills" / skill.name

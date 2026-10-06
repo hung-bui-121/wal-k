@@ -354,6 +354,7 @@ Agents never hold credentials for Jira/Git remotes/stores (§91). All such opera
 | `debate.DebateManager` | `DEBATE_OPENED`, `DEBATE_POSITION`, `DEBATE_RESOLVED` |
 | `decisions.DecisionManager` | `DECISION_RECORDED`, `ESCALATION_RAISED` |
 | `memory.MemoryManager` | `CONTEXT_UPDATED`, `CONTEXT_FRESHNESS`, `ARTIFACT_APPROVED` |
+| `skills.SkillRegistry` (`DefaultSkillRegistry.regenerate`, E02-S07) | `CONTEXT_UPDATED` (payload `skills_drift`) |
 | `telemetry.EvidenceManager` | `EVIDENCE_RECORDED` |
 | `hooks.HookManager` | `HOOK_EXECUTED`, `HOOK_FAILED` |
 | `improvement.ImprovementManager` | `IMPROVEMENT_OBSERVATION`, `IMPROVEMENT_CANDIDATE`, `BEHAVIOR_VERSION_CHANGED` |

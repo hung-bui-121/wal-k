@@ -1,26 +1,31 @@
 """`DefaultSkillRegistry`: kernel built-ins plus project skills (§28-§29; ADR-0007)."""
 
 import os
+import shutil
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Final
 
+from walk.common.clock import Clock
 from walk.common.enums import LearningScope
 from walk.common.errors import ConfigError
-from walk.common.ids import SkillName
+from walk.common.ids import ProjectKey, SkillName
 from walk.common.roles import AgentRole
 from walk.persistence import Database, UnitOfWork
+from walk.skills.drift import compute_drift
 from walk.skills.errors import SkillLoadError
 from walk.skills.loader import discover_skill_dirs, parse_skill_file
 from walk.skills.lockfile import LOCK_PATH, ProjectionLock
 from walk.skills.models import DriftReport, Skill, SkillProjection
 from walk.skills.protocols import SkillProjector
 from walk.skills.repository import SkillProjectionRepository
+from walk.telemetry.models import LedgerEvent, LedgerEventKind
+from walk.telemetry.protocols import LedgerManager
 
 _SKILL_FILE: Final = "SKILL.md"
-_DRIFT: Final = "E02-S07"
 _NOT_CONFIGURED: Final = (
-    "skill projection is not configured (database, .ai root and git exclude resolver)"
+    "skill projection is not configured (database, .ai root, git exclude resolver; "
+    "regeneration also needs ledger, clock and project key)"
 )
 
 ExcludePath = Callable[[str], Awaitable[str]]
@@ -39,6 +44,9 @@ class DefaultSkillRegistry:
         db: Database | None = None,
         ai_root: Path | None = None,
         exclude_path: ExcludePath | None = None,
+        ledger: LedgerManager | None = None,
+        clock: Clock | None = None,
+        project_key: ProjectKey | None = None,
     ) -> None:
         """Wire the registry (nothing is read until `load`).
 
@@ -50,6 +58,9 @@ class DefaultSkillRegistry:
             ai_root: `.ai/` folder holding the projection lock (needed by `project_all`).
             exclude_path: Resolves a worktree's ``info/exclude`` through git (needed by
                 `project_all`); `walk.skills` may not import `GitProvider` (ARCHITECTURE §2.2).
+            ledger: Write point of the ``CONTEXT_UPDATED`` event of `regenerate` (E02-S07).
+            clock: Stamps that event.
+            project_key: Project of that event.
         """
         self._builtin_root = builtin_root
         self._project_root = project_root
@@ -57,6 +68,9 @@ class DefaultSkillRegistry:
         self._db = db
         self._ai_root = ai_root
         self._exclude_path = exclude_path
+        self._ledger = ledger
+        self._clock = clock
+        self._project_key = project_key
         self._skills: dict[SkillName, Skill] | None = None
 
     def load(self) -> list[Skill]:
@@ -141,14 +155,70 @@ class DefaultSkillRegistry:
     async def check_drift(
         self, projectors: list[SkillProjector], worktree_path: str
     ) -> DriftReport:
-        """Deferred to E02-S07.
+        """Compare each projector's on-disk projection in ``worktree_path`` with the lock.
+
+        Never writes. Per provider, `compute_drift` gets the provider's lock entries and the
+        hashes `SkillProjector.scan` reads (Codex: per sub-section); the reports are merged.
 
         Raises:
-            ConfigError: Always.
+            ConfigError: The registry was built without ``ai_root``, or the lock is invalid.
         """
-        del projectors
-        msg = f"implemented in {_DRIFT}"
-        raise ConfigError(msg, detail={"story": _DRIFT, "worktree": worktree_path})
+        if self._ai_root is None:
+            raise ConfigError(_NOT_CONFIGURED, detail={"worktree": worktree_path})
+        canonical = self.load()
+        lock = ProjectionLock.load(self._ai_root)
+        reports: list[DriftReport] = []
+        for projector in projectors:
+            entries = lock.for_provider(projector.provider)
+            scanned = projector.scan(worktree_path)
+            on_disk: dict[str, str | None] = {
+                f"{entry.target_path}#{entry.skill}": scanned.get(entry.skill) for entry in entries
+            }
+            locked = {entry.skill for entry in entries}
+            on_disk.update({f"#{name}": sha for name, sha in scanned.items() if name not in locked})
+            reports.append(compute_drift(canonical, entries, on_disk))
+        return _merged(reports)
+
+    async def regenerate(
+        self, projectors: list[SkillProjector], worktree_path: str, report: DriftReport
+    ) -> list[SkillProjection]:
+        """project_all for affected skills; ledger CONTEXT_UPDATED payload {'skills_drift': report}.
+
+        Per provider the canonical skills it has locked, plus ``missing`` and ``modified``,
+        are projected again (unchanged files are rewritten byte-identical; a Codex section is
+        rebuilt whole). Orphaned skills lose their own projection files and their lock entries;
+        a file shared with other skills (``AGENTS.md``) is rebuilt without them.
+
+        Raises:
+            ConfigError: The registry lacks projection or ledger wiring, or the lock is invalid.
+        """
+        if self._ai_root is None or self._ledger is None or self._clock is None:
+            raise ConfigError(_NOT_CONFIGURED, detail={"worktree": worktree_path})
+        if self._project_key is None:
+            raise ConfigError(_NOT_CONFIGURED, detail={"worktree": worktree_path})
+        canonical = {skill.name: skill for skill in self.load()}
+        lock = ProjectionLock.load(self._ai_root)
+        affected = {*report.missing, *report.modified}
+        orphaned = set(report.orphaned)
+        projections: list[SkillProjection] = []
+        for projector in projectors:
+            entries = lock.for_provider(projector.provider)
+            _remove_orphan_files(entries, orphaned, Path(worktree_path))
+            locked = {entry.skill for entry in entries}
+            wanted = [s for name, s in canonical.items() if name in locked or name in affected]
+            projections += await self.project_all([projector], worktree_path, wanted)
+        _prune_lock(self._ai_root, {p.provider for p in projectors}, orphaned)
+        await self._ledger.append(
+            LedgerEvent(
+                kind=LedgerEventKind.CONTEXT_UPDATED,
+                at=self._clock.now(),
+                project_key=self._project_key,
+                actor_role=AgentRole.KERNEL,
+                outcome="OK",
+                payload={"skills_drift": report.model_dump(mode="json")},
+            )
+        )
+        return projections
 
     def _loaded(self) -> dict[SkillName, Skill]:
         if self._skills is None:
@@ -201,3 +271,45 @@ def _merge_lock(ai_root: Path, worktree: Path, projections: list[SkillProjection
 
 def _relative(path: Path, worktree: Path) -> str:
     return path.resolve().relative_to(worktree.resolve()).as_posix()
+
+
+def _merged(reports: list[DriftReport]) -> DriftReport:
+    missing = sorted({name for report in reports for name in report.missing})
+    modified = sorted({name for report in reports for name in report.modified})
+    orphaned = sorted({name for report in reports for name in report.orphaned})
+    return DriftReport(
+        missing=missing,
+        modified=modified,
+        orphaned=orphaned,
+        ok=not (missing or modified or orphaned),
+    )
+
+
+def _remove_orphan_files(
+    entries: list[SkillProjection], orphaned: set[str], worktree: Path
+) -> None:
+    """Delete the target of each orphaned entry unless a kept skill shares it.
+
+    A target inside a folder named after the skill (``.claude/skills/<name>/SKILL.md``) takes
+    the whole folder with it (copied ``references/`` and ``scripts/`` included).
+    """
+    kept_targets = {entry.target_path for entry in entries if entry.skill not in orphaned}
+    for entry in entries:
+        if entry.skill not in orphaned or entry.target_path in kept_targets:
+            continue
+        target = worktree / entry.target_path
+        if target.parent.name == entry.skill and target.parent != worktree:
+            shutil.rmtree(target.parent, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+
+
+def _prune_lock(ai_root: Path, providers: set[str], orphaned: set[str]) -> None:
+    lock = ProjectionLock.load(ai_root)
+    kept = [
+        entry
+        for entry in lock.projections
+        if not (entry.provider in providers and entry.skill in orphaned)
+    ]
+    if len(kept) != len(lock.projections):
+        ProjectionLock(projections=kept).write(ai_root)

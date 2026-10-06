@@ -11,7 +11,7 @@ from typing import Annotated, Final
 
 import typer
 
-from walk.cli.composition import open_integrations
+from walk.cli.composition import open_integrations, skill_drift_reports
 from walk.cli.output import exit_with, render_table
 from walk.common.clock import SystemClock
 from walk.common.errors import ConfigError, WalkError
@@ -59,6 +59,8 @@ def doctor(
     except WalkError as exc:
         exit_with(exc)
     typer.echo(_render(manifest, as_json=as_json))
+    if not as_json:
+        typer.echo(_skills_section(path))
 
 
 def _render(manifest: EnvironmentManifest, *, as_json: bool) -> str:
@@ -82,6 +84,27 @@ def _render(manifest: EnvironmentManifest, *, as_json: bool) -> str:
     if manifest.drift_from is not None and manifest.drift_items:
         lines += ["", f"drift from {manifest.drift_from}:"]
         lines += [f"  {item}" for item in manifest.drift_items]
+    return "\n".join(lines)
+
+
+def _skills_section(repo: Path) -> str:
+    """``skills`` lines: ``ok`` or counts per drift category; never changes the exit code."""
+    try:
+        reports = skill_drift_reports(repo)
+    except WalkError as exc:
+        return f"\nskills: error: {exc.message}"
+    lines = ["", "skills:"]
+    for provider, report in reports.items():
+        counts = [
+            f"{label} {len(names)}"
+            for label, names in (
+                ("missing", report.missing),
+                ("modified", report.modified),
+                ("orphaned", report.orphaned),
+            )
+            if names
+        ]
+        lines.append(f"  {provider}: {', '.join(counts) or 'ok'}")
     return "\n".join(lines)
 
 

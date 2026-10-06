@@ -24,6 +24,14 @@ class SkillProjector(Protocol):
         """
         ...
 
+    def scan(self, worktree_path: str) -> dict[str, str]:
+        """Skills projected in ``worktree_path`` → sha256 of their content as found on disk.
+
+        The content hashed is the one `project` hashes (a file, or a sub-section of a shared
+        file), so an unedited projection matches its `SkillProjection.content_sha256` (E02-S07).
+        """
+        ...
+
 
 class SkillRegistry(Protocol):
     """§28-§29. Hosted by walk.skills."""

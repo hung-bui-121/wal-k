@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 import threading
 import time
 from datetime import UTC, datetime
@@ -43,7 +44,9 @@ runner = CliRunner()
 
 @pytest.fixture
 def repo(tmp_path: Path, fake_clock: FakeClock) -> Path:
-    """A repository whose database holds FEAT-0001 and STORY-0001."""
+    """A git repository whose database holds FEAT-0001 and STORY-0001."""
+    # The daemon's startup step 3 (skill drift, E02-S07) resolves info/exclude through git.
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
     db = Database(tmp_path / ".ai" / "kernel.db")
     MigrationRunner(db, "project").apply_pending()
     ledger = DefaultLedgerManager(db, LedgerRepository(db), SequentialIdFactory(), fake_clock)

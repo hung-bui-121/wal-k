@@ -6,6 +6,7 @@ Each skill is one ``### <name> (v<version>)`` sub-section between `AGENTS_MD_STA
 """
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Final
 
@@ -18,6 +19,10 @@ AGENTS_MD_START: Final = "<!-- walk:skills:start -->"
 AGENTS_MD_END: Final = "<!-- walk:skills:end -->"
 INLINE_LIMIT_BYTES: Final = 4096
 _AGENTS_MD: Final = "AGENTS.md"
+# Tolerates CRLF so a converted section reads as edited (modified), not as absent (missing).
+_ENTRY_HEADING: Final = re.compile(
+    r"^### ([a-z0-9]+(?:-[a-z0-9]+)*) \(v\d+\.\d+\)\r?$", re.MULTILINE
+)
 _HEADER: Final = (
     "## Skills\n\nManaged by WAL-K from the canonical skills; edits here are overwritten.\n"
 )
@@ -67,6 +72,27 @@ class CodexSkillProjector:
                 linked = Path(worktree_path) / ".walk" / "skills" / skill.name / "SKILL.md"
                 files[str(linked)] = _linked_file(skill).encode("utf-8")
         return files
+
+    def scan(self, worktree_path: str) -> dict[str, str]:
+        """Sub-sections of the managed ``AGENTS.md`` block → sha256 of each entry's text."""
+        target = Path(worktree_path) / _AGENTS_MD
+        if not target.is_file():
+            return {}
+        text = target.read_bytes().decode("utf-8")
+        first, last = text.find(AGENTS_MD_START), text.rfind(AGENTS_MD_END)
+        if first == -1 or last < first:
+            return {}
+        inner = text[first + len(AGENTS_MD_START) : last]
+        headings = list(_ENTRY_HEADING.finditer(inner))
+        entries: dict[str, str] = {}
+        for index, heading in enumerate(headings):
+            is_last = index + 1 == len(headings)
+            end = len(inner) if is_last else headings[index + 1].start()
+            chunk = inner[heading.start() : end]
+            if not is_last:
+                chunk = chunk.removesuffix("\n").removesuffix("\r")  # the joining blank line
+            entries[heading.group(1)] = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+        return entries
 
 
 def _inline(skill: Skill) -> bool:

@@ -83,10 +83,3 @@ def test_for_role_missing_required_raises() -> None:
         _registry().for_role(AgentRole.QC, ["missing-skill", "git-hygiene", "other-missing"])
 
     assert raised.value.detail["missing"] == ["missing-skill", "other-missing"]
-
-
-async def test_drift_names_its_story() -> None:
-    registry = _registry()
-
-    with pytest.raises(ConfigError, match="E02-S07"):
-        await registry.check_drift([], "/wt")
