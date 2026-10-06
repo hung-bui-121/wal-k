@@ -48,7 +48,7 @@ Planning decisions fixed for this epic (Autonomy Level 0 unless marked `NEW NAME
 
 **Status:** TODO
 **Type:** docs
-**Requirements:** §135 (Stage 5), §58 (Definition of Ready applied to stories)
+**Requirements:** §135 (Stage 5), §58 (Definition of Ready applied to stories), §5 (non-goals: refine rejects stories that drift into out-of-scope work)
 **Depends on:** E04-R01
 **Effort:** LOW   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC

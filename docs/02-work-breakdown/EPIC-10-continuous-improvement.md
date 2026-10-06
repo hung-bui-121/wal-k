@@ -60,7 +60,7 @@ Parallel sets (WBS §8): `{S01→S02} ∥ {S03→S06}`; `{S07} ∥ {S08} ∥ {S0
 
 **Status:** TODO
 **Type:** docs
-**Requirements:** §135 (Stage 10), §58, §94, §119, §139
+**Requirements:** §135 (Stage 10), §58, §94, §119, §139, §5 (non-goals: refine rejects stories that drift into out-of-scope work)
 **Depends on:** E09-R01
 **Effort:** LOW   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC
@@ -132,7 +132,7 @@ _pending_
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §96, §99, §106, §110, §119, §6.11, §32 (`ON_IMPROVEMENT_OBSERVATION`)
+**Requirements:** §96, §99, §106, §110, §119, §6.11, §32 (`ON_IMPROVEMENT_OBSERVATION`), §95 (production exposes bottlenecks the kernel must learn from), §100 (improvement scope enum)
 **Depends on:** E10-X01, E04-S13
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
@@ -249,7 +249,7 @@ _pending_
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §99, §118, §94, §102, §110, §32 (`ON_PHASE_REVIEW_START`), §6.11
+**Requirements:** §99, §118, §94, §102, §110, §32 (`ON_PHASE_REVIEW_START`), §6.11, §95
 **Depends on:** E10-S01
 **Effort:** MEDIUM   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev
@@ -382,7 +382,7 @@ _pending_
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §119, §110, §111, §6.11, §137 (Inv. 13)
+**Requirements:** §119, §110, §111, §6.11, §137 (Inv. 13), §100 (only listed scopes are improvable)
 **Depends on:** E10-X01
 **Effort:** MEDIUM   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev

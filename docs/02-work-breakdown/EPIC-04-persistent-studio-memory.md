@@ -1171,7 +1171,7 @@ _pending_
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §132, §22, §37, §42, §44, §130, §137 (Inv. 2, 8, 12), §138 (Context Drift)
+**Requirements:** §132, §22, §37, §42, §44, §130, §137 (Inv. 2, 8, 12), §138 (Context Drift), §3 (continuity across model and session loss)
 **Depends on:** E04-S14, E04-S12, E04-S10, E04-S06, E03-S20
 **Effort:** HIGH   **Risk:** HIGH
 **Owner role:** QC   **Reviewer role:** LeadDev

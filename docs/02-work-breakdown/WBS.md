@@ -444,7 +444,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E03-S09 | Feature PLAN and DESIGN flow, `walk feature add` | feat | E03-S08, E03-S07, E01-S16 | HIGH | TODO |
 | E03-S10 | `UnityBatchProvider` and `com.walk.ci` editor package | feat | E01-S23, E02-S02 | HIGH | TODO |
 | E03-S11 | `LocalCiProvider.run_pipeline`, build/test hooks and evidence | feat | E03-S10, E01-S06 | MEDIUM | TODO |
-| E03-S12 | Story integration step: squash, push, PR, CI | feat | E03-S11, E03-S01, E01-S29 | HIGH | TODO |
+| E03-S12 | Story integration step: squash, push, PR, CI, `integration_passed`/`ci_failed` | feat | E03-S11, E03-S01, E01-S29 | HIGH | TODO |
 | E03-S13 | Lead Dev review flow | feat | E03-S07, E03-S08 | MEDIUM | TODO |
 | E03-S14 | QC flow and bug creation | feat | E03-S08, E03-S07, E03-S11 | HIGH | TODO |
 | E03-S15 | Bug loop: triage, fix, review, re-test, reopen | feat | E03-S14 | HIGH | TODO |
@@ -510,7 +510,7 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E08-S03 | `AssetProvider` implementation: OpenArt | feat | E08-S02 | MEDIUM | TODO |
 | E08-S04 | `asset.generate` kernel tool, idempotency, `EXTERNAL_CREDITS` cost | feat | E08-S02, E01-S26 | MEDIUM | TODO |
 | E08-S05 | `AssetProvenance` files and evidence | feat | E08-S04 | MEDIUM | TODO |
-| E08-S06 | Asset validation via `UnityProvider.validate_assets` | feat | E08-S04, E03-S10 | MEDIUM | TODO |
+| E08-S06 | Asset validation via `UnityProvider.validate_assets` and `com.walk.ci` | feat | E08-S04, E03-S10 | MEDIUM | TODO |
 | E08-S07 | Art Director review flow and ART/DESIGN done dimensions | feat | E08-S01, E08-S06, E03-S17 | MEDIUM | TODO |
 | E08-S08 | Unity MCP provider (`ToolKind.MCP`) | feat | E08-X01, E01-S14 | HIGH | TODO |
 | E08-S09 | Epic gate: asset generation → validation → approval (e2e) | feat | E08-S05, E08-S07 | MEDIUM | TODO |

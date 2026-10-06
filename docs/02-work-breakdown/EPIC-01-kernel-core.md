@@ -62,7 +62,7 @@ Conventions that apply to every story below (from WBS §3): implementation class
 
 **Status:** TODO
 **Type:** chore
-**Requirements:** §4 (objectives 12, 13), §7, §122, §125, §137 (Inv. 1)
+**Requirements:** §4 (objectives 12, 13), §7, §122, §125, §137 (Inv. 1), §2 (production orchestration kernel, not a coding-agent framework)
 **Depends on:** none
 **Effort:** HIGH   **Risk:** MEDIUM
 **Owner role:** SeniorDev   **Reviewer role:** LeadDev

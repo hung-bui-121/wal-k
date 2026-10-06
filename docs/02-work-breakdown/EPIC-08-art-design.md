@@ -83,7 +83,7 @@ Autonomy Level 0 for the planner unless marked `NEW NAME:` (WBS §3):
 
 **Status:** TODO
 **Type:** docs
-**Requirements:** §78, §79, §80, §33, §135
+**Requirements:** §78, §79, §80, §33, §135, §5 (non-goals: refine rejects stories that drift into out-of-scope work)
 **Depends on:** E07-R01
 **Effort:** LOW   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC

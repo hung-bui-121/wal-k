@@ -62,7 +62,7 @@ Parallel sets (WBS.md §8): `{S01} ∥ {S02→S03→S04→S05}`; after S05: `{S0
 
 **Status:** TODO
 **Type:** docs
-**Requirements:** §66–§72, §134, §135
+**Requirements:** §66–§72, §134, §135, §5 (non-goals: refine rejects stories that drift into out-of-scope work)
 **Depends on:** E06-R01
 **Effort:** LOW   **Risk:** LOW
 **Owner role:** LeadDev   **Reviewer role:** QC

@@ -2112,7 +2112,7 @@ _pending_
 
 **Status:** TODO
 **Type:** feat
-**Requirements:** §6.1, §6.2, §21, §22, §41, §89, §132, §136, §137 (Invariants 1, 2, 12)
+**Requirements:** §6.1, §6.2, §21, §22, §41, §89, §132, §136, §137 (Invariants 1, 2, 12), §3 (model/session/agent/provider may fail; knowledge, decisions and workflow state persist)
 **Depends on:** E03-S19, E01-S28
 **Effort:** MEDIUM   **Risk:** HIGH
 **Owner role:** QC   **Reviewer role:** LeadDev
