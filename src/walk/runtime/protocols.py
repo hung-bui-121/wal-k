@@ -92,11 +92,11 @@ class AgentExecutor(Protocol):
         ...
 
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun:
-        """Cancel the run."""
+        """Cancel the run; ConfigError when called from the run's own task (E02-S08)."""
         ...
 
     async def pause(self, run_id: RunId) -> AgentRun:
-        """Pause the run."""
+        """Pause the run; ConfigError when called from the run's own task (E02-S08)."""
         ...
 
     def running(self) -> list[AgentRun]:
@@ -125,8 +125,19 @@ class ToolInvoker(Protocol):
 class OutputApplier(Protocol):
     """Applies AgentOutput effects in a fixed order (ARCHITECTURE.md §3.2 step 6)."""
 
-    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> AppliedEffects:
-        """Apply ``output`` for ``run``; ``start_head`` is the worktree HEAD at run start."""
+    async def apply(
+        self,
+        run: AgentRun,
+        output: AgentOutput,
+        *,
+        start_head: Sha,
+        handoff: Checkpoint | None = None,
+    ) -> AppliedEffects:
+        """Apply ``output`` for ``run``; ``start_head`` is the worktree HEAD at run start.
+
+        ``handoff``: the PARTIAL output's HANDOFF checkpoint; its ids reach the transition
+        hooks (E02-S08).
+        """
         ...
 
 

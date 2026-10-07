@@ -250,10 +250,14 @@ class RecoveryManager:
             exclude=[] if healthy else [checkpoint.model_id],
         )
         if decision.model_id != checkpoint.model_id:
+            latest = await self._checkpoints.latest(run.id) or checkpoint
             payload: JsonDict = {
                 "trigger": FallbackTrigger.PROVIDER_OUTAGE.value,
                 "from": checkpoint.model_id,
                 "to": decision.model_id,
+                # E02-S08: the handoff is done, so the chained ON_AGENT_HANDOFF is a no-op.
+                "checkpoint_id": latest.id,
+                "handover_id": handover.id,
             }
             await self._ledger.append(
                 self._event(LedgerEventKind.MODEL_FALLBACK, run, "OK", payload)

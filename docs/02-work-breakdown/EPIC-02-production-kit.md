@@ -1265,7 +1265,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1287,13 +1287,20 @@ Every MUST attachment of ARCHITECTURE §4.1 whose dependencies exist by E02 is r
 | `src/walk/cli/composition.py` | modify | — (builds `BuiltinHookDeps` and calls `register_builtins(hook_manager, deps)` once, after all services exist and before project hooks load; ADR-0016) |
 | `src/walk/runtime/checkpoints.py` | modify | — (`ON_AGENT_CHECKPOINT` payload gains `wip_commit_done`) |
 | `src/walk/runtime/recovery.py` | modify | — (`ON_MODEL_FALLBACK` payload gains `checkpoint_id`, `handover_id`) |
-| `src/walk/runtime/executor.py` | modify | — (`pause`/`cancel` called from the run's own task raise `ConfigError` instead of awaiting that task) |
-| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `AgentExecutor.pause/cancel`: the own-task `ConfigError`) |
+| `src/walk/runtime/executor.py` | modify | — (`pause`/`cancel` called from the run's own task raise `ConfigError` instead of awaiting that task; PARTIAL output: HANDOFF checkpoint before apply, run ends `HANDED_OVER`, owner decision option A) |
+| `src/walk/runtime/output_applier.py` | modify | — (`apply(..., handoff: Checkpoint \| None = None)`: the HANDOFF checkpoint's ids go into the transition payload; owner decision option A) |
+| `src/walk/runtime/protocols.py` | modify | — (`OutputApplier.apply` gains `handoff`; `AgentExecutor.pause/cancel` docstrings) |
+| `src/walk/workflow/service.py` | modify | — (the transition payload builder forwards `checkpoint_id`/`handover_id` from `TransitionContext.payload` into the row hooks' payload; owner decision option A) |
+| `docs/01-architecture/ARCHITECTURE.md` | modify | — (§4.1 `ON_AGENT_HANDOFF` row: the PARTIAL path) |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `AgentExecutor.pause/cancel`: the own-task `ConfigError`; PARTIAL path; `OutputApplier.apply(handoff=)`; `ON_AGENT_CHECKPOINT` payload; §1.3 forwarded hook keys; §5.3 recovery fallback payload) |
 | `tests/hooks/test_builtins.py` | create | — |
 | `tests/hooks/test_builtins_required.py` | create | — |
 | `tests/hooks/test_builtins_pause_paths.py` | create | — (real executor with the builtins registered: budget exhaustion and protected-action approval inside a run) |
 | `tests/runtime/test_executor.py` | modify | — (own-task guard) |
 | `tests/runtime/test_recovery.py` | modify | — (fallback payload keys) |
+| `tests/hooks/conftest.py` | create | — (runtime fixtures, `HoldingAdapter`, `make_builtin_env`) |
+| `tests/runtime/executor_env.py` | modify | — (`approval_sleep` option, `builtin_deps` helper) |
+| `tests/cli/test_cmd_work.py` | modify | — (the fixture repository gets an initial commit: `ON_TASK_START` now branches from `main`) |
 
 #### Interface contract
 ```python
@@ -1309,6 +1316,7 @@ class BuiltinHookDeps(WalkModel):
     permissions: PermissionManager
     telemetry: TelemetryManager
     workflow: WorkflowManager  # ON_TASK_START reads the work item (branch)
+    runs: AgentRunRepository  # E02-S08 implementation: the run of an END/HANDOFF checkpoint
     default_branch: str  # Project.default_branch, base of ensure_branch
 
 
@@ -1399,6 +1407,7 @@ Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.m
 | 18 | Given project hook with id `builtin.final_checkpoint` and `enabled=False` When `register` Then `ConfigError` | `tests/hooks/test_builtins_required.py::test_project_cannot_disable_required_builtin` |
 | 19 | Given `fire(ON_AGENT_END)` without `checkpoint_id` Then exactly one `END` checkpoint and no direct ledger write by the hook (ledger count unchanged except `HOOK_EXECUTED`, `CHECKPOINT_CREATED`) | `tests/hooks/test_builtins_required.py::test_hooks_do_not_duplicate_ledger_events` |
 | 20 | Given an `ON_AGENT_END` payload with `checkpoint_id` and an `ON_MODEL_FALLBACK` payload with `checkpoint_id` and `handover_id` When both are fired Then no new checkpoint row and no new `.ai/handovers/` document exist, `ON_AGENT_HANDOFF` was fired once, and all three builtin executions are `OK` | `tests/hooks/test_builtins_required.py::test_checkpoint_hooks_noop_when_executor_already_checkpointed` |
+| 21 | Given a fake IMPLEMENT run whose output is PARTIAL When the real executor runs it with the builtins registered Then the run ends `HANDED_OVER` (`AGENT_RUN_ENDED` outcome `OK`, status `PARTIAL`, not FAILED), the item took the `partial` transition (IMPLEMENTING), the `partial` row's `ON_AGENT_HANDOFF` saw `checkpoint_id` + `handover_id`, the builtin handoff hook ran `OK` without a second checkpoint, and `HO-0001.md` exists with the output's `remaining_work` (owner decision, option A) | `tests/hooks/test_builtins_pause_paths.py::test_partial_implement_run_hands_over_without_failing` |
 
 #### Evidence required
 - Quality gate output.
@@ -1424,7 +1433,7 @@ Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.m
     - the `ON_PHASE_START` baseline needs `approve_artifact` (E02-S12, not a dependency), so it is deferred to E07-S02;
     - `remaining_work_check` can no longer set a payload flag (`HookContext` is frozen), so it counts and logs instead.
   - `ON_PROJECT_PAUSE` now pauses each run through the executor rather than checkpointing runs that keep running.
-- **BLOCKING (implementer, 2026-10-07, second pass): the story workflow's `partial` row fires `ON_AGENT_HANDOFF` with a payload that `builtin.handoff_checkpoint_and_handover` must reject, so registering the builtin as specified fails every PARTIAL IMPLEMENT run.**
+- **RESOLVED by the owner decision above (option A, implemented).** Former BLOCKING note (implementer, 2026-10-07, second pass): **the story workflow's `partial` row fires `ON_AGENT_HANDOFF` with a payload that `builtin.handoff_checkpoint_and_handover` must reject, so registering the builtin as specified fails every PARTIAL IMPLEMENT run.**
   - **Path, checked against the code.**
     - `story_workflow.yaml` row `IMPLEMENTING --partial--> IMPLEMENTING` lists `hooks: [on_agent_handoff]`; TASK items use the same table.
     - `DefaultOutputApplier.apply` raises `partial` for a PARTIAL IMPLEMENT output, from inside the run's own task (`DefaultAgentExecutor._complete`, after the END checkpoint).
@@ -1448,7 +1457,45 @@ Default attachment registered here (not MUST): `ON_PROJECT_START` → `builtin.m
 - Commit subject: `feat: register builtin must hooks (E02-S08)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+383 files already formatted
+All checks passed!
+Success: no issues found in 382 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.85%
+1230 passed, 5 deselected in 475.14s (0:07:55)
+```
+Touched modules: `orchestrator/builtin_hooks.py` 100 %, `runtime/checkpoints.py` 100 %, `runtime/output_applier.py` 100 %, `workflow/service.py` 100 %, `runtime/executor.py` 99 % and `runtime/recovery.py` 97 % (the uncovered lines are pre-existing E01 defensive branches). All 21 acceptance tests pass, plus negative paths: `ON_TASK_START` without a work item, `ON_BUDGET_EXHAUSTED` without `hard_action`, `ON_PROTECTED_ACTION_REQUESTED` without `approval_id`, an unknown or missing handover on `ON_RECOVERY_RESUME`, an unknown recovery mode, a handoff for an unknown run, an unreadable feature document on `ON_TASK_COMPLETE`, and a pause failure for one of two runs (Behavior 5: the other run is still paused, the failed id is reported).
+
+Demo on a temporary repository outside this repository (`git init`, one empty commit, `GDD/game.md`):
+```
+$ walk --repo <tmp>/game bootstrap --provider local --key DEMO --name Demo --yes
+created:
+  ...
+exit=0
+$ walk --repo <tmp>/game run --once
+started 0 run(s)
+exit=0
+$ walk --repo <tmp>/game ledger query --kind HOOK_EXECUTED --limit 5
+seq  at                                kind           actor   item  run  outcome
+5    2026-10-06T23:58:05.191725+00:00  HOOK_EXECUTED  KERNEL             OK
+$ walk --repo <tmp>/game ledger query --kind HOOK_EXECUTED --limit 5 --json   (payload of seq 5)
+  "payload": {"hook_name": "on_project_start", "hook_id": "builtin.memory_index",
+              "kind": "builtin", "status": "OK", "fail_policy": "log_and_continue", "message": ""}
+```
+`walk run --once` also logs `skipping unparsable memory document` for documents under `.ai/` that `rebuild_index` does not skip (for example the role constitutions in `.ai/agents/roles/`). This is E01-S16 behaviour, not a failure, and is left for the owner.
+
+Decisions and contract changes (owner decision option A, plus small additive fixes):
+- **PARTIAL output (option A).** `_complete` takes a `HANDOFF` checkpoint instead of the `END` checkpoint for every PARTIAL output; `AgentOutput` validation guarantees a handover. The handover is built by `build_handover(run, "PARTIAL", output)`, so `remaining_work`, `next_action`, hypotheses and risks come from the output's own handover. The output is then applied with `OutputApplier.apply(..., handoff=<checkpoint>)` (new optional keyword), which adds `checkpoint_id`/`handover_id` to the `TransitionContext.payload`. `DefaultWorkflowManager` forwards exactly these two keys into the row hooks' payload (`{from, to, event, checkpoint_id, handover_id}`), so `builtin.handoff_checkpoint_and_handover` is a no-op on the `partial` row and stays fail-closed everywhere else.
+- **PARTIAL run end state.** The run ends `HANDED_OVER` with `AGENT_RUN_ENDED` outcome `OK` and payload `status: PARTIAL`. Outcome `OK` keeps it out of the `failed_handoffs` metric. Like every `HANDED_OVER` run (E01-B01), it keeps its worktree, which the item's next parentless run adopts. The handover stays open; the scheduler's existing `latest_open_handover` / `close_handover` step hands it to the next run. `ON_AGENT_END` still fires with the HANDOFF `checkpoint_id`, so `builtin.final_checkpoint` is a no-op.
+- **`BuiltinHookDeps.runs`.** This is an additive field (`AgentRunRepository`) that the story contract did not list. `builtin.final_checkpoint` and `builtin.handoff_checkpoint_and_handover` must load the `AgentRun` for `CheckpointManager.checkpoint`, and no protocol method returns a run by id. It is recorded in the interface contract above and in NAME-REGISTER. All fields are `SkipValidation[...]` because the protocols are not runtime-checkable.
+- **`wip_commit_done`.** It is `True` once `commit_all` returned, either with a WIP commit or with nothing staged. Defining it as "tree clean after the commit" was rejected: files excluded by `FORBIDDEN_COMMIT_PATHSPECS` (e.g. `*.env`, `.walk/**` in a repository that does not ignore it) would leave the tree dirty and fail every checkpoint. The guard therefore catches a checkpoint path that skipped the commit step or omitted the key.
+- **Own-task guard.** `DefaultAgentExecutor._stopping` raises `ConfigError("run <id> cannot stop itself from its own task")` when `asyncio.current_task()` is the run's task. This covers both `pause` and `cancel`, before any state change.
+- **Recovery payload.** `MODEL_FALLBACK` (ledger) and `ON_MODEL_FALLBACK` (hook) share one payload, which now carries `checkpoint_id` (the interrupted run's latest checkpoint after the handover is ensured) and `handover_id`. The existing recovery test assertion was updated.
+- **`register_builtins` twice.** The check is done before anything is registered, so a second call leaves the manager unchanged and raises `ConfigError("builtin hooks already registered")`.
+- **`builtin.remaining_work_check`** is a no-op without a work item id or when the document is missing. An unreadable document is logged and is also a no-op ("never fails"). `- none` (case-insensitive) counts as cleared.
+- **Files outside the original table** (listed in the Files table above and the commit body): `runtime/output_applier.py`, `runtime/protocols.py` and `workflow/service.py` (option A transport); `docs/01-architecture/ARCHITECTURE.md` §4.1; and test support (`tests/hooks/conftest.py` with a `HoldingAdapter`, `tests/runtime/executor_env.py`, `tests/cli/test_cmd_work.py`). The `test_cmd_work.py` fixture repository had no commit, so the new `ON_TASK_START` builtin could not branch from `main`. It now has an initial empty commit, like every real game repository.
 
 ---
 

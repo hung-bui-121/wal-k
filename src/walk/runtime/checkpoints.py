@@ -110,6 +110,9 @@ class DefaultCheckpointManager:
     ) -> Checkpoint:
         """WIP commit, optional handover document, checkpoint row + ledger, then the hook.
 
+        ``ON_AGENT_CHECKPOINT`` fires after the commit with ``checkpoint_id``, ``seq``,
+        ``kind``, ``handover_id`` and ``wip_commit_done`` (E02-S08).
+
         A ``handover`` is written to `.ai/handovers/<id>.md`, recorded in ``handovers`` and
         set as ``run.handover_out_id`` (the run row is updated from ``run``). Its
         ``worktree_head`` (and the sha named in ``current_state``) become the HEAD after the WIP
@@ -343,6 +346,9 @@ class DefaultCheckpointManager:
                 "seq": checkpoint.seq,
                 "kind": checkpoint.kind.value,
                 "handover_id": checkpoint.handover_id,
+                # E02-S08: the commit step finished (a WIP commit, or nothing was staged);
+                # builtin.wip_commit fails closed on anything else.
+                "wip_commit_done": True,
             },
         )
         await self._hooks.fire(HookName.ON_AGENT_CHECKPOINT, context)

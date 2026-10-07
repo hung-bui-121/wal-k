@@ -1,6 +1,7 @@
 """Orchestration: routing, scheduling and the kernel loop (§10.1, §56, §87; INTERFACES §1.1)."""
 
 from walk.orchestrator.bootstrap import BootstrapOptions, Bootstrapper, BootstrapResult
+from walk.orchestrator.builtin_hooks import BuiltinHookDeps, register_builtins
 from walk.orchestrator.commands import CommandConsumer, CommandHandler
 from walk.orchestrator.errors import NoScheduledRole
 from walk.orchestrator.models import (
@@ -27,6 +28,7 @@ __all__ = [
     "BootstrapOptions",
     "BootstrapResult",
     "Bootstrapper",
+    "BuiltinHookDeps",
     "Command",
     "CommandConsumer",
     "CommandHandler",
@@ -41,4 +43,5 @@ __all__ = [
     "Scheduler",
     "StatusBuilder",
     "TaskRouter",
+    "register_builtins",
 ]

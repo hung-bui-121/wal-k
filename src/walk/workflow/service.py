@@ -75,6 +75,9 @@ _ALLOWED_PARENTS: Final[dict[WorkItemKind, frozenset[WorkItemKind | None]]] = {
 _CONTRACT_KINDS: Final = frozenset({WorkItemKind.STORY, WorkItemKind.TASK})
 _CONTRACT_ROLES: Final = frozenset({"contract.owner_role", "contract.reviewer_role"})
 _SCHEDULED_STATES_FILE: Final = "scheduled_states.yaml"
+# Transition-context facts the row hooks receive besides from/to/event: a handoff the caller
+# already checkpointed (E02-S08, PARTIAL output) is visible to ON_AGENT_HANDOFF.
+_HOOK_FORWARDED_KEYS: Final = ("checkpoint_id", "handover_id")
 
 
 def _deferred(method: str, story: str) -> NoReturn:
@@ -229,6 +232,9 @@ class DefaultWorkflowManager:
         from). ``payload["reason"]`` becomes the transition reason. Effect
         ``force_children_review`` moves the item's IMPLEMENTING stories/tasks to
         READY_FOR_REVIEW in the same transaction.
+
+        The hooks receive ``{from, to, event}`` plus ``checkpoint_id``/``handover_id`` when the
+        caller's payload carries them (E02-S08: a handoff already checkpointed by the executor).
 
         Raises:
             WorkItemNotFound: No item has ``work_item_id``.
@@ -447,7 +453,12 @@ class DefaultWorkflowManager:
             run_id=ctx.run_id,
             phase_id=item.phase_id,
             role=ctx.actor_role,
-            payload={"from": item.state.value, "to": target.value, "event": event},
+            payload={
+                "from": item.state.value,
+                "to": target.value,
+                "event": event,
+                **{k: ctx.payload[k] for k in _HOOK_FORWARDED_KEYS if k in ctx.payload},
+            },
         )
         uow.after_commit(lambda: self._fire(row.hooks, hook_ctx))
         return transition

@@ -78,10 +78,12 @@ from walk.orchestrator import (
     DEFAULT_POLL_INTERVAL_S,
     BootstrapOptions,
     Bootstrapper,
+    BuiltinHookDeps,
     DefaultOrchestrator,
     DefaultTaskRouter,
     Scheduler,
     StatusBuilder,
+    register_builtins,
 )
 from walk.permissions import ApprovalRepository, DefaultPermissionManager, PermissionRule
 from walk.persistence import Database, IdempotencyStore, IdSequenceStore, MigrationRunner
@@ -477,6 +479,22 @@ def build_kernel(
         await orchestrator.wake()
 
     executor.on_run_finished = wake_on_finish
+    # ADR-0016 D-3: once, after every service exists and before project hooks load.
+    register_builtins(
+        hooks,
+        BuiltinHookDeps(
+            hooks=hooks,
+            checkpoints=checkpoints,
+            memory=memory,
+            git=git,
+            executor=executor,
+            permissions=permissions,
+            telemetry=telemetry,
+            workflow=workflow,
+            runs=runs,
+            default_branch=project.default_branch,
+        ),
+    )
     return KernelHandle(
         settings=settings,
         project_key=key,

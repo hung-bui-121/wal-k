@@ -705,3 +705,25 @@ async def test_stream_without_ended_event_completes(
     run = await env.run_to_end()
 
     assert run.state is AgentRunState.COMPLETED
+
+
+async def test_pause_from_the_runs_own_task_raises(make_executor_env: EnvFactory) -> None:
+    env = await make_executor_env(script(tool_calls=2))
+    refused: list[str] = []
+
+    async def stop_own_run(ctx: HookContext) -> None:
+        assert ctx.run_id is not None
+        for stop in (env.executor.pause(ctx.run_id), env.executor.cancel(ctx.run_id, "self")):
+            try:
+                await stop
+            except ConfigError as exc:
+                refused.append(exc.message)
+
+    env.hooks.register(
+        Hook(name=HookName.ON_TOOL_AFTER, id="test.stop_own_run", kind="builtin"), stop_own_run
+    )
+
+    run = await asyncio.wait_for(env.run_to_end(), 5)
+
+    assert run.state is AgentRunState.COMPLETED
+    assert refused == [f"run {run.id} cannot stop itself from its own task"] * 4

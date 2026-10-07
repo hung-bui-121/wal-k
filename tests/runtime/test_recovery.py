@@ -8,6 +8,7 @@ import pytest
 
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_model_adapter import FakeModelAdapter, fake_descriptor
+from tests.orchestrator.conftest import RecordingTelemetry
 from tests.runtime.conftest import make_run
 from tests.runtime.executor_env import (
     CLAUDE_MODEL,
@@ -15,10 +16,12 @@ from tests.runtime.executor_env import (
     DyingAdapter,
     EnvFactory,
     ExecutorEnv,
+    builtin_deps,
     script,
 )
 from walk.hooks import Hook, HookContext, HookFailPolicy, HookName
 from walk.model_router import ModelAdapter
+from walk.orchestrator import register_builtins
 from walk.persistence import UnitOfWork
 from walk.runtime import (
     AgentRun,
@@ -144,10 +147,13 @@ async def test_recover_uses_handover_when_provider_unhealthy(
     assert handover.reason == "RECOVERY"
     assert handover.to_run_id == restarted.id
     fallback = (await new.events(orphan.id, K.MODEL_FALLBACK))[0]
+    handoff = new.checkpoints_of(orphan.id)[-1]
     assert fallback.payload == {
         "trigger": "PROVIDER_OUTAGE",
         "from": CODEX_MODEL,
         "to": CLAUDE_MODEL,
+        "checkpoint_id": handoff.id,
+        "handover_id": "HO-0001",
     }
     resumed_event = (await new.events(restarted.id, K.RECOVERY_RESUMED))[0]
     assert resumed_event.payload["mode"] == "handover"
@@ -412,3 +418,36 @@ async def test_recover_failure_after_continuation_keeps_single_end(
     (ended,) = await new.events(orphan.id, K.AGENT_RUN_ENDED)
     assert ended.payload["state"] == "HANDED_OVER"
     assert [ctx.run_id for ctx in new.hooks_fired(HookName.ON_TASK_FAILED)] == []
+
+
+async def test_recovery_fallback_payload_carries_checkpoint_and_handover(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapters = _adapters(fake_clock)
+    old = await make_executor_env(adapters=adapters, kernel_instance="old", checkpoint_every=5)
+    orphan = await _crash(old)
+    codex = adapters["fake-codex"]
+    assert isinstance(codex, FakeModelAdapter)
+    codex.set_healthy(False)
+    new = await make_executor_env(adapters=adapters, kernel_instance="new")
+    register_builtins(new.hooks, builtin_deps(new, RecordingTelemetry()))
+
+    report = await _recovery(new, "new").recover()
+
+    assert report.failed == []
+    await _settled(new, report)
+    handoffs = [c for c in new.checkpoints_of(orphan.id) if c.kind is CheckpointKind.HANDOFF]
+    assert len(handoffs) == 1
+    fired = new.hooks_fired(HookName.ON_MODEL_FALLBACK)
+    assert [(c.payload["checkpoint_id"], c.payload["handover_id"]) for c in fired] == [
+        (handoffs[0].id, "HO-0001")
+    ]
+    rows = (
+        new.db.connect()
+        .execute(
+            "SELECT status FROM hook_executions WHERE hook_id = ? ORDER BY id",
+            ("builtin.handoff_checkpoint_and_handover",),
+        )
+        .fetchall()
+    )
+    assert [row[0] for row in rows] == ["OK"]

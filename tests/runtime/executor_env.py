@@ -38,6 +38,7 @@ from walk.model_router import (
     ModelsConfig,
     RunSession,
 )
+from walk.orchestrator import BuiltinHookDeps
 from walk.permissions import (
     ApprovalRepository,
     DefaultPermissionManager,
@@ -66,6 +67,7 @@ from walk.telemetry import (
     EvidenceRepository,
     LedgerEvent,
     LedgerEventKind,
+    TelemetryManager,
 )
 from walk.tools import DefaultToolRegistry, load_tool_specs
 from walk.workflow import (
@@ -291,8 +293,13 @@ async def build_executor_env(
     kernel_instance: str = "instance-a",
     sleep: Callable[[float], Awaitable[None]] = no_sleep,
     max_parallel_runs: int = 1,
+    approval_sleep: Callable[[float], Awaitable[None]] = no_sleep,
 ) -> ExecutorEnv:
-    """Wire the executor over ``base``; ``plan`` drives both fake adapters."""
+    """Wire the executor over ``base``; ``plan`` drives both fake adapters.
+
+    ``approval_sleep`` is awaited between approval polls; a real (short) sleep keeps a run
+    paused for approval alive until the test decides the request.
+    """
     db, clock = base.db, base.clock
     adapters = adapters if adapters is not None else fake_adapters(plan or script(), clock)
     descriptors = {d.id: d for adapter in adapters.values() for d in adapter.descriptors()}
@@ -359,7 +366,7 @@ async def build_executor_env(
         project_key="DEMO",
     )
     waiter = PollingApprovalWaiter(
-        ApprovalRepository(db), clock, permissions=permissions, sleep=no_sleep
+        ApprovalRepository(db), clock, permissions=permissions, sleep=approval_sleep
     )
     tool_invoker = DefaultToolInvoker(
         permissions,
@@ -434,4 +441,20 @@ async def build_executor_env(
         permissions=permissions,
         adapters=adapters,
         fired=fired,
+    )
+
+
+def builtin_deps(env: ExecutorEnv, telemetry: TelemetryManager) -> BuiltinHookDeps:
+    """The E02-S08 builtin hook dependencies over ``env`` (default branch ``main``)."""
+    return BuiltinHookDeps(
+        hooks=env.hooks,
+        checkpoints=env.checkpoints,
+        memory=env.memory,
+        git=env.git,
+        executor=env.executor,
+        permissions=env.permissions,
+        telemetry=telemetry,
+        workflow=env.workflow,
+        runs=env.runs,
+        default_branch="main",
     )

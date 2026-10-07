@@ -20,7 +20,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Final, Literal
 
-from walk.agents.models import AgentInput, AgentInstance, AgentOutput, Handover
+from walk.agents.models import (
+    AgentInput,
+    AgentInstance,
+    AgentOutput,
+    AgentOutputStatus,
+    Handover,
+)
 from walk.agents.protocols import AgentManager
 from walk.budgets.errors import BudgetExhausted
 from walk.budgets.models import BudgetDimension, BudgetHardAction, BudgetSubject
@@ -354,7 +360,8 @@ class DefaultAgentExecutor:
 
         Raises:
             RunNotFound: No run has ``run_id``.
-            ConfigError: The run is not executing in this kernel process.
+            ConfigError: The run is not executing in this kernel process, or the call comes
+                from the run's own task (E02-S08: a run never stops itself).
         """
         live = await self._stopping(run_id, _Stop.CANCEL)
         if live.ended:
@@ -370,7 +377,8 @@ class DefaultAgentExecutor:
 
         Raises:
             RunNotFound: No run has ``run_id``.
-            ConfigError: The run is not executing in this kernel process.
+            ConfigError: The run is not executing in this kernel process, or the call comes
+                from the run's own task (E02-S08: a run never stops itself).
         """
         live = await self._stopping(run_id, _Stop.PAUSE)
         if live.ended:
@@ -977,11 +985,14 @@ class DefaultAgentExecutor:
         )
         if await self._violates_boundary(live, changed):
             return
-        end = await self._checkpoint(live, CheckpointKind.END)
+        handoff = output.status is AgentOutputStatus.PARTIAL
+        end = await (self._partial_handoff(live, output) if handoff else self._end_checkpoint(live))
         live.run = live.run.model_copy(update={"output": output})
         await self._save(live)
         try:
-            effects = await self._applier.apply(live.run, output, start_head=live.start_head)
+            effects = await self._applier.apply(
+                live.run, output, start_head=live.start_head, handoff=end if handoff else None
+            )
         except GuardRejected as exc:
             error: JsonDict = {"kind": "GUARD_REJECTED", "message": exc.message}
             reason = f"guard_rejected: {exc.message}"
@@ -999,7 +1010,8 @@ class DefaultAgentExecutor:
                 "new_bugs": len(output.new_bugs),
             },
         }
-        await self._end(live, _End(AgentRunState.COMPLETED, "OK"), payload)
+        state = AgentRunState.HANDED_OVER if handoff else AgentRunState.COMPLETED
+        await self._end(live, _End(state, "OK"), payload)
         end_payload: JsonDict = {
             "status": output.status.value,
             "context_updates": len(output.context_updates),
@@ -1007,8 +1019,29 @@ class DefaultAgentExecutor:
             "checkpoint_id": end.id,
         }
         await self._fire_safely(HookName.ON_AGENT_END, live, end_payload)
-        await self._release_worktree(live)
+        if not handoff:  # a HANDED_OVER run keeps its worktree for the item's next run
+            await self._release_worktree(live)
         await self._notify_finished(live)
+
+    async def _end_checkpoint(self, live: _Live) -> Checkpoint:
+        return await self._checkpoint(live, CheckpointKind.END)
+
+    async def _partial_handoff(self, live: _Live, output: AgentOutput) -> Checkpoint:
+        """E02-S08 option A: a PARTIAL output is handed over before it is applied.
+
+        The HANDOFF checkpoint writes the handover document (reason PARTIAL, built from the
+        output's own handover); its ids reach the ``partial`` transition's hooks, so the
+        builtin handoff hook sees the handoff done and takes no second checkpoint.
+        """
+        handover = await self._checkpoints.build_handover(live.run, "PARTIAL", output)
+        return await self._checkpoints.checkpoint(
+            live.run,
+            CheckpointKind.HANDOFF,
+            handover=handover,
+            workflow_state=live.item.state,
+            budget_consumed=self._consumed(live),
+            context_manifest=live.agent_input.context.ref(),
+        )
 
     async def _release_worktree(self, live: _Live) -> None:
         """Remove a COMPLETED run's worktree, keeping the branch (E01-B01).
@@ -1177,6 +1210,11 @@ class DefaultAgentExecutor:
 
     async def _stopping(self, run_id: RunId, stop: _Stop) -> _Live:
         live = self._live.get(run_id)
+        if live is not None and live.task is not None and live.task is asyncio.current_task():
+            # A hook fired inside the run (ARCHITECTURE §4.1 execution rule) would otherwise
+            # wait for the very task it runs in.
+            msg = f"run {run_id} cannot stop itself from its own task"
+            raise ConfigError(msg, detail={"run_id": run_id})
         if live is None:
             await self._persisted(run_id)
             msg = f"run {run_id} is not executing in this kernel"

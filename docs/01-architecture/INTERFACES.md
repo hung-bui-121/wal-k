@@ -210,7 +210,9 @@ class WorkflowManager(Protocol):
     ) -> WorkItemTransition:
         """Finds the Transition for (item.state, event); evaluates guards; checks actor_role ∈ allowed_roles;
         in ONE transaction: update state + state_version, insert work_item_transitions row, ledger WORK_ITEM_TRANSITION;
-        then fires ON_STATE_TRANSITION and the transition's hooks. Raises GuardRejected / PermissionDenied."""
+        then fires ON_STATE_TRANSITION and the transition's hooks. Raises GuardRejected / PermissionDenied.
+        E02-S08: the hook payload is {from, to, event} plus `checkpoint_id`/`handover_id` when ctx.payload carries them
+        (a handoff the caller already checkpointed, e.g. the executor's PARTIAL output)."""
 
     # Open (E03-S03): WorkProviderEvent is defined in walk.integrations, which walk.workflow may not
     # import (ARCHITECTURE §2.2); E03-S03 settles its placement and adds this method to the code protocol.
@@ -691,7 +693,9 @@ class CheckpointManager(Protocol):
         before the document and the row are written, so document, row and checkpoint `head_sha` agree. The continuing run
         receives the stored row. `DefaultCheckpointManager.close_handover(id, to_run_id)` closes the row and rewrites the
         document with `extra.to_run_id` through MemoryManager.write (version bump, CONTEXT_UPDATED; HANDOVER_CREATED stays
-        once); a missing document is logged and the row stays closed."""
+        once); a missing document is logged and the row stays closed.
+        E02-S08: the ON_AGENT_CHECKPOINT payload is {checkpoint_id, seq, kind, handover_id, wip_commit_done}; wip_commit_done
+        is true once the commit step finished (WIP commit made or nothing staged) and builtin.wip_commit fails closed otherwise."""
 
     async def latest(self, run_id: RunId) -> Checkpoint | None: ...
     async def latest_for_item(self, work_item_id: WorkItemId) -> Checkpoint | None: ...
@@ -734,7 +738,15 @@ class AgentExecutor(Protocol):
         the caller (runtime.RecoveryManager) continues with `start(handover=…)`."""
 
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun: ...
-    async def pause(self, run_id: RunId) -> AgentRun: ...
+    async def pause(self, run_id: RunId) -> AgentRun:
+        """E02-S08: `pause` and `cancel` raise ConfigError("run <id> cannot stop itself from its own task") when
+        asyncio.current_task() is the run's task (a hook fired inside the run would otherwise wait on itself);
+        only the command-consumer task (ON_PROJECT_PAUSE, ON_TASK_CANCELLED) stops runs.
+        E02-S08 PARTIAL output (owner decision, option A): instead of the END checkpoint the executor builds a handover
+        (reason PARTIAL, from the output's handover) and takes a HANDOFF checkpoint that writes HO-xxxx.md, then applies the
+        output with `handoff=<that checkpoint>`; the run ends HANDED_OVER (AGENT_RUN_ENDED outcome OK, status PARTIAL), keeps
+        its worktree for the item's next run, and the handover stays open for the next run of the item."""
+
     def running(self) -> list[AgentRun]: ...
 
 
@@ -756,8 +768,12 @@ class ToolInvoker(Protocol):
 class OutputApplier(Protocol):
     """Applies AgentOutput effects in a fixed order (ARCHITECTURE.md §3.2 step 6)."""
 
-    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> "AppliedEffects":
-        """E01-S27: `start_head` = worktree HEAD at run start; `commit_sha` is HEAD when it moved since."""
+    async def apply(
+        self, run: AgentRun, output: AgentOutput, *, start_head: Sha, handoff: Checkpoint | None = None
+    ) -> "AppliedEffects":
+        """E01-S27: `start_head` = worktree HEAD at run start; `commit_sha` is HEAD when it moved since.
+        E02-S08: `handoff` = the HANDOFF checkpoint of a PARTIAL output; its `checkpoint_id`/`handover_id` are added to the
+        transition payload, so the `partial` row's ON_AGENT_HANDOFF builtin is a no-op."""
 
 
 class AppliedEffects(FrozenModel):
@@ -1519,8 +1535,10 @@ Scheduling order: BLOCKED resolution first, then bugs by severity, then stories 
 
  recovery path (ARCHITECTURE.md §5.3 step 5, runtime.RecoveryManager) — not a FallbackRequest:
     decision = select(role, policy, profile, ckpt.effort, exclude=[ckpt.model_id] if that adapter is unhealthy else [])
-    if decision.model_id != ckpt.model_id → ledger MODEL_FALLBACK{trigger: PROVIDER_OUTAGE, from: ckpt.model_id, to: decision.model_id}
-                                            and fire ON_MODEL_FALLBACK
+    if decision.model_id != ckpt.model_id → ledger MODEL_FALLBACK{trigger: PROVIDER_OUTAGE, from: ckpt.model_id, to: decision.model_id,
+                                            checkpoint_id, handover_id} and fire ON_MODEL_FALLBACK with the same payload
+                                            (E02-S08: checkpoint_id = the interrupted run's latest checkpoint after the
+                                            handover is ensured, so the chained ON_AGENT_HANDOFF builtin is a no-op)
     the interrupted run ends HANDED_OVER; the new run starts with the handover (reason RECOVERY) and parent_run_id = interrupted run
     E01-S28: after a native resume the interrupted run ends HANDED_OVER too (continued by another run); both paths write
     its AGENT_RUN_ENDED{state: HANDED_OVER, mode}

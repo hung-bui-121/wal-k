@@ -15,7 +15,7 @@ from walk.common.ids import EvidenceId, Sha
 from walk.common.models import Actor, JsonDict
 from walk.integrations.protocols import GitProvider
 from walk.memory.protocols import MemoryManager
-from walk.runtime.models import AgentRun, AppliedEffects
+from walk.runtime.models import AgentRun, AppliedEffects, Checkpoint
 from walk.telemetry.models import EvidenceDraft
 from walk.telemetry.protocols import EvidenceManager
 from walk.workflow.models import (
@@ -67,11 +67,21 @@ class DefaultOutputApplier:
         self._git = git
         self._clock = clock
 
-    async def apply(self, run: AgentRun, output: AgentOutput, *, start_head: Sha) -> AppliedEffects:
+    async def apply(
+        self,
+        run: AgentRun,
+        output: AgentOutput,
+        *,
+        start_head: Sha,
+        handoff: Checkpoint | None = None,
+    ) -> AppliedEffects:
         """Apply ``output`` of ``run``; ``start_head`` is the worktree HEAD at run start.
 
         Evidence drafts are resolved against the worktree; a missing file is skipped with a
         warning. ``commit_sha`` is the worktree HEAD when it moved since ``start_head``.
+        ``handoff`` is the HANDOFF checkpoint the executor took for a PARTIAL output
+        (E02-S08); its ``checkpoint_id``/``handover_id`` go into the transition payload, whose
+        hooks then see the handoff done.
 
         Raises:
             ConfigError: The run has no worktree or branch.
@@ -100,6 +110,8 @@ class DefaultOutputApplier:
                 "handover_present": output.handover is not None,
                 "escalations_non_empty": bool(output.escalations),
             }
+            if handoff is not None:
+                payload |= {"checkpoint_id": handoff.id, "handover_id": handoff.handover_id}
             context = TransitionContext(
                 actor_role=run.role,
                 source=TransitionSource.AGENT,
