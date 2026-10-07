@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -60,8 +61,8 @@ def test_doctor_json_output_is_manifest(tmp_path: Path, monkeypatch: pytest.Monk
     result = runner.invoke(app, ["doctor", "--json", "--repo", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    manifest = EnvironmentManifest.model_validate_json(result.stdout)
-    assert manifest.tools["git"].version == "2.45.0"
+    manifest = EnvironmentManifest.model_validate(json.loads(result.stdout)["manifest"])
+    assert manifest.tools["git"].version == "2.45.0"  # E02-S15: inside the DoctorReport
 
 
 def test_doctor_reports_drift_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

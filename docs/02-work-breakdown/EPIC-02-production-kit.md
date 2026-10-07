@@ -2174,7 +2174,7 @@ Decisions and contract additions (for the owner):
 
 ### E02-S14 — Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions
 
-**Status:** DONE (pending)
+**Status:** DONE (6c19569)
 **Type:** feat
 **Requirements:** §91, §92, §31, §60, §137, §138
 **Depends on:** E02-S10, E01-S23, E01-S25
@@ -2357,7 +2357,7 @@ Decisions and findings (for the owner):
 
 ### E02-S15 — `walk doctor --fix --strict`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §26, §27, §28, §91, §105, §137
 **Depends on:** E02-S07, E02-S14, E02-S04
@@ -2439,7 +2439,52 @@ CLI: `walk doctor [--fix] [--strict] [--json]`. Exit: 0 clean; 4 required compon
 - Commit subject: `feat: add doctor fix and strict lint modes (E02-S15)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+409 files already formatted
+All checks passed!
+Success: no issues found in 408 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1369 passed, 5 deselected in 573.14s (0:09:33)
+```
+Touched modules: `cli/cmd_doctor.py`, `cli/lints.py`, `cli/composition.py` 100 %. All 9 acceptance tests pass, plus: a fix that fails (an invalid projection lock) is recorded while the others still run (exit 1); `--fix` on a repository without a database reports `guard hooks failed: no database`; under `--strict`, a missing import-linter, an invalid `models.yaml` and a skills error are findings; an invalid pin file is reported under `versions` without changing the non-strict exit code; non-strict drift and pin problems are informational (exit 0).
+
+Demo on the E02-S08 demo repository (outside this repository), with the real import-linter against the kernel sources:
+```
+$ walk --repo <tmp>/game doctor --fix --strict
+component        state          version   detail
+unity            misconfigured            error: unknown option '-version'
+tools.git        ready          2.41.0
+tools.graphify   ready          0.9.48
+tools.dotnet     ready          10.0.100
+providers.codex  missing                  executable not found: codex
+providers.claude missing                  claude-agent-sdk is not installed (the 'claude' extra)
+work_provider    ready                    local
+...
+skills:
+  claude: ok
+  codex: ok
+approved: ok
+versions: ok
+lints: none
+fixes:
+  guard hooks: <tmp>\game
+  guard hooks: <tmp>\game\.walk\worktrees\RUN-... (one line per leftover run worktree)
+  skills: regenerated claude
+  memory index: 3 documents
+  manifest: refreshed
+exit=0
+```
+(The host has no Codex CLI or Claude SDK, and no Unity editor answering `-version`: those components are optional for this project, so the exit stays 0.)
+
+Decisions (Level 0 unless marked):
+- **`--json` now prints the `DoctorReport`**, with the manifest under `manifest`; it used to print the bare manifest. The E02-S02 test was updated. Text output keeps the manifest table and adds `skills`, `approved` and `versions`, plus `lints` (only with `--strict`) and `fixes` (only with `--fix`).
+- **Fix order.** Guard hooks (the repository root and every directory under `.walk/worktrees/`; git shares one hooks folder, and installing is idempotent), then skill projections (`check_drift` and `regenerate` per provider under `.walk/projections/<provider>`, as `walk skills check-drift`), then the memory index, then the preflight run that refreshes `environment.yaml` (`manifest: refreshed`). Every step runs even when an earlier one failed. Fixes need the database (`walk bootstrap`).
+- **Import-linter target.** The contracts belong to the kernel package, not to the game repository, so `run_import_linter` runs in the kernel's source checkout (`<walk>/../../pyproject.toml`). For an installed wheel without sources the lint is skipped. A missing `lint-imports` executable while the sources are present is the finding `import-linter not installed`.
+- **Strict findings** are prefixed by their source: `skills <provider>: …`, `approved artifact drift: APR-…`, `versions: …`, `configuration: …` for an unreadable constitution or models file, the provider-name lint (one finding per constitution, listing the names) and the `models.yaml` lint (one finding per broken rule and model, for enabled models only).
+- **`DoctorReport.skills`** merges the per-provider drift reports (names de-duplicated; `ok` only when every provider is ok).
+- **Composition helpers** (new, used by the doctor): `version_pin_problems`, `load_constitutions`, `load_model_registry` and `open_git`.
 
 ---
 

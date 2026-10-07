@@ -26,6 +26,7 @@ import walk.model_router
 import walk.skills
 from walk.agents import (
     AgentInput,
+    Constitution,
     ConstitutionLoader,
     DefaultAgentManager,
     PolicyLoader,
@@ -47,7 +48,12 @@ from walk.common.roles import AgentRole
 from walk.context import DefaultContextManager
 from walk.effort import DefaultEffortManager, EffortRequest, StaticCostEstimator
 from walk.hooks import DefaultHookManager, HookCallable, HookContext, HookExecutionRepository
-from walk.improvement import PINS_PATH, BehaviorVersionCatalog, KernelVersionPins
+from walk.improvement import (
+    PINS_PATH,
+    BehaviorVersionCatalog,
+    KernelVersionPins,
+    VersionPinError,
+)
 from walk.integrations import (
     AsyncioSubprocessRunner,
     CredentialStore,
@@ -66,6 +72,7 @@ from walk.memory import (
     split_document,
 )
 from walk.model_router import (
+    CapabilityRegistry,
     DefaultModelRouter,
     ModelAdapter,
     ModelDescriptor,
@@ -1235,4 +1242,45 @@ def open_memory(
         project_key=project_key,
         git=git,
         may_approve=_may_approve(repo / _AI_DIR),
+    )
+
+
+def version_pin_problems(repo: Path) -> list[str]:
+    """Mismatches between `.ai/project/kernel-versions.yaml` and the kernel (§105; E02-S15).
+
+    ``[]`` when they match or when the repository has no pin file (not checked, as at startup).
+
+    Raises:
+        ConfigError: The pin file is invalid.
+    """
+    try:
+        _validate_pins(repo / _AI_DIR, SystemClock())
+    except VersionPinError as exc:
+        return [str(problem) for problem in exc.detail.get("problems", [exc.message])]
+    return []
+
+
+def load_constitutions(repo: Path) -> list[Constitution]:
+    """Every role's constitution: kernel defaults with `.ai/agents/roles` overrides (E02-S15)."""
+    loader = ConstitutionLoader(_AGENT_DEFAULTS, repo / _AI_DIR / "agents" / "roles")
+    return [loader.load(role) for role in loader.available_roles()]
+
+
+def load_model_registry(repo: Path) -> CapabilityRegistry:
+    """The configured models: kernel `models.yaml` merged with the project's (E02-S15)."""
+    config = load_models_config(_DEFAULT_MODELS, repo / _AI_DIR / "agents" / "models.yaml")
+    return CapabilityRegistry(models=dict(config.models), version=config.version)
+
+
+def open_git(db: Database, repo: Path, *, project_key: ProjectKey) -> GitCliProvider:
+    """A `GitCliProvider` for ``repo`` on ``db`` (ledger, idempotency) with the system clock."""
+    clock = SystemClock()
+    ledger = DefaultLedgerManager(db, LedgerRepository(db), IdSequenceStore(db), clock)
+    return GitCliProvider(
+        repo,
+        AsyncioSubprocessRunner(),
+        ledger,
+        IdempotencyStore(db, clock),
+        clock,
+        project_key=project_key,
     )
