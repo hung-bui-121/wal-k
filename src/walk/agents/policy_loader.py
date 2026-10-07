@@ -83,6 +83,11 @@ class PolicyLoader:
         self._cache[role] = policy
         return policy
 
+    def clear_cache(self) -> None:
+        """Forget the loaded files and policies; the next `load` re-reads both files (E02-S13)."""
+        self._files = None
+        self._cache.clear()
+
     @staticmethod
     def _validate(role: AgentRole, data: JsonDict, source: Path) -> RuntimePolicy:
         try:

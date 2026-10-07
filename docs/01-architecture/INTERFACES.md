@@ -56,7 +56,20 @@ class Orchestrator(Protocol):
     async def resume(self, run_id: RunId | None = None) -> None: ...
 
     async def cancel_work_item(self, work_item_id: WorkItemId, reason: str) -> None:
-        """§93 Cancel Task: cancel run, state CANCELLED, remove worktree."""
+        """§93 Cancel Task: cancel run, state CANCELLED, remove worktree.
+        E02-S13 (DefaultOrchestrator; keyword deps projects, workflow, policies_path, model_known, on_policy_changed —
+        a ConfigError "not wired" without them): every override writes USER_OVERRIDE {command, args} (actor USER).
+        pause(None): projects.paused = 1, then ON_PROJECT_PAUSE from the calling (command-consumer) task, whose builtin
+        pauses every running run through the executor; pause(run_id): AgentExecutor.pause. resume(None): flag cleared,
+        ON_PROJECT_RESUME, then AgentExecutor.resume for every PAUSED_BY_USER run of this kernel instance (a failure is
+        logged; the others still resume); resume(run_id): AgentExecutor.resume. cancel_work_item: raise `cancel` as USER with
+        TransitionContext.run_id = the item's running run and payload {reason} (forwarded to the row's ON_TASK_CANCELLED,
+        whose builtin cancels the run); a state without a cancel row (COMPLETE, CANCELLED) → GuardRejected.
+        DefaultOrchestrator.set_priority(work_item_id, priority, *, actor) -> WorkItem, set_autonomy(level, *, actor) -> Project,
+        set_model_policy(role, preferred, fallback) -> RuntimePolicy (every model id or family must be configured and enabled;
+        rewrites only that role in .ai/agents/policies.yaml via walk.agents.policy_file.update_model_policy; the policy cache
+        is cleared, so the next scheduled run uses it). The daemon commands are walk.orchestrator.commands.override_handlers:
+        pause, resume, work.cancel, work.priority, policy.set_model, policy.set_autonomy."""
 
     async def force_review(self, work_item_id: WorkItemId) -> None:
         """§93: raise event `force_review` → READY_FOR_REVIEW regardless of current implementer state."""
@@ -772,6 +785,10 @@ class AgentExecutor(Protocol):
         the caller (runtime.RecoveryManager) continues with `start(handover=…)`."""
 
     async def cancel(self, run_id: RunId, reason: str) -> AgentRun: ...
+    # DefaultAgentExecutor only (E02-S13): resume(run_id) continues a PAUSED_BY_USER run — one UnitOfWork ends it
+    # HANDED_OVER (AGENT_RUN_ENDED mode "resume", outcome OK) and unassigns the item, then resume_native(latest checkpoint),
+    # or on NotResumable a PAUSE handover (HANDOFF checkpoint) and start(handover=…, parent_run_id=run) on the same model;
+    # paused_runs() lists this instance's PAUSED_BY_USER runs.
     async def pause(self, run_id: RunId) -> AgentRun:
         """E02-S08: `pause` and `cancel` raise ConfigError("run <id> cannot stop itself from its own task") when
         asyncio.current_task() is the run's task (a hook fired inside the run would otherwise wait on itself);
@@ -1667,8 +1684,8 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk work list` | `--state S...` `--kind K...` `--phase ID` | |
 | `walk work show` | `ID` | item + contract + transitions + runs + cost. |
 | `walk work transition` | `ID EVENT` `--reason TEXT` | Raises event as USER (guards still apply). |
-| `walk work cancel` | `ID --reason TEXT` | §93 |
-| `walk work priority` | `ID P0..P3` | §93 |
+| `walk work cancel` | `ID --reason TEXT` | §93; E02-S13: daemon command `work.cancel` or in-process; exit 2 when the item cannot be cancelled |
+| `walk work priority` | `ID P0..P3` | §93; E02-S13: daemon command `work.priority` or in-process |
 | `walk work force-review` | `ID` | §93 |
 | `walk phase list` | | |
 | `walk phase plan` | `ID` | `[Stage 6]` GDD compile into phase |
@@ -1679,7 +1696,7 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk handover show` | `ITEM_ID` \| `HO_ID` | latest/specified handover |
 | `walk handover create` | `RUN_ID --reason REASON` | force checkpoint + handover (operator) |
 | `walk runs list` / `walk runs show RUN_ID` / `walk runs cancel RUN_ID` | | |
-| `walk pause` / `walk resume` | `[--agent RUN_ID]` | §93 |
+| `walk pause` / `walk resume` | `[--agent RUN_ID]` | §93; E02-S13: daemon command `pause`/`resume` or in-process; `--agent` needs the daemon (exit 3) |
 | `walk approve` / `walk deny` | `APV_ID --note TEXT` | §92; E02-S11: daemon command `approve`/`deny` when a daemon holds the lock, else in-process; prints `<id> <STATE>`; exit 1 unknown id, 2 already decided |
 | `walk approvals` | `--pending` | E02-S11: reads the DB; table id, kind, tool, state, approver, run, requested_at |
 | `walk artifacts list` / `approve PATH... --kind KIND --title TITLE --scope SCOPE [--supersedes APR_ID]` / `verify` | `--json` (list) | §33; E02-S12: in-process; approve acts as USER and prints `<id> approved (sha <12>)`; verify prints `ok` or exits 2 listing the drifted ids |
@@ -1690,7 +1707,7 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk report` | `task\|feature\|phase\|project\|cost\|improvement SUBJECT_ID` `--write` | §83; `--write` saves to `.ai/reports/` |
 | `walk cost` | `--item ID` \| `--phase ID` \| `--project` | §85 |
 | `walk policy set-model` | `ROLE --preferred M... --fallback M...` | §93 Change Model Policy (writes policies.yaml) |
-| `walk policy set-autonomy` | `LEVEL` | §93 |
+| `walk policy set-autonomy` | `LEVEL` | §93; E02-S13: `policy.set_model` / `policy.set_autonomy` daemon commands or in-process; unknown or disabled model → exit 1 |
 | `walk skills list` / `sync` / `check-drift` | | ADR-0007 |
 | `walk memory index` / `walk memory freshness [DOC_ID]` | | §42 |
 | `walk improvement observations` / `candidates` / `retro PHASE_ID` / `promote OBS_ID` | | `[Stage 10]`; `retro` and `observations` `[MVP skeleton]` |

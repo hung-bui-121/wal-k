@@ -6,9 +6,20 @@ from typing import Annotated
 
 import typer
 
+from walk.cli.cmd_policy import run_override, wants_json
 from walk.cli.composition import KernelSettings
 from walk.cli.daemon import run_daemon
+from walk.cli.output import render_json
 from walk.orchestrator import DEFAULT_MAX_PARALLEL_AGENTS, DEFAULT_POLL_INTERVAL_S
+
+AgentOption = Annotated[
+    str | None,
+    typer.Option("--agent", metavar="RUN_ID", help="One agent run (needs a running kernel)."),
+]
+RepoOption = Annotated[
+    Path | None, typer.Option("--repo", help="Game repository root.", file_okay=False)
+]
+JsonOption = Annotated[bool, typer.Option("--json", help="Emit JSON output.")]
 
 
 def run(
@@ -41,3 +52,33 @@ def run(
     )
     code = asyncio.run(run_daemon(settings, once=once))
     raise typer.Exit(code=code)
+
+
+def pause(
+    ctx: typer.Context,
+    *,
+    agent: AgentOption = None,
+    json_output: JsonOption = False,
+    repo: RepoOption = None,
+) -> None:
+    """Pause the project (every running agent), or one agent with ``--agent RUN_ID`` (§93)."""
+    result = run_override(ctx, repo, "pause", {"run_id": agent}, daemon_required=agent is not None)
+    if wants_json(ctx, json_output):
+        typer.echo(render_json(result))
+        return
+    typer.echo(f"run {agent} paused" if agent else "project paused")
+
+
+def resume(
+    ctx: typer.Context,
+    *,
+    agent: AgentOption = None,
+    json_output: JsonOption = False,
+    repo: RepoOption = None,
+) -> None:
+    """Resume the project and its paused agents, or one agent with ``--agent RUN_ID`` (§93)."""
+    result = run_override(ctx, repo, "resume", {"run_id": agent}, daemon_required=agent is not None)
+    if wants_json(ctx, json_output):
+        typer.echo(render_json(result))
+        return
+    typer.echo(f"run {agent} resumed" if agent else "project resumed")

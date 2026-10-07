@@ -27,6 +27,7 @@ from walk.common.clock import Clock, SystemClock
 from walk.common.models import JsonDict
 from walk.common.roles import AgentRole
 from walk.orchestrator import CommandConsumer
+from walk.orchestrator.commands import override_handlers
 from walk.persistence import KernelInstanceRegistry, KernelLock, KernelLockHeld, MigrationRunner
 from walk.workflow import TransitionContext, TransitionSource
 
@@ -134,6 +135,8 @@ def _register_handlers(
     consumer.register("work.transition", transition)
     consumer.register("approve", decide)  # E02-S11; args carry approve=True
     consumer.register("deny", decide)
+    for name, handler in override_handlers(handle.orchestrator).items():  # E02-S13
+        consumer.register(name, handler)
 
 
 async def transition_in_kernel(handle: KernelHandle, args: JsonDict) -> JsonDict:

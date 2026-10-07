@@ -106,6 +106,7 @@ _KERNEL_DECISION: Final = "kernel_decision"
 _MEMORY_PREFIX: Final = ".ai/"
 _NO_TRIGGER: Final = "none"
 _NATIVE_RESUME: Final = "native_resume"
+_RESUME: Final = "resume"
 _Outcome = Literal["OK", "FAILED", "SKIPPED"]
 
 
@@ -388,6 +389,62 @@ class DefaultAgentExecutor:
             live.run = await self._set_state(live, AgentRunState.PAUSED_BY_USER, uow)
         return live.run
 
+    async def resume(self, run_id: RunId) -> AgentRun:
+        """Continue a PAUSED_BY_USER run (§93 ``walk resume``); return the continuing run.
+
+        In one unit of work the paused run ends HANDED_OVER (``AGENT_RUN_ENDED`` with mode
+        ``resume``) and its item is unassigned; then it continues natively from its latest
+        checkpoint (`resume_native`), or, when the provider session cannot be resumed, from a
+        handover (reason PAUSE) on the same model, which the new run closes (E02-S13).
+
+        Raises:
+            RunNotFound: No run has ``run_id``.
+            ConfigError: The run is not PAUSED_BY_USER, has no checkpoint, or the call comes
+                from a run's own task.
+        """
+        run = await self._persisted(run_id)
+        if run.state is not AgentRunState.PAUSED_BY_USER:
+            msg = f"run {run_id} is not paused ({run.state.value})"
+            raise ConfigError(msg, detail={"run_id": run_id, "state": run.state.value})
+        checkpoint = await self._checkpoints.latest(run_id)
+        if checkpoint is None:
+            msg = f"paused run {run_id} has no checkpoint"
+            raise ConfigError(msg, detail={"run_id": run_id})
+        async with UnitOfWork(self._db) as uow:
+            handed = await self._runs.set_state(run_id, AgentRunState.HANDED_OVER, conn=uow.conn)
+            ended: JsonDict = {
+                "state": AgentRunState.HANDED_OVER.value,
+                "mode": _RESUME,
+                "handover_in_id": handed.handover_in_id,
+            }
+            await self._ledger.append(
+                self._event(LedgerEventKind.AGENT_RUN_ENDED, handed, outcome="OK", payload=ended),
+                uow=uow,
+            )
+            await self._unassign(handed, uow)
+        try:
+            return await self.resume_native(checkpoint)
+        except NotResumable as exc:
+            _LOG.info(
+                "native resume refused; continuing from a handover",
+                extra={"run_id": run_id, "reason": exc.message},
+            )
+        return await self._resume_from_handover(handed, checkpoint)
+
+    async def _resume_from_handover(self, run: AgentRun, checkpoint: Checkpoint) -> AgentRun:
+        item = await self._item(run.work_item_id)
+        handover = await self._checkpoints.build_handover(run, "PAUSE", run.output)
+        await self._checkpoints.checkpoint(
+            run, CheckpointKind.HANDOFF, handover=handover, workflow_state=item.state
+        )
+        stored = await self._stored_handover(handover)
+        agent = await self._agents.instantiate(
+            run.role, item, checkpoint.model_id, checkpoint.effort, [], self._ready_env_keys()
+        )
+        child = await self._start(agent, item, run.purpose, handover=stored, parent_run_id=run.id)
+        await self._checkpoints.close_handover(stored.id, child.id)
+        return child
+
     async def shutdown(self) -> None:
         """Abandon every executing run without a checkpoint (kernel stop without drain).
 
@@ -402,6 +459,11 @@ class DefaultAgentExecutor:
                 tasks.append(live.task)
         if tasks:
             await asyncio.wait(tasks)
+
+    async def paused_runs(self) -> list[AgentRun]:
+        """PAUSED_BY_USER runs owned by this kernel instance (the ones `resume` continues)."""
+        paused = await self._runs.by_state([AgentRunState.PAUSED_BY_USER])
+        return [run for run in paused if run.kernel_instance == self._kernel_instance]
 
     def running(self) -> list[AgentRun]:
         """Runs whose task is still executing in this process."""

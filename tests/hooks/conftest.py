@@ -66,6 +66,10 @@ class HoldingAdapter(FakeModelAdapter):
         await super().cancel(run_id)
         self._gate(run_id).set()
 
+    def release(self, run_id: RunId) -> None:
+        """Let a held run go on (without cancelling it)."""
+        self._gate(run_id).set()
+
     def held(self, run_id: RunId) -> asyncio.Event:
         """Set once the run is held."""
         return self._held.setdefault(run_id, asyncio.Event())

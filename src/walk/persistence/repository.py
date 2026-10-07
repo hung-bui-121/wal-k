@@ -39,6 +39,11 @@ class Repository[T: WalkModel]:
         _check_identifier(self._key, "key")
         self._db = db
 
+    @property
+    def db(self) -> Database:
+        """The database the repository reads; writers open their unit of work on it."""
+        return self._db
+
     def projection(self, obj: T) -> dict[str, object]:
         """Return the indexed columns to store next to the JSON; the default stores none."""
         del obj

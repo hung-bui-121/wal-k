@@ -8,28 +8,51 @@ behaviour belongs to a later story raise ``ConfigError("implemented in <ID>")``.
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Final, NoReturn
 
+from walk.agents.models import RuntimePolicy
+from walk.agents.policy_file import update_model_policy
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError
-from walk.common.ids import PhaseId, ProjectKey, RunId, WorkItemId
+from walk.common.errors import ConfigError, GuardRejected
+from walk.common.ids import ModelId, PhaseId, ProjectKey, RunId, WorkItemId
+from walk.common.models import JsonDict
 from walk.common.roles import AgentRole
-from walk.decisions.models import Escalation
+from walk.decisions.models import AutonomyLevel, Escalation
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.orchestrator.models import KernelStatus, PhaseEvidencePackage
 from walk.orchestrator.scheduler import Scheduler
 from walk.orchestrator.status import StatusBuilder
+from walk.persistence.uow import UnitOfWork
 from walk.runtime.executor import DefaultAgentExecutor
 from walk.runtime.recovery import RecoveryManager
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
-from walk.workflow.models import Feature, GddRef, Phase, PhaseDecision, WorkItem
+from walk.workflow.errors import UnknownTransition
+from walk.workflow.models import (
+    Feature,
+    GddRef,
+    Phase,
+    PhaseDecision,
+    Priority,
+    Project,
+    TransitionContext,
+    TransitionSource,
+    WorkItem,
+)
+from walk.workflow.protocols import WorkflowManager
+from walk.workflow.repository import ProjectRepository, WorkflowRepository
+
+_LOG = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL_S = 5.0  # ADR-0009 D-4 timer wake-up
 
 _NOT_BUILT: Final = "status not built yet; call start() or run_once() first"
+_NOT_WIRED: Final = "the override dependencies are not wired (composition root, E02-S13)"
+_CANCEL: Final = "cancel"
 
 
 def _deferred(method: str, story: str) -> NoReturn:
@@ -55,6 +78,11 @@ class DefaultOrchestrator:
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         startup_checks: Callable[[], Awaitable[None]] | None = None,
         expire_approvals: Callable[[], Awaitable[object]] | None = None,
+        projects: ProjectRepository | None = None,
+        workflow: WorkflowManager | None = None,
+        policies_path: Path | None = None,
+        model_known: Callable[[ModelId], bool] | None = None,
+        on_policy_changed: Callable[[], None] | None = None,
     ) -> None:
         """Wire the orchestrator.
 
@@ -76,6 +104,12 @@ class DefaultOrchestrator:
                 ``ON_PROJECT_START``.
             expire_approvals: Awaited at the start of every tick: expires approval requests
                 past their ``expires_at`` (``DefaultPermissionManager.expire_due``, E02-S11).
+            projects: The project row (paused flag, autonomy level) of the §93 overrides.
+            workflow: Raises ``cancel`` and changes priorities (§93 overrides).
+            policies_path: The project's `.ai/agents/policies.yaml` (`set_model_policy`).
+            model_known: Whether a model id or family is configured and enabled.
+            on_policy_changed: Called after `set_model_policy` (drops cached policies, so
+                the role's next scheduled run uses the new one).
         """
         self._scheduler = scheduler
         self._executor = executor
@@ -89,6 +123,11 @@ class DefaultOrchestrator:
         self._poll_interval_s = poll_interval_s
         self._startup_checks = startup_checks
         self._expire_approvals = expire_approvals
+        self._projects = projects
+        self._workflow = workflow
+        self._policies_path = policies_path
+        self._model_known = model_known
+        self._on_policy_changed = on_policy_changed
         self._wake = asyncio.Event()
         self._stopping = False
         self._loop_exited: asyncio.Event | None = None
@@ -222,31 +261,138 @@ class DefaultOrchestrator:
         _deferred("handle_escalation", "E05-S02")
 
     async def pause(self, run_id: RunId | None = None) -> None:
-        """Deferred to E02-S13.
+        """§93 Pause Project (``run_id`` None) or Pause Agent; ``USER_OVERRIDE`` either way.
+
+        The project: ``paused`` is set (the scheduler admits nothing), then ``ON_PROJECT_PAUSE``
+        fires from this (command-consumer) task, whose builtin pauses every running run through
+        the executor (one PAUSE checkpoint each, PAUSED_BY_USER). One run: the executor pauses
+        it.
 
         Raises:
-            ConfigError: Always.
+            RunNotFound: Unknown ``run_id``.
+            ConfigError: The run is not executing here, or the overrides are not wired.
+            HookFailed: A run could not be paused (the project stays paused).
         """
-        del run_id
-        _deferred("pause", "E02-S13")
+        if run_id is not None:
+            await self._executor.pause(run_id)
+            await self._override("pause", {"run_id": run_id}, run_id=run_id)
+            return
+        await self._set_paused(paused=True)
+        await self._override("pause", {"run_id": None})
+        await self._fire_project(HookName.ON_PROJECT_PAUSE)
 
     async def resume(self, run_id: RunId | None = None) -> None:
-        """Deferred to E02-S13.
+        """§93 Resume Project (``run_id`` None) or Resume Agent; ``USER_OVERRIDE`` either way.
+
+        The project: ``paused`` is cleared, ``ON_PROJECT_RESUME`` fires and every PAUSED_BY_USER
+        run of this kernel instance continues (`DefaultAgentExecutor.resume`: natively, else
+        from a handover); one run that cannot continue is logged and the others still resume.
+        One run: the executor resumes it.
 
         Raises:
-            ConfigError: Always.
+            RunNotFound: Unknown ``run_id``.
+            ConfigError: The run is not paused, or the overrides are not wired.
         """
-        del run_id
-        _deferred("resume", "E02-S13")
+        if run_id is not None:
+            await self._executor.resume(run_id)
+            await self._override("resume", {"run_id": run_id}, run_id=run_id)
+            return
+        await self._set_paused(paused=False)
+        await self._override("resume", {"run_id": None})
+        await self._fire_project(HookName.ON_PROJECT_RESUME)
+        for run in await self._executor.paused_runs():
+            try:
+                await self._executor.resume(run.id)
+            except Exception:  # noqa: BLE001 - one run must not stop the others from resuming
+                _LOG.exception("paused run could not resume", extra={"run_id": run.id})
+        await self.wake()
 
     async def cancel_work_item(self, work_item_id: WorkItemId, reason: str) -> None:
-        """Deferred to E02-S13.
+        """§93 Cancel Task: raise ``cancel`` as USER; ``USER_OVERRIDE``.
+
+        The transition's ``ON_TASK_CANCELLED`` fires from this task with ``run_id`` = the
+        item's running run (or None) and ``reason`` in its payload; the builtin cancels that
+        run (CANCELLED, worktree removed, branch kept).
 
         Raises:
-            ConfigError: Always.
+            GuardRejected: The item cannot be cancelled (COMPLETE, CANCELLED, guards).
+            WorkItemNotFound: Unknown item.
+            ConfigError: The overrides are not wired.
         """
-        del work_item_id, reason
-        _deferred("cancel_work_item", "E02-S13")
+        workflow = self._wired(self._workflow)
+        item = await workflow.get(work_item_id)
+        running = {run.id for run in self._executor.running()}
+        run_id = item.assigned_run_id if item.assigned_run_id in running else None
+        context = TransitionContext(
+            actor_role=AgentRole.USER,
+            source=TransitionSource.USER,
+            run_id=run_id,
+            payload={"reason": reason},
+            phase=None,
+        )
+        try:
+            await workflow.raise_event(work_item_id, _CANCEL, context)
+        except UnknownTransition as exc:
+            msg = f"work item {work_item_id} cannot be cancelled in state {item.state.value}"
+            raise GuardRejected(msg, detail={"work_item_id": work_item_id}) from exc
+        args: JsonDict = {"work_item_id": work_item_id, "reason": reason}
+        await self._override("work.cancel", args, work_item_id=work_item_id)
+
+    async def set_priority(
+        self, work_item_id: WorkItemId, priority: Priority, *, actor: str
+    ) -> WorkItem:
+        """§93 Change Priority; the next tick orders ready items by it; ``USER_OVERRIDE``.
+
+        Raises:
+            WorkItemNotFound: Unknown item.
+            ConfigError: The overrides are not wired.
+        """
+        workflow = self._wired(self._workflow)
+        await workflow.get(work_item_id)  # WorkItemNotFound before anything is written
+        items = WorkflowRepository(self._wired(self._projects).db)
+        async with UnitOfWork(items.db) as uow:
+            updated = await items.set_priority(work_item_id, priority, uow)
+        args: JsonDict = {"work_item_id": work_item_id, "priority": priority.value, "actor": actor}
+        await self._override("work.priority", args, work_item_id=work_item_id)
+        await self.wake()
+        return updated
+
+    async def set_autonomy(self, level: AutonomyLevel, *, actor: str) -> Project:
+        """§93 Change Autonomy Level: ``Project.autonomy_level_max``; ``USER_OVERRIDE``.
+
+        Raises:
+            ConfigError: The overrides are not wired.
+        """
+        projects = self._wired(self._projects)
+        async with UnitOfWork(projects.db) as uow:
+            project = await projects.set_autonomy_level_max(self._project_key, int(level), uow)
+        await self._override("policy.set_autonomy", {"level": int(level), "actor": actor})
+        return project
+
+    async def set_model_policy(
+        self, role: AgentRole, preferred: list[ModelId], fallback: list[ModelId]
+    ) -> RuntimePolicy:
+        """§93 Change Model Policy of one role in `.ai/agents/policies.yaml`; ``USER_OVERRIDE``.
+
+        Applies from the role's next scheduled run (ADR-0011 D-6).
+
+        Raises:
+            ConfigError: An unknown or disabled model, no preferred model, or the overrides
+                are not wired.
+            ConstitutionError: The resulting policy is invalid (the file is left unchanged).
+        """
+        known = self._wired(self._model_known)
+        path = self._wired(self._policies_path)
+        unknown = [model for model in [*preferred, *fallback] if not known(model)]
+        if unknown or not preferred:
+            msg = f"unknown or disabled model(s): {unknown}" if unknown else "no preferred model"
+            raise ConfigError(msg, detail={"models": unknown, "role": role.value})
+        policy = update_model_policy(path, role, preferred, fallback)
+        if self._on_policy_changed is not None:
+            self._on_policy_changed()
+        args: JsonDict = {"role": role.value, "preferred": preferred, "fallback": fallback}
+        await self._override("policy.set_model", args)
+        return policy
 
     async def force_review(self, work_item_id: WorkItemId) -> None:
         """Deferred to E03-S16.
@@ -256,6 +402,43 @@ class DefaultOrchestrator:
         """
         del work_item_id
         _deferred("force_review", "E03-S16")
+
+    async def _set_paused(self, *, paused: bool) -> None:
+        projects = self._wired(self._projects)
+        async with UnitOfWork(projects.db) as uow:
+            await projects.set_paused(self._project_key, paused, uow)
+
+    async def _override(
+        self,
+        command: str,
+        args: JsonDict,
+        *,
+        run_id: RunId | None = None,
+        work_item_id: WorkItemId | None = None,
+    ) -> None:
+        """``USER_OVERRIDE`` ``{command, args}`` (ARCHITECTURE §4.3 orchestrator write point)."""
+        await self._ledger.append(
+            LedgerEvent(
+                kind=LedgerEventKind.USER_OVERRIDE,
+                at=self._clock.now(),
+                project_key=self._project_key,
+                actor_role=AgentRole.USER,
+                run_id=run_id,
+                work_item_id=work_item_id,
+                outcome="OK",
+                payload={"command": command, "args": args},
+            )
+        )
+
+    async def _fire_project(self, name: HookName) -> None:
+        context = HookContext(name=name, at=self._clock.now(), project_key=self._project_key)
+        await self._hooks.fire(name, context)
+
+    @staticmethod
+    def _wired[T](dependency: T | None) -> T:
+        if dependency is None:
+            raise ConfigError(_NOT_WIRED, detail={})
+        return dependency
 
     async def _startup(self) -> None:
         """ARCHITECTURE §3.4 steps 3, 5-6: checks, recovery, ``PROJECT_STARTED``, hook."""

@@ -1917,7 +1917,7 @@ Decisions and deviations (for the owner):
 
 ### E02-S12 — Approved artifact registry and `walk artifacts`
 
-**Status:** DONE (pending)
+**Status:** DONE (8747f97)
 **Type:** feat
 **Requirements:** §33, §24, §137, §139
 **Depends on:** E02-S10, E01-S16
@@ -2047,7 +2047,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S13 — Human override CLI subset
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §93, §6.12, §137
 **Depends on:** E01-S30, E02-S11
@@ -2134,7 +2134,41 @@ CLI (INTERFACES §6): `walk pause [--agent RUN_ID]`, `walk resume [--agent RUN_I
 - Commit subject: `feat: add human override commands (E02-S13)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+405 files already formatted
+All checks passed!
+Success: no issues found in 404 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1341 passed, 5 deselected in 556.01s (0:09:16)
+```
+Touched modules: `orchestrator/service.py`, `orchestrator/commands.py`, `agents/policy_file.py`, `agents/policy_loader.py`, `cli/cmd_policy.py`, `cli/daemon.py`, `cli/composition.py` 100 %; `cli/cmd_run.py` 97 %, `workflow/repository.py` 98 %, `runtime/executor.py` 99 % (the remaining lines are pre-existing E01 branches or a JSON print). All 10 acceptance tests pass, plus: resume from a handover when the provider session is not resumable, resume of a run that is not paused or has no checkpoint, a project resume where one run cannot resume, overrides on an unwired orchestrator, set-model adding a missing role or file, an invalid or failed update leaving the file unchanged, an unknown project or work item, `walk work cancel` of a COMPLETE item (exit 2), set-autonomy out of range, JSON output of every command, and a daemon that does not answer (exit 3).
+
+Demo on the E02-S08 demo repository (outside this repository, no daemon):
+```
+$ walk --repo <tmp>/game pause
+project paused
+exit=0
+$ walk --repo <tmp>/game ledger query --kind USER_OVERRIDE --limit 1 --json   (payload)
+    "payload": {"command": "pause", "args": {"run_id": null}}
+$ walk --repo <tmp>/game resume
+project resumed
+$ walk --repo <tmp>/game pause --agent RUN-01J0000000000000000000000A
+error: pause needs a running kernel daemon ('walk run')
+exit=3
+```
+
+Decisions and contract additions (for the owner):
+- **`DefaultAgentExecutor.resume(run_id)` (new) and `paused_runs()`.** Resuming a PAUSED_BY_USER run must end it and start a continuation, and `AGENT_RUN_ENDED`/`MODEL_SELECTED` belong to the executor (ARCHITECTURE §4.3). The executor therefore ends the paused run HANDED_OVER (`AGENT_RUN_ENDED` mode `resume`, outcome OK, item unassigned) and continues it with `resume_native(latest checkpoint)`. When the session is not resumable it builds a handover (reason PAUSE, HANDOFF checkpoint) and starts the same model with it. `executor.py` was outside the Files table. INTERFACES §1.13 documents both methods.
+- **Cancel.** `cancel_work_item` raises `cancel` with `TransitionContext.run_id` set to the item's running run and `reason` in the payload. `DefaultWorkflowManager` now also forwards `reason` to the row hooks (next to `checkpoint_id`/`handover_id`, E02-S08). The row's single `ON_TASK_CANCELLED` (fired from the calling task) therefore carries the run and the reason, and its builtin cancels the run. Firing the hook a second time would have run project hooks twice. A state without a `cancel` row (COMPLETE, CANCELLED) raises `UnknownTransition`, which is converted to `GuardRejected` (AC 5, CLI exit 2).
+- **`set_model_policy` (new orchestrator method)** and **`override_handlers(orchestrator)`** (new in `orchestrator/commands.py`) carry the six command handlers, shared by the daemon (`_register_handlers`) and the in-process CLI path. `USER_OVERRIDE` is written only by the orchestrator. The CLI's shared runner is `cli/cmd_policy.run_override` (also `repo_root`, `wants_json`).
+- **Model validation.** `walk policy set-model` accepts a model id that is configured and enabled, or a family whose every level resolves to an enabled model (the default policies name families such as `claude/opus`). Without the Claude SDK, the Claude models are disabled, so they are rejected (exit 1).
+- **`PoliciesFile.roles` is `dict[AgentRole, JsonDict]`, not `dict[AgentRole, RuntimePolicy]`.** The project file holds partial overrides that `PolicyLoader` deep-merges over the kernel defaults (a `RuntimePolicy` would reject them). `update_model_policy` rewrites only the role's block of text, so other roles stay byte-identical, comments included. It validates the merged policy on a staged copy first and returns the effective `RuntimePolicy`.
+- **Policy cache.** `PolicyLoader.clear_cache()` (new) runs after `set-model`, because the daemon's loader caches every role. The composition root's `_agent_services` now also returns the loader.
+- **Repositories.** `WorkflowRepository.set_priority(id, priority, uow)`, `ProjectRepository.set_paused(key, paused, uow)` and `set_autonomy_level_max(key, level, uow)` take the unit of work, like the other writers. The generic `Repository` gains a `db` property.
+- **Resume project.** It clears the flag, fires `ON_PROJECT_RESUME`, resumes every PAUSED_BY_USER run of this kernel instance (one failure is logged and the others continue) and wakes the scheduler. A paused project's scheduler admits nothing (E01-S29, unchanged).
+- **Other files outside the table:** `cli/daemon.py`, `cli/composition.py`, `workflow/service.py`, `persistence/repository.py`, `tests/hooks/conftest.py` (`HoldingAdapter.release`) and `tests/orchestrator/test_service.py` (pause/resume/cancel are no longer deferred).
 
 ---
 

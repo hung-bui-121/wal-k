@@ -1,5 +1,7 @@
 """`CommandConsumer`: the daemon side of the SQLite command channel (ADR-0009 D-3; E01-S30).
 
+E02-S13 adds `override_handlers`, the §93 human-override commands.
+
 The CLI inserts `commands` rows; the consumer runs the registered handler for each PENDING row
 in id order and writes `command_results`. ``result_json`` holds the handler result plus its
 ``exit_code`` (0, or 2 for a guard rejection or permission denial, 1 for any other error). The
@@ -15,8 +17,12 @@ from typing import Final
 from walk.common.clock import Clock
 from walk.common.errors import ConfigError, GuardRejected, PermissionDenied, WalkError
 from walk.common.models import JsonDict
+from walk.common.roles import AgentRole
+from walk.decisions.models import AutonomyLevel
+from walk.orchestrator.service import DefaultOrchestrator
 from walk.persistence.database import Database
 from walk.persistence.uow import UnitOfWork
+from walk.workflow.models import Priority
 
 _LOG = logging.getLogger(__name__)
 
@@ -26,6 +32,7 @@ _EXIT_OK: Final = 0
 _EXIT_ERROR: Final = 1
 _EXIT_REJECTED: Final = 2
 _EXIT_CODE_KEY: Final = "exit_code"
+_USER: Final = "user"  # actor of a CLI override
 
 
 class CommandConsumer:
@@ -112,3 +119,53 @@ class CommandConsumer:
             _LOG.exception("command handler failed", extra={"command": name})
             return {"error": str(exc) or type(exc).__name__, _EXIT_CODE_KEY: _EXIT_ERROR}
         return {**result, _EXIT_CODE_KEY: _EXIT_OK}
+
+
+def override_handlers(orchestrator: DefaultOrchestrator) -> dict[str, CommandHandler]:
+    """The §93 override commands by name (E02-S13); daemon and in-process paths share them.
+
+    ``pause``/``resume`` ``{run_id?}``, ``work.cancel`` ``{work_item_id, reason}``,
+    ``work.priority`` ``{work_item_id, priority}``, ``policy.set_model`` ``{role, preferred,
+    fallback}``, ``policy.set_autonomy`` ``{level}``. Each one writes ``USER_OVERRIDE``.
+    """
+
+    async def pause(args: JsonDict) -> JsonDict:
+        run_id = args.get("run_id")
+        await orchestrator.pause(str(run_id) if run_id else None)
+        return {"paused": True, "run_id": run_id}
+
+    async def resume(args: JsonDict) -> JsonDict:
+        run_id = args.get("run_id")
+        await orchestrator.resume(str(run_id) if run_id else None)
+        return {"paused": False, "run_id": run_id}
+
+    async def cancel(args: JsonDict) -> JsonDict:
+        work_item_id = str(args["work_item_id"])
+        await orchestrator.cancel_work_item(work_item_id, str(args["reason"]))
+        return {"work_item_id": work_item_id, "state": "CANCELLED"}
+
+    async def priority(args: JsonDict) -> JsonDict:
+        item = await orchestrator.set_priority(
+            str(args["work_item_id"]), Priority(str(args["priority"])), actor=_USER
+        )
+        return {"work_item_id": item.id, "priority": item.priority.value}
+
+    async def set_model(args: JsonDict) -> JsonDict:
+        role = AgentRole(str(args["role"]))
+        policy = await orchestrator.set_model_policy(
+            role, list(args["preferred"]), list(args.get("fallback") or [])
+        )
+        return {"role": role.value, "model_policy": policy.model_policy.model_dump(mode="json")}
+
+    async def set_autonomy(args: JsonDict) -> JsonDict:
+        project = await orchestrator.set_autonomy(AutonomyLevel(int(args["level"])), actor=_USER)
+        return {"autonomy_level_max": project.autonomy_level_max}
+
+    return {
+        "pause": pause,
+        "resume": resume,
+        "work.cancel": cancel,
+        "work.priority": priority,
+        "policy.set_model": set_model,
+        "policy.set_autonomy": set_autonomy,
+    }

@@ -14,6 +14,7 @@ from walk.persistence import Repository, UnitOfWork
 from walk.workflow.errors import WorkItemNotFound
 from walk.workflow.models import (
     Phase,
+    Priority,
     Project,
     ReleaseCandidate,
     WorkItem,
@@ -66,6 +67,22 @@ class WorkflowRepository(Repository[WorkItem]):
             "created_at": _utc_text(obj.created_at),
             "updated_at": _utc_text(obj.updated_at),
         }
+
+    async def set_priority(
+        self, work_item_id: WorkItemId, priority: Priority, uow: UnitOfWork
+    ) -> WorkItem:
+        """Set the item's ``priority`` (column and JSON) on ``uow``; nothing else changes.
+
+        Raises:
+            WorkItemNotFound: No item has ``work_item_id``.
+        """
+        item = await self.get(work_item_id)
+        if item is None:
+            msg = f"work item not found: {work_item_id}"
+            raise WorkItemNotFound(msg, detail={"work_item_id": work_item_id})
+        updated = item.model_copy(update={"priority": priority})
+        await self.upsert(updated, uow)
+        return updated
 
     async def set_assigned_run(
         self,
@@ -201,6 +218,32 @@ class ProjectRepository(Repository[Project]):
             "created_at": _utc_text(obj.created_at),
             "updated_at": _utc_text(utcnow()),
         }
+
+    async def set_paused(self, key: ProjectKey, paused: bool, uow: UnitOfWork) -> Project:  # noqa: FBT001 - the flag is the value being written
+        """Set ``Project.paused`` (column and JSON) on ``uow`` (§93 ``walk pause``).
+
+        Raises:
+            ConfigError: No project has ``key``.
+        """
+        return await self._update(key, uow, paused=paused)
+
+    async def set_autonomy_level_max(self, key: ProjectKey, level: int, uow: UnitOfWork) -> Project:
+        """Set ``Project.autonomy_level_max`` on ``uow`` (§93 ``walk policy set-autonomy``).
+
+        Raises:
+            ConfigError: No project has ``key``.
+            ValidationError: ``level`` is outside 0-3.
+        """
+        return await self._update(key, uow, autonomy_level_max=level)
+
+    async def _update(self, key: ProjectKey, uow: UnitOfWork, **fields: object) -> Project:
+        project = await self.get(key)
+        if project is None:
+            msg = f"unknown project {key}"
+            raise ConfigError(msg, detail={"project_key": key})
+        updated = Project.model_validate({**project.model_dump(), **fields})
+        await self.upsert(updated, uow)
+        return updated
 
     async def single(self) -> Project:
         """Return the project this database belongs to.

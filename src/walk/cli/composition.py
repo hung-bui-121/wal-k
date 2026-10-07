@@ -341,7 +341,7 @@ def build_kernel(
         StaticCostEstimator(), ledger, hooks, clock, _effort_approval, project_key=key
     )
     git = o.git or GitCliProvider(repo, runner, ledger, idempotency, clock, project_key=key)
-    tools, permissions, agents, renderer, skills = _agent_services(
+    tools, permissions, agents, renderer, skills, policies = _agent_services(
         db, ai_root, ledger, hooks, ids, clock, key, git
     )
     memory = DefaultMemoryManager(
@@ -498,6 +498,11 @@ def build_kernel(
             _approved_check(memory),
         ),
         expire_approvals=lambda: permissions.expire_due(clock.now()),
+        projects=ProjectRepository(db),
+        workflow=workflow,
+        policies_path=ai_root / "agents" / "policies.yaml",
+        model_known=_model_known(ai_root, router),
+        on_policy_changed=policies.clear_cache,
     )
 
     async def wake_on_finish(run: AgentRun) -> None:
@@ -670,8 +675,9 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
     DefaultAgentManager,
     TemplateRenderer,
     DefaultSkillRegistry,
+    PolicyLoader,
 ]:
-    """Tools, permissions, the agent manager, the prompt renderer and the skill registry."""
+    """Tools, permissions, agents, renderer, skills and the policy loader (E02-S13 clears it)."""
     tools = DefaultToolRegistry(load_tool_specs([]))
     constitutions = ConstitutionLoader(_AGENT_DEFAULTS, ai_root / "agents" / "roles")
     policies = PolicyLoader(_AGENT_DEFAULTS / "policies.yaml", ai_root / "agents" / "policies.yaml")
@@ -691,7 +697,7 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
     agents = DefaultAgentManager(
         constitutions, policies, permissions, tools, renderer, skills=skills
     )
-    return tools, permissions, agents, renderer, skills
+    return tools, permissions, agents, renderer, skills, policies
 
 
 def _skills(
@@ -887,6 +893,19 @@ def _approved_check(memory: DefaultMemoryManager) -> Callable[[], Awaitable[None
             _LOG.warning("approved artifact drift", extra={"artifact_ids": drifted})
 
     return check
+
+
+def _model_known(ai_root: Path, router: DefaultModelRouter) -> Callable[[str], bool]:
+    """Whether a model id, or every model of a family, is configured and enabled (§93)."""
+    families = load_models_config(_DEFAULT_MODELS, ai_root / "agents" / "models.yaml").families
+
+    def known(name: str) -> bool:
+        enabled = {model for model, d in router.registry().models.items() if d.enabled}
+        if name in families:
+            return all(level.model in enabled for level in families[name].values())
+        return name in enabled
+
+    return known
 
 
 def _may_approve(ai_root: Path) -> Callable[[AgentRole], frozenset[str]]:

@@ -14,7 +14,8 @@ from walk.cli.cmd_doctor import doctor
 from walk.cli.cmd_ledger import ledger_app
 from walk.cli.cmd_memory import memory_app
 from walk.cli.cmd_phase import phase_app
-from walk.cli.cmd_run import run
+from walk.cli.cmd_policy import policy_app
+from walk.cli.cmd_run import pause, resume, run
 from walk.cli.cmd_skills import skills_app
 from walk.cli.cmd_status import status
 from walk.cli.cmd_version import version
@@ -32,6 +33,7 @@ app.add_typer(cost_app)
 app.add_typer(ledger_app)
 app.add_typer(memory_app)
 app.add_typer(phase_app)
+app.add_typer(policy_app)
 app.add_typer(skills_app)
 app.add_typer(work_app)
 app.command("approve")(approve)
@@ -39,6 +41,8 @@ app.command("deny")(deny)
 app.command("approvals")(approvals)
 app.command("bootstrap")(bootstrap)
 app.command("doctor")(doctor)
+app.command("pause")(pause)
+app.command("resume")(resume)
 app.command("run")(run)
 app.command("status")(status)
 app.command("version")(version)

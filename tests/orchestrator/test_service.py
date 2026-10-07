@@ -143,14 +143,18 @@ async def test_deferred_methods_name_their_story(make_kernel: KernelFactory) -> 
         "E07-S04": orchestrator.request_phase_review("PHASE-01"),
         "E07-S05": orchestrator.decide_phase("PHASE-01", PhaseDecision.GO, None, "user"),
         "E05-S02": orchestrator.handle_escalation(escalation),
-        "E02-S13": orchestrator.pause(None),
         "E03-S16": orchestrator.force_review("STORY-0001"),
     }
     for story, call in calls.items():
         with pytest.raises(ConfigError, match=f"implemented in {story}"):
             await call
-    for call in (orchestrator.resume(None), orchestrator.cancel_work_item("STORY-0001", "x")):
-        with pytest.raises(ConfigError, match="implemented in E02-S13"):
+    # E02-S13 implemented these; without the override dependencies they refuse to run.
+    for call in (
+        orchestrator.pause(None),
+        orchestrator.resume(None),
+        orchestrator.cancel_work_item("STORY-0001", "x"),
+    ):
+        with pytest.raises(ConfigError, match="not wired"):
             await call
 
 

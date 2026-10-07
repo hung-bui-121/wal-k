@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 
+from walk.cli.cmd_policy import run_override
 from walk.cli.composition import KernelHandle, open_database, open_workflow
 from walk.cli.daemon import transition_in_kernel
 from walk.cli.ipc import run_mutation
@@ -16,6 +17,7 @@ from walk.common.models import JsonDict
 from walk.persistence import Database
 from walk.runtime import AgentRun, AgentRunRepository
 from walk.workflow import (
+    Priority,
     StoryContract,
     WorkflowRepository,
     WorkItem,
@@ -224,3 +226,39 @@ def _describe(
         lines.append(f"runs: {_NOT_AVAILABLE}")
     lines.append(f"cost: {_NOT_AVAILABLE}")
     return lines
+
+
+@work_app.command("cancel")
+def work_cancel(
+    ctx: typer.Context,
+    item_id: Annotated[str, typer.Argument(metavar="ID", help="Work item id.")],
+    *,
+    reason: Annotated[str, typer.Option("--reason", help="Why (stored on the transition).")],
+    json_output: JsonOption = False,
+    repo: RepoOption = None,
+) -> None:
+    """Cancel the item and its running agent (worktree removed, branch kept; §93)."""
+    args: JsonDict = {"work_item_id": item_id, "reason": reason}
+    result = run_override(ctx, repo, "work.cancel", args)
+    if _wants_json(ctx, json_output):
+        typer.echo(render_json(result))
+        return
+    typer.echo(f"{item_id} cancelled")
+
+
+@work_app.command("priority")
+def work_priority(
+    ctx: typer.Context,
+    item_id: Annotated[str, typer.Argument(metavar="ID", help="Work item id.")],
+    priority: Annotated[Priority, typer.Argument(metavar="P0|P1|P2|P3", help="New priority.")],
+    *,
+    json_output: JsonOption = False,
+    repo: RepoOption = None,
+) -> None:
+    """Change the item's priority; the next scheduling tick uses it (§93)."""
+    args: JsonDict = {"work_item_id": item_id, "priority": priority.value}
+    result = run_override(ctx, repo, "work.priority", args)
+    if _wants_json(ctx, json_output):
+        typer.echo(render_json(result))
+        return
+    typer.echo(f"{item_id} priority {priority.value}")
