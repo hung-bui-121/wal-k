@@ -46,7 +46,7 @@ from walk.common.models import WalkModel
 from walk.common.roles import AgentRole
 from walk.context import DefaultContextManager
 from walk.effort import DefaultEffortManager, EffortRequest, StaticCostEstimator
-from walk.hooks import DefaultHookManager, HookExecutionRepository
+from walk.hooks import DefaultHookManager, HookCallable, HookContext, HookExecutionRepository
 from walk.improvement import PINS_PATH, BehaviorVersionCatalog, KernelVersionPins
 from walk.integrations import (
     AsyncioSubprocessRunner,
@@ -102,6 +102,7 @@ from walk.runtime import (
     PollingApprovalWaiter,
     RecoveryManager,
 )
+from walk.runtime.sandbox import scrubbed_env
 from walk.skills import DefaultSkillRegistry, DriftReport, SkillProjector
 from walk.telemetry import (
     DefaultEvidenceManager,
@@ -150,6 +151,7 @@ _GIT_EXCLUDE: Final = "info/exclude"
 PROJECTIONS_DIR: Final = Path(".walk") / "projections"
 """Repo-level projection folder per provider (`walk skills sync`, startup drift check)."""
 _PROBE_TIMEOUT_S: Final = 30  # `claude --version` health probe
+_PROJECT_HOOKS: Final = Path("agents") / "hooks.yaml"
 
 
 class KernelSettings(WalkModel):
@@ -312,7 +314,15 @@ def build_kernel(
     ledger = DefaultLedgerManager(db, LedgerRepository(db), ulids, clock)
     telemetry = DefaultTelemetryManager(repo, LedgerRepository(db), clock)
     evidence = DefaultEvidenceManager(db, ai_root, EvidenceRepository(db), ledger, ids, clock)
-    hooks = DefaultHookManager(HookExecutionRepository(db), ledger, clock)
+    runner = o.subprocess_runner or AsyncioSubprocessRunner()
+    hooks = DefaultHookManager(
+        HookExecutionRepository(db),
+        ledger,
+        clock,
+        command_runner=runner,
+        cwd=str(repo),
+        base_env=scrubbed_env(os.environ),  # project commands never see secrets (E02-S09)
+    )
     items = WorkflowRepository(db)
     workflow = DefaultWorkflowManager(
         db, items, ProjectRepository(db), ids, ledger, hooks, clock, TABLES_DIR
@@ -322,7 +332,6 @@ def build_kernel(
     effort = DefaultEffortManager(
         StaticCostEstimator(), ledger, hooks, clock, _effort_approval, project_key=key
     )
-    runner = o.subprocess_runner or AsyncioSubprocessRunner()
     git = o.git or GitCliProvider(repo, runner, ledger, idempotency, clock, project_key=key)
     tools, permissions, agents, renderer, skills = _agent_services(
         db, ai_root, ledger, hooks, ids, clock, key, git
@@ -479,8 +488,7 @@ def build_kernel(
         await orchestrator.wake()
 
     executor.on_run_finished = wake_on_finish
-    # ADR-0016 D-3: once, after every service exists and before project hooks load.
-    register_builtins(
+    _wire_hooks(
         hooks,
         BuiltinHookDeps(
             hooks=hooks,
@@ -494,6 +502,8 @@ def build_kernel(
             runs=runs,
             default_branch=project.default_branch,
         ),
+        _kernel_actions(memory, skills, telemetry, repo),
+        ai_root / _PROJECT_HOOKS,
     )
     return KernelHandle(
         settings=settings,
@@ -699,6 +709,48 @@ def _skills(
         clock=clock,
         project_key=key,
     )
+
+
+def _wire_hooks(
+    hooks: DefaultHookManager,
+    deps: BuiltinHookDeps,
+    actions: dict[str, HookCallable],
+    project_hooks: Path,
+) -> None:
+    """Builtins first (ADR-0016 D-3), then the project hooks, which cannot replace them."""
+    register_builtins(hooks, deps)
+    hooks.set_kernel_actions(actions)
+    hooks.load_project_hooks(str(project_hooks))
+
+
+def _kernel_actions(
+    memory: DefaultMemoryManager,
+    skills: DefaultSkillRegistry,
+    telemetry: DefaultTelemetryManager,
+    repo: Path,
+) -> dict[str, HookCallable]:
+    """The `KERNEL_ACTIONS` project hooks may name (E02-S09 Behavior 7)."""
+
+    async def rebuild_index(ctx: HookContext) -> None:
+        del ctx
+        await memory.rebuild_index()
+
+    async def sync_skills(ctx: HookContext) -> None:
+        del ctx
+        chosen = skills.load()
+        for projector in skill_projectors():  # as `walk skills sync` without --worktree
+            target = repo / PROJECTIONS_DIR / projector.provider
+            target.mkdir(parents=True, exist_ok=True)
+            await skills.project_all([projector], str(target), chosen)
+
+    async def count(ctx: HookContext) -> None:
+        telemetry.counter(f"hook.{ctx.payload['hook_id']}")
+
+    return {
+        "memory.rebuild_index": rebuild_index,
+        "skills.sync": sync_skills,
+        "telemetry.counter": count,
+    }
 
 
 def _skill_projection(

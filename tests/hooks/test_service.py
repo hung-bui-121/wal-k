@@ -302,11 +302,6 @@ async def test_project_hook_without_executor_fails_by_policy(
         await manager.fire(HookName.ON_COMMIT, _ctx(HookName.ON_COMMIT))
 
 
-def test_load_project_hooks_not_supported_yet(manager: DefaultHookManager) -> None:
-    with pytest.raises(ConfigError, match="E02-S09"):
-        manager.load_project_hooks(".ai/agents/hooks.yaml")
-
-
 async def test_disabled_hook_is_skipped(
     manager: DefaultHookManager, ledger: DefaultLedgerManager, db: Database
 ) -> None:

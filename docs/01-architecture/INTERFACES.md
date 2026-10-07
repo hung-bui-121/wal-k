@@ -627,7 +627,13 @@ class HookManager(Protocol):
         hook tries to disable/replace a `required` builtin."""
 
     def load_project_hooks(self, path: str) -> list[Hook]:
-        """`.ai/agents/hooks.yaml`."""
+        """`.ai/agents/hooks.yaml` (E02-S09): parse (`walk.hooks.project.ProjectHooksFile`), validate every hook,
+        register them (kind="project", priority >= 50, id `project.*`) and return them; an absent file → [].
+        Shell commands run through the injected command runner (`DefaultHookManager(..., command_runner=, cwd=,
+        base_env=)`, the kernel's SubprocessRunner) in the platform shell with `hook_env(ctx, scrubbed env)`;
+        exit != 0 → FAILED (message: last stderr line), runner Timeout → TIMEOUT. Kernel actions come from
+        `DefaultHookManager.set_kernel_actions({name: callable})` (names ⊆ KERNEL_ACTIONS) and receive the context
+        with `payload["hook_id"]` = the running project hook's id."""
 
     async def fire(self, name: HookName, ctx: HookContext) -> list[HookResult]:
         """Run hooks for `name` ordered by priority, sequentially, each with timeout. FAIL_CLOSED failure raises HookFailed

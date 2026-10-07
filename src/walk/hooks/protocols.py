@@ -21,7 +21,10 @@ class HookManager(Protocol):
         ...
 
     def load_project_hooks(self, path: str) -> list[Hook]:
-        """`.ai/agents/hooks.yaml`."""
+        """Register the hooks of `.ai/agents/hooks.yaml` and return them (absent file: []).
+
+        Raises ConfigError on invalid YAML/schema, an unknown kernel action or a duplicate id.
+        """
         ...
 
     async def fire(self, name: HookName, ctx: HookContext) -> list[HookResult]:

@@ -1,10 +1,18 @@
-"""Default hook manager: registry and sequential dispatcher (ARCHITECTURE §4.1, ADR-0009 D-7)."""
+"""Default hook manager: registry and sequential dispatcher (ARCHITECTURE §4.1, ADR-0009 D-7).
+
+Project hooks (E02-S09) run a shell command through an injected command runner (the kernel's
+`SubprocessRunner`, which `walk.hooks` may not import) or an allowlisted kernel action
+registered by the composition root.
+"""
 
 import asyncio
-from typing import Literal
+import sys
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final, Literal, Protocol
 
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError
+from walk.common.errors import ConfigError, Timeout
 from walk.common.roles import AgentRole
 from walk.hooks.errors import HookFailed
 from walk.hooks.models import (
@@ -15,12 +23,43 @@ from walk.hooks.models import (
     HookName,
     HookResult,
 )
+from walk.hooks.project import KERNEL_ACTIONS, ProjectHooksFile, hook_env
 from walk.hooks.repository import HookExecutionRepository
 from walk.persistence import UnitOfWork
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
 from walk.telemetry.protocols import LedgerManager
 
-_PROJECT_HOOKS_UNAVAILABLE = "project hooks are available from E02-S09"
+_NO_RUNNER: Final = "no command runner"
+_NO_TARGET: Final = "project hook has neither command nor kernel action"
+
+
+class _CommandResult(Protocol):
+    """What the command runner reports (`walk.integrations.SubprocessResult`)."""
+
+    @property
+    def exit_code(self) -> int: ...
+    @property
+    def stderr(self) -> str: ...
+
+
+class _CommandRunner(Protocol):
+    """The kernel's `walk.integrations.SubprocessRunner`, structurally."""
+
+    async def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = ...,
+        env: dict[str, str] | None = ...,
+        timeout_s: int = ...,
+        input_text: str | None = ...,
+    ) -> _CommandResult: ...
+
+
+class _CommandFailed(Exception):
+    """A project command exited non-zero; ``str()`` is the recorded message."""
+
+
 _LEDGER_OUTCOME: dict[str, Literal["OK", "FAILED", "SKIPPED"]] = {
     "OK": "OK",
     "FAILED": "FAILED",
@@ -44,6 +83,9 @@ class DefaultHookManager:
         clock: Clock,
         *,
         callables: dict[str, HookCallable] | None = None,
+        command_runner: _CommandRunner | None = None,
+        cwd: str | None = None,
+        base_env: Mapping[str, str] | None = None,
     ) -> None:
         """Wire the manager.
 
@@ -53,12 +95,21 @@ class DefaultHookManager:
             clock: Measures ``duration_ms`` and stamps the records.
             callables: Builtin callables by ``Hook.callable_path``, used when `register` gets
                 no ``fn``.
+            command_runner: Runs project shell commands (a ``SubprocessRunner``); without it
+                a command hook fails by its policy.
+            cwd: Working directory of project commands (the repository root).
+            base_env: Environment of project commands before the ``WALK_HOOK_*`` variables
+                (the scrubbed agent environment: no secrets).
         """
         self._repo = repo
         self._ledger = ledger
         self._clock = clock
         self._callables = dict(callables or {})
         self._hooks: dict[HookName, dict[str, tuple[Hook, HookCallable | None]]] = {}
+        self._runner = command_runner
+        self._cwd = cwd
+        self._base_env = dict(base_env or {})
+        self._actions: dict[str, HookCallable] = {}
 
     def register(self, hook: Hook, fn: HookCallable | None = None) -> None:
         """Add ``hook``; builtins need ``fn`` or a ``callable_path`` known to the manager.
@@ -90,12 +141,33 @@ class DefaultHookManager:
         self._hooks.setdefault(hook.name, {})[hook.id] = (hook, fn)
 
     def load_project_hooks(self, path: str) -> list[Hook]:
-        """Read ``.ai/agents/hooks.yaml``; not available before E02-S09.
+        """Read ``.ai/agents/hooks.yaml`` and register its hooks; return them.
+
+        An absent file declares no hooks. Every hook is validated before any is registered.
 
         Raises:
-            ConfigError: Always, until E02-S09 implements project hooks.
+            ConfigError: Invalid YAML or schema (naming the hook id), an unknown kernel
+                action, or a duplicate id.
         """
-        raise ConfigError(_PROJECT_HOOKS_UNAVAILABLE, detail={"path": path})
+        hooks = ProjectHooksFile.load(Path(path)).to_hooks()
+        for hook in hooks:
+            self.register(hook)
+        return hooks
+
+    def set_kernel_actions(self, actions: Mapping[str, HookCallable]) -> None:
+        """Make the allowlisted kernel actions available to project hooks.
+
+        The action receives the hook's context with ``payload["hook_id"]`` set to the id of
+        the project hook that runs it.
+
+        Raises:
+            ConfigError: A name is not in ``KERNEL_ACTIONS``.
+        """
+        unknown = sorted(set(actions) - set(KERNEL_ACTIONS))
+        if unknown:
+            msg = f"unknown kernel action(s): {unknown}"
+            raise ConfigError(msg, detail={"actions": unknown})
+        self._actions.update(actions)
 
     def hooks_for(self, name: HookName) -> list[Hook]:
         """Return the enabled hooks of ``name`` by priority, then id."""
@@ -117,7 +189,7 @@ class DefaultHookManager:
             raise ConfigError(msg, detail={"hook_name": name.value})
         results: list[HookResult] = []
         for hook, fn in self._ordered(name):
-            result = await self._execute(hook, fn, ctx)
+            result = await self._execute(hook, fn or self._project_callable(hook), ctx)
             results.append(result)
             if result.status != "OK" and hook.fail_policy is HookFailPolicy.FAIL_CLOSED:
                 msg = f"hook {name.value}/{hook.id} failed: {result.status}"
@@ -131,6 +203,41 @@ class DefaultHookManager:
                 )
         return results
 
+    def _project_callable(self, hook: Hook) -> HookCallable:
+        """What a project hook runs: its kernel action or its command (builtins have ``fn``)."""
+        if hook.kernel_action is not None:
+            return self._action_callable(hook, hook.kernel_action)
+        if hook.command is not None:
+            return self._command_callable(hook, hook.command)
+        return _failing(_NO_TARGET)
+
+    def _action_callable(self, hook: Hook, action_name: str) -> HookCallable:
+        action = self._actions.get(action_name)
+        if action is None:
+            return _failing(f"kernel action {action_name!r} is not available")
+
+        async def run_action(ctx: HookContext) -> None:
+            await action(ctx.model_copy(update={"payload": {**ctx.payload, "hook_id": hook.id}}))
+
+        return run_action
+
+    def _command_callable(self, hook: Hook, command: str) -> HookCallable:
+        runner = self._runner
+        if runner is None:
+            return _failing(_NO_RUNNER)
+
+        async def run_command(ctx: HookContext) -> None:
+            result = await runner.run(
+                _shell_argv(command, self._base_env),
+                cwd=self._cwd,
+                env=hook_env(ctx, self._base_env),
+                timeout_s=hook.timeout_s,
+            )
+            if result.exit_code != 0:
+                raise _CommandFailed(_failure_message(result))
+
+        return run_command
+
     def _is_required_builtin(self, hook_id: str) -> bool:
         return any(
             hook.kind == "builtin" and hook.required and hook.id == hook_id
@@ -142,7 +249,7 @@ class DefaultHookManager:
         entries = [entry for entry in self._hooks.get(name, {}).values() if entry[0].enabled]
         return sorted(entries, key=lambda entry: (entry[0].priority, entry[0].id))
 
-    async def _execute(self, hook: Hook, fn: HookCallable | None, ctx: HookContext) -> HookResult:
+    async def _execute(self, hook: Hook, fn: HookCallable, ctx: HookContext) -> HookResult:
         started = self._clock.now()
         status, message = await _run(hook, fn, ctx)
         duration_ms = int((self._clock.now() - started).total_seconds() * 1000)
@@ -175,20 +282,21 @@ class DefaultHookManager:
 
 
 async def _run(
-    hook: Hook, fn: HookCallable | None, ctx: HookContext
+    hook: Hook, fn: HookCallable, ctx: HookContext
 ) -> tuple[Literal["OK", "FAILED", "TIMEOUT"], str]:
     """Run one hook under its timeout; never raises except on cancellation."""
-    if fn is None:
-        return "FAILED", _PROJECT_HOOKS_UNAVAILABLE
     timeout = asyncio.timeout(hook.timeout_s)
     try:
         async with timeout:
             await fn(ctx)
-    except TimeoutError as exc:
-        # Distinguish our deadline from a TimeoutError raised by the hook itself.
-        if timeout.expired():
+    except (TimeoutError, Timeout) as exc:
+        # Our deadline, or the command runner killing a project command at its timeout;
+        # a TimeoutError raised by the hook itself is a failure.
+        if timeout.expired() or isinstance(exc, Timeout):
             return "TIMEOUT", f"exceeded {hook.timeout_s} s"
         return "FAILED", _describe(exc)
+    except _CommandFailed as exc:
+        return "FAILED", str(exc)
     except Exception as exc:  # noqa: BLE001 - any hook failure is recorded and judged by fail_policy
         return "FAILED", _describe(exc)
     return "OK", ""
@@ -197,3 +305,24 @@ async def _run(
 def _describe(exc: Exception) -> str:
     text = str(exc)
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _failing(message: str) -> HookCallable:
+    async def fail(ctx: HookContext) -> None:
+        del ctx
+        raise _CommandFailed(message)
+
+    return fail
+
+
+def _shell_argv(command: str, env: Mapping[str, str]) -> list[str]:
+    """``command`` run by the platform shell: ``%COMSPEC% /d /s /c`` or ``/bin/sh -c``."""
+    if sys.platform == "win32":
+        comspec = next((v for k, v in env.items() if k.upper() == "COMSPEC"), "cmd.exe")
+        return [comspec, "/d", "/s", "/c", command]
+    return ["/bin/sh", "-c", command]
+
+
+def _failure_message(result: _CommandResult) -> str:
+    lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    return lines[-1] if lines else f"exit code {result.exit_code}"

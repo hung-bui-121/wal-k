@@ -9,6 +9,7 @@ from walk.hooks.models import (
     HookName,
     HookResult,
 )
+from walk.hooks.project import ProjectHooksFile
 from walk.hooks.protocols import HookManager
 from walk.hooks.repository import HookExecutionRepository
 from walk.hooks.service import DefaultHookManager
@@ -24,4 +25,5 @@ __all__ = [
     "HookManager",
     "HookName",
     "HookResult",
+    "ProjectHooksFile",
 ]

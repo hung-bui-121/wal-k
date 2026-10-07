@@ -1265,7 +1265,7 @@ Level-0 decisions:
 
 ### E02-S08 — Builtin MUST hooks (ARCHITECTURE §4.1 table)
 
-**Status:** DONE (pending)
+**Status:** DONE (e6babf7)
 **Type:** feat
 **Requirements:** §32, §41, §22, §137
 **Depends on:** E01-S07, E01-S28, E01-S16
@@ -1501,7 +1501,7 @@ Decisions and contract changes (owner decision option A, plus small additive fix
 
 ### E02-S09 — Project hooks from `.ai/agents/hooks.yaml`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §32, §24, §137
 **Depends on:** E02-S08
@@ -1597,7 +1597,37 @@ class DefaultHookManager:
 - Commit subject: `feat: load project hooks from hooks.yaml (E02-S09)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+386 files already formatted
+All checks passed!
+Success: no issues found in 385 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.85%
+1255 passed, 5 deselected in 483.00s (0:08:03)
+```
+Touched modules: `hooks/project.py` 100 %, `hooks/service.py` 100 %, `cli/composition.py` 100 %. All 9 acceptance tests pass, plus negative paths: a hook with neither command nor action, invalid YAML, a non-mapping file, `hooks` not a list, unknown top-level keys, a `builtin.*` id, `timeout_s: 0`, an unknown hook name, a non-mapping hook entry, a duplicate id, a disabled hook (registered, not run), a kernel action that is not wired, `set_kernel_actions` with an unknown name, a command hook on a manager without a runner, and a `LOG_AND_CONTINUE` failure followed by the next hook. The composition-root tests check that `JIRA_API_TOKEN` from the kernel environment never reaches a hook command, and that all three kernel actions are wired.
+
+Demo on the E02-S08 demo repository (outside this repository), Windows host, real shell:
+```
+$ cat .ai/agents/hooks.yaml
+hooks: [{name: on_project_start, id: project.echo, command: "echo hello"}]
+$ walk --repo <tmp>/game run --once
+started 0 run(s)
+exit=0
+$ walk --repo <tmp>/game ledger query --kind HOOK_EXECUTED --json   (seq, hook_id, status)
+5   builtin.memory_index  OK
+7   builtin.memory_index  OK
+9   builtin.memory_index  OK
+10  project.echo          OK
+```
+
+Decisions (Level 0, recorded for the owner):
+- **Command runner injection.** `walk.hooks` may not import `walk.integrations` (ARCHITECTURE §2.2) or call `asyncio.create_subprocess_exec` (TID251). `DefaultHookManager` therefore gains three keyword-only constructor arguments: `command_runner`, `cwd` and `base_env`. The runner is typed by a private structural protocol that matches `SubprocessRunner`. The composition root passes the kernel's runner, the repository root and `scrubbed_env(os.environ)`, so project commands get the agent allowlist and never secrets. Without a runner, a command hook fails by its policy (`no command runner`).
+- **Shell.** A `command` is a shell command line, run as `%COMSPEC% /d /s /c <command>` on Windows (COMSPEC from the scrubbed environment, default `cmd.exe`) and as `/bin/sh -c <command>` elsewhere.
+- **Failure message and timeout.** A non-zero exit is `FAILED`, with the last non-empty stderr line as its message (or `exit code N` when stderr is empty). The runner's `Timeout` and the manager's own deadline both record `TIMEOUT`.
+- **Kernel actions.** An action receives the hook's context with `payload["hook_id"]` set to the project hook's id; this is how `telemetry.counter` names `hook.<id>`. The actions are built in the composition root (`_kernel_actions`). `skills.sync` does what `walk skills sync` does without `--worktree`: it projects all skills into `.walk/projections/<provider>` and rewrites the lock. `load_project_hooks` validates the whole file before it registers anything, then registers and returns the hooks.
+- **Obsolete test.** The E01-S07 stub test `tests/hooks/test_service.py::test_load_project_hooks_not_supported_yet` asserted the "available from E02-S09" error, so it was removed; it is named in the commit body. `src/walk/hooks/protocols.py` (docstring) and `INTERFACES.md` §1.11 were updated.
 
 ---
 
