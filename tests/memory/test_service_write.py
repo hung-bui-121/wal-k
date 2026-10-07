@@ -201,8 +201,6 @@ async def test_read_unknown_document_raises(memory: DefaultMemoryManager) -> Non
         "read_bug_context",
         "read_project_context",
         "assess_freshness",
-        "approve_artifact",
-        "verify_approved_artifacts",
     ],
 )
 async def test_later_story_methods_raise_config_error(
@@ -213,10 +211,7 @@ async def test_later_story_methods_raise_config_error(
         "read_bug_context": ("BUG-0001",),
         "assess_freshness": (_feature(fake_clock), HEAD),
     }
-    method = getattr(memory, call)
-    pending = (
-        method(None, actor=ACTOR) if call == "approve_artifact" else method(*args.get(call, ()))
-    )
+    pending = getattr(memory, call)(*args.get(call, ()))
     with pytest.raises(ConfigError, match="implemented in E0"):
         await pending
 

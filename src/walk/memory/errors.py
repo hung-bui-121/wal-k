@@ -13,3 +13,11 @@ class SecretDetected(BoundaryViolation):
 
 class ApprovedWriteRefused(PermissionDenied):
     """A write under ``approved/`` lacks a change-request decision (Invariant 10)."""
+
+
+class ApprovalNotAuthorized(PermissionDenied):
+    """The actor may not approve this artifact kind (§33; constitution ``may_approve``)."""
+
+
+class ApprovedArtifactDrift(PermanentError):
+    """Approved artifact payloads no longer match their hash; ``detail["ids"]`` lists them."""

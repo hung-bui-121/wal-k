@@ -70,7 +70,8 @@ class DefaultOrchestrator:
             kernel_instance: This kernel process.
             poll_interval_s: Seconds between ticks without a wake-up.
             startup_checks: ARCHITECTURE §3.4 step 3 checks (kernel version pins, E02-S04;
-                skill drift, E02-S07), awaited before recovery; an exception (e.g.
+                skill drift, E02-S07; approved artifact hashes, E02-S12, which only report
+                drift), awaited before recovery; an exception (e.g.
                 `VersionPinError`) aborts startup before ``PROJECT_STARTED`` and
                 ``ON_PROJECT_START``.
             expire_approvals: Awaited at the start of every tick: expires approval requests

@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from walk.cli.cmd_approvals import approvals, approve, deny
+from walk.cli.cmd_artifacts import artifacts_app
 from walk.cli.cmd_bootstrap import bootstrap
 from walk.cli.cmd_cost import cost_app
 from walk.cli.cmd_db import db_app
@@ -25,6 +26,7 @@ app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
 )
+app.add_typer(artifacts_app)
 app.add_typer(db_app)
 app.add_typer(cost_app)
 app.add_typer(ledger_app)

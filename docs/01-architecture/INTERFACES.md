@@ -410,7 +410,11 @@ class MemoryManager(Protocol):
     ) -> MemoryDocument:
         """Validates front matter, bumps version, stamps freshness (commit=head, timestamp=now), refuses secrets
         (ARCHITECTURE.md §6), refuses writes under approved/ without change authorisation (Invariant 10),
-        writes atomically (tmp + rename), updates memory_index, fires ON_CONTEXT_UPDATED, ledger CONTEXT_UPDATED."""
+        writes atomically (tmp + rename), updates memory_index, fires ON_CONTEXT_UPDATED, ledger CONTEXT_UPDATED.
+        E02-S12: a document under approved/ is refused with ApprovedWriteRefused(PermissionDenied, "approved artifacts change
+        only through approve_artifact") unless extra.change_request_decision is a DEC-NNNN id (existence checked from E04-S05;
+        until then a WARNING is logged); approve_artifact writes through a private bypass. rebuild_index keeps the cached
+        freshness assessment of an unchanged document (same raw_sha256)."""
 
     async def apply_updates(
         self, updates: list[ContextUpdate], *, actor: Actor, head: Sha, branch: str
@@ -432,10 +436,20 @@ class MemoryManager(Protocol):
     async def approve_artifact(
         self, artifact: ApprovedArtifact, *, actor: Actor
     ) -> ApprovedArtifact:
-        """§33. Requires actor role ∈ authority.may_approve[kind] or USER. Ledger ARTIFACT_APPROVED."""
+        """§33. Requires actor role ∈ authority.may_approve[kind] or USER. Ledger ARTIFACT_APPROVED.
+        E02-S12: DefaultMemoryManager(..., git=GitProvider, may_approve=role → kinds) — the composition root derives
+        may_approve from the constitutions; without it only USER approves (ApprovalNotAuthorized otherwise).
+        `payload_paths` name source files (absolute or repo-relative), copied into .ai/approved/<id>/ under their file names
+        (the stored payload_paths); `APR-0000` allocates the next APR id; content_sha256 = memory.approved.hash_payload;
+        supersedes → version + 1 and the old artifact SUPERSEDED (row and document). Ledger payload {id, kind, sha}. Rows:
+        memory.repository.ApprovedArtifactRepository (upsert(uow, artifact), get, list(status, scope))."""
 
     async def verify_approved_artifacts(self) -> list[ApprovedArtifactId]:
-        """Hash check; returns drifted ids and fires ON_CONTEXT_STALE(INVALID) for each."""
+        """Hash check; returns drifted ids and fires ON_CONTEXT_STALE(INVALID) for each.
+        E02-S12: APPROVED artifacts only; drift (mismatch or missing payload) sets the metadata document's memory_index
+        freshness_status INVALID, writes CONTEXT_FRESHNESS and fires ON_CONTEXT_STALE {doc_id, status: INVALID,
+        reason: "approved artifact drift"}; the artifact status is unchanged. Called at startup (§3.4 step 3, never aborts),
+        by `walk artifacts verify`; `walk doctor` recomputes the hashes read-only."""
 
     async def write_report(self, kind: str, subject_id: str, markdown: str) -> str:
         """`.ai/reports/<kind>/<subject_id>.md` (generated, overwritten)."""
@@ -1668,6 +1682,7 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk pause` / `walk resume` | `[--agent RUN_ID]` | §93 |
 | `walk approve` / `walk deny` | `APV_ID --note TEXT` | §92; E02-S11: daemon command `approve`/`deny` when a daemon holds the lock, else in-process; prints `<id> <STATE>`; exit 1 unknown id, 2 already decided |
 | `walk approvals` | `--pending` | E02-S11: reads the DB; table id, kind, tool, state, approver, run, requested_at |
+| `walk artifacts list` / `approve PATH... --kind KIND --title TITLE --scope SCOPE [--supersedes APR_ID]` / `verify` | `--json` (list) | §33; E02-S12: in-process; approve acts as USER and prints `<id> approved (sha <12>)`; verify prints `ok` or exits 2 listing the drifted ids |
 | `walk decisions list` / `show ID` / `override ID --outcome TEXT --rationale TEXT` | | §44, §93 |
 | `walk debates list` / `show ID` | | `[MVP minimal]` |
 | `walk ledger tail` | `--follow` `--since SEQ` | |

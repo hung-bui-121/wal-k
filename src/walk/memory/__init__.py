@@ -1,6 +1,13 @@
 """Project memory: `.ai/` documents, their single write path and index (§34-§42; ADR-0003)."""
 
-from walk.memory.errors import ApprovedWriteRefused, DocumentNotFound, SecretDetected
+from walk.memory.approved import APPROVED_DIR, approved_doc, hash_payload
+from walk.memory.errors import (
+    ApprovalNotAuthorized,
+    ApprovedArtifactDrift,
+    ApprovedWriteRefused,
+    DocumentNotFound,
+    SecretDetected,
+)
 from walk.memory.frontmatter import parse_document, render_document, split_document
 from walk.memory.models import (
     ApprovalStatus,
@@ -20,17 +27,25 @@ from walk.memory.models import (
 )
 from walk.memory.paths import doc_path_for, folder_for_type
 from walk.memory.protocols import MemoryManager
-from walk.memory.repository import MemoryIndexRepository, MemoryIndexRow
+from walk.memory.repository import (
+    ApprovedArtifactRepository,
+    MemoryIndexRepository,
+    MemoryIndexRow,
+)
 from walk.memory.secrets import SECRET_PATTERNS, find_secrets
 from walk.memory.sections import SECTION_ORDER, sections_for, skeleton_for
 from walk.memory.service import DefaultMemoryManager
 
 __all__ = [
+    "APPROVED_DIR",
     "SECRET_PATTERNS",
     "SECTION_ORDER",
+    "ApprovalNotAuthorized",
     "ApprovalStatus",
     "ApprovedArtifact",
+    "ApprovedArtifactDrift",
     "ApprovedArtifactKind",
+    "ApprovedArtifactRepository",
     "ApprovedWriteRefused",
     "BugContext",
     "ContextUpdate",
@@ -49,9 +64,11 @@ __all__ = [
     "ProjectContext",
     "RelatedLinks",
     "SecretDetected",
+    "approved_doc",
     "doc_path_for",
     "find_secrets",
     "folder_for_type",
+    "hash_payload",
     "parse_document",
     "render_document",
     "sections_for",

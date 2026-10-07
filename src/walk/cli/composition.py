@@ -345,7 +345,15 @@ def build_kernel(
         db, ai_root, ledger, hooks, ids, clock, key, git
     )
     memory = DefaultMemoryManager(
-        ai_root, MemoryIndexRepository(db), ledger, hooks, ids, clock, project_key=key
+        ai_root,
+        MemoryIndexRepository(db),
+        ledger,
+        hooks,
+        ids,
+        clock,
+        project_key=key,
+        git=git,
+        may_approve=_may_approve(ai_root),
     )
     integrations = _integrations(repo, runner, credentials, tools, clock)
     runs = AgentRunRepository(db, clock=clock)
@@ -487,6 +495,7 @@ def build_kernel(
         startup_checks=_startup_checks(
             _version_pin_check(ai_root, clock),
             _drift_check(skills, router, repo, strict=settings.strict),
+            _approved_check(memory),
         ),
         expire_approvals=lambda: permissions.expire_due(clock.now()),
     )
@@ -865,6 +874,33 @@ def _validate_pins(ai_root: Path, clock: Clock) -> None:
     KernelVersionPins.load(ai_root).validate(catalog)
 
 
+def _approved_check(memory: DefaultMemoryManager) -> Callable[[], Awaitable[None]]:
+    """ARCHITECTURE §3.4 step 3: approved artifact hashes (Invariant 10; E02-S12).
+
+    Drift never aborts startup: the drifted documents are marked INVALID (``ON_CONTEXT_STALE``)
+    and logged; `walk doctor` and `walk artifacts verify` report them.
+    """
+
+    async def check() -> None:
+        drifted = await memory.verify_approved_artifacts()
+        if drifted:
+            _LOG.warning("approved artifact drift", extra={"artifact_ids": drifted})
+
+    return check
+
+
+def _may_approve(ai_root: Path) -> Callable[[AgentRole], frozenset[str]]:
+    """The kinds a role's constitution may approve (``authority.may_approve``; §33)."""
+    constitutions = ConstitutionLoader(_AGENT_DEFAULTS, ai_root / "agents" / "roles")
+
+    def allowed(role: AgentRole) -> frozenset[str]:
+        if role not in constitutions.available_roles():
+            return frozenset()
+        return frozenset(constitutions.load(role).authority.may_approve)
+
+    return allowed
+
+
 def _drift_check(
     skills: DefaultSkillRegistry, router: DefaultModelRouter, repo: Path, *, strict: bool
 ) -> Callable[[], Awaitable[None]]:
@@ -1130,6 +1166,14 @@ def open_memory(
     ids = IdSequenceStore(db)
     ledger = DefaultLedgerManager(db, LedgerRepository(db), ids, time)
     hooks = DefaultHookManager(HookExecutionRepository(db), ledger, time)
+    git = GitCliProvider(
+        repo,
+        AsyncioSubprocessRunner(),
+        ledger,
+        IdempotencyStore(db, time),
+        time,
+        project_key=project_key,
+    )
     return DefaultMemoryManager(
         repo / _AI_DIR,
         MemoryIndexRepository(db),
@@ -1138,4 +1182,6 @@ def open_memory(
         ids,
         time,
         project_key=project_key,
+        git=git,
+        may_approve=_may_approve(repo / _AI_DIR),
     )

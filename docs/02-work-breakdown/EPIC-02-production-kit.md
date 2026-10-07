@@ -1789,7 +1789,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S11 — Approval requests and `walk approve/deny/approvals`
 
-**Status:** DONE (pending)
+**Status:** DONE (1d693da)
 **Type:** feat
 **Requirements:** §92, §31, §51, §93, §137
 **Depends on:** E02-S10, E01-S26
@@ -1917,7 +1917,7 @@ Decisions and deviations (for the owner):
 
 ### E02-S12 — Approved artifact registry and `walk artifacts`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §33, §24, §137, §139
 **Depends on:** E02-S10, E01-S16
@@ -2004,7 +2004,44 @@ CLI: `walk artifacts list [--json]`; `walk artifacts approve PATH... --kind KIND
 - Commit subject: `feat: add approved artifact registry and artifacts commands (E02-S12)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+400 files already formatted
+All checks passed!
+Success: no issues found in 399 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.86%
+1317 passed, 5 deselected in 507.75s (0:08:27)
+```
+Touched modules: `memory/approved.py` 100 %, `memory/repository.py` 100 %, `memory/service.py` 100 %, `memory/errors.py` 100 %, `cli/cmd_artifacts.py` 100 %, `cli/cmd_doctor.py` 100 %, `cli/composition.py` 100 %. All 10 acceptance tests pass, plus negative paths: no payload, a missing payload file, two payload files with the same name, an unknown or malformed `--supersedes`, an unknown artifact id, a manager without git, a role without `may_approve`, a write under `approved/` with an invalid decision id, a superseded artifact whose document is gone, and a failed payload copy (no `.tmp` left). Also covered: `walk doctor` printing `approved: ok`, `approved: drift APR-0001` and `approved: no database` without changing its exit code; kernel startup marking a drifted artifact INVALID; `walk artifacts verify` on a database without a project (exit 1).
+
+Demo on the E02-S08 demo repository (outside this repository), run from its root:
+```
+$ walk artifacts approve GDD/concept.png --kind GAMEPLAY_CONCEPT --title "Core loop" --scope project
+APR-0001 approved (sha 750bf10f24e0)
+exit=0
+$ walk artifacts verify
+ok
+exit=0
+$ walk artifacts list
+id        kind              status    version  scope    title      sha
+APR-0001  GAMEPLAY_CONCEPT  APPROVED  1        project  Core loop  750bf10f24e0
+$ printf 'x' >> .ai/approved/APR-0001/concept.png && walk artifacts verify
+approved artifact drift: APR-0001
+exit=2                                        (payload restored afterwards)
+```
+
+Decisions (Level 0 unless marked):
+- **Authority lookup.** `memory` may not import `agents`, so `DefaultMemoryManager` gains two keywords. `may_approve: Callable[[AgentRole], frozenset[str]]`: the composition root derives it from the constitutions' `authority.may_approve` (`LEAD_DEV` → `ARCHITECTURE_DIRECTION`); without it only USER approves. `git: GitProvider`: memory may import the GitProvider protocol, and it gives the document's freshness stamp (HEAD and branch of the repository), because `approve_artifact(artifact, *, actor)` receives neither. `open_memory` wires both too.
+- **Payload paths.** `artifact.payload_paths` name the source files, absolute or relative to the repository root. They are copied (tmp + rename) into `.ai/approved/<id>/` under their file names, which become the stored `payload_paths`. Two sources with the same file name are refused. `hash_payload` length-prefixes every (path, bytes) pair.
+- **Document sections.** The E01-S16 section schema for `approved` documents is Status, Scope, Version, Approved By, Related Requirements, Payload; the story lists Summary, Scope, Related Requirements, Payload, Change History. `approved_doc` fills all eight; the renderer puts the schema sections first, then Summary and Change History. `extra` holds the six listed keys, with `approved_by` as the role.
+- **Write guard.** The existing `ApprovedWriteRefused(PermissionDenied)` (E01-S16) now carries the message "approved artifacts change only through approve_artifact". A `change_request_decision` passes only as a `DEC-NNNN` id, with a WARNING until E04-S05 can check that it exists. The `_approved_write` bypass is a private `approve=True` parameter of `_write`, not a public keyword on `write()`, so no caller outside the manager can use it.
+- **Index rebuild keeps INVALID.** `rebuild_index` (the `ON_PROJECT_START` default attachment) reset every row's freshness, which erased the drift that the startup check had just found. It now keeps the cached assessment of a document whose `raw_sha256` is unchanged. Payload folders `approved/APR-NNNN/**` are no longer indexed as memory documents.
+- **Doctor.** `walk doctor` opens no writable database (E02-S02 design), so its `approved` line recomputes the hashes against a read-only connection. Marking drift INVALID is left to the kernel start and `walk artifacts verify`.
+- **Startup.** The check is a composition-built step-3 callable (`_approved_check`, as in E02-S04/S07) that logs drift and never aborts; `orchestrator/service.py` changes only its docstring. `verify_approved_artifacts` also writes `CONTEXT_FRESHNESS`, because `MemoryManager` is that event's write point (ARCHITECTURE §4.3).
+- **Supersede.** The old artifact's row and its document's `status` become SUPERSEDED (the document through the same private bypass). A missing old document is logged.
+- **No daemon IPC.** `walk artifacts` runs in-process, so approving while a daemon runs writes from a second process. Memory writes are atomic and the database is in WAL mode.
+- **Other files.** `ApprovedArtifactRepository` is a standalone class: the contract's `upsert(uow, artifact)` argument order differs from the generic `Repository`. Files outside the table: `cli/composition.py`, `memory/__init__.py`, and `tests/memory/test_service_write.py` (`approve_artifact`/`verify_approved_artifacts` no longer raise "implemented in E02-S12").
 
 ---
 

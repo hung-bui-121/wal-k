@@ -7,8 +7,16 @@ from typing import Final
 
 from pydantic import Field
 
+from walk.common.errors import ConfigError
+from walk.common.ids import ApprovedArtifactId
 from walk.common.models import FrozenModel, JsonDict
-from walk.memory.models import FreshnessStatus, MemoryDocType, MemoryDocument
+from walk.memory.models import (
+    ApprovalStatus,
+    ApprovedArtifact,
+    FreshnessStatus,
+    MemoryDocType,
+    MemoryDocument,
+)
 from walk.persistence import Database, UnitOfWork
 
 _COLUMNS: Final = (
@@ -25,6 +33,13 @@ _COLUMNS: Final = (
     "raw_sha256",
     "relevant_files_json",
     "related_json",
+)
+_ARTIFACT_UPSERT: Final = (
+    "INSERT INTO approved_artifacts (id, kind, status, scope, version, content_sha256, ai_path, "
+    "approved_at, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+    "kind = excluded.kind, status = excluded.status, scope = excluded.scope, "
+    "version = excluded.version, content_sha256 = excluded.content_sha256, "
+    "ai_path = excluded.ai_path, approved_at = excluded.approved_at, json = excluded.json"
 )
 _SELECT: Final = f"SELECT {', '.join(_COLUMNS)} FROM memory_index"  # noqa: S608 - constant columns
 _UPSERT: Final = (
@@ -133,3 +148,59 @@ class MemoryIndexRepository:
         """Every row, ordered by path."""
         rows = self._db.connect().execute(f"{_SELECT} ORDER BY path").fetchall()
         return [_from_sql(row) for row in rows]
+
+
+class ApprovedArtifactRepository:
+    """``approved_artifacts``: the `ApprovedArtifact` JSON plus its indexed columns (E02-S12)."""
+
+    def __init__(self, db: Database) -> None:
+        """Bind the repository to ``db``."""
+        self._db = db
+
+    async def upsert(self, uow: UnitOfWork, artifact: ApprovedArtifact) -> None:
+        """Insert or replace the row of ``artifact.id`` on ``uow``."""
+        uow.conn.execute(
+            _ARTIFACT_UPSERT,
+            (
+                artifact.id,
+                artifact.kind.value,
+                artifact.status.value,
+                artifact.scope,
+                artifact.version,
+                artifact.content_sha256,
+                f"approved/{artifact.id}.md",
+                _utc_text(artifact.approved_at),
+                artifact.model_dump_json(),
+            ),
+        )
+
+    async def get(self, artifact_id: ApprovedArtifactId) -> ApprovedArtifact:
+        """The artifact stored under ``artifact_id``.
+
+        Raises:
+            ConfigError: No artifact has ``artifact_id``.
+        """
+        row = (
+            self._db.connect()
+            .execute("SELECT json FROM approved_artifacts WHERE id = ?", (artifact_id,))
+            .fetchone()
+        )
+        if row is None:
+            msg = f"unknown approved artifact {artifact_id}"
+            raise ConfigError(msg, detail={"artifact_id": artifact_id})
+        return ApprovedArtifact.model_validate_json(row[0])
+
+    async def list(
+        self, *, status: ApprovalStatus | None = None, scope: str | None = None
+    ) -> list[ApprovedArtifact]:
+        """Artifacts matching every given filter, by id."""
+        where, params = ["1 = 1"], []
+        if status is not None:
+            where.append("status = ?")
+            params.append(status.value)
+        if scope is not None:
+            where.append("scope = ?")
+            params.append(scope)
+        sql = f"SELECT json FROM approved_artifacts WHERE {' AND '.join(where)} ORDER BY id"  # noqa: S608 - fixed fragments, values bound
+        rows = self._db.connect().execute(sql, params).fetchall()
+        return [ApprovedArtifact.model_validate_json(row[0]) for row in rows]
