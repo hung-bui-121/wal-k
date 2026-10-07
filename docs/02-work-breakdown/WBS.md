@@ -437,8 +437,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S07 | Skill drift detection, `walk skills check-drift`, startup check | feat | E02-S06, E02-S02 | MEDIUM | DONE (9a8616c) |
 | E02-S08 | Builtin MUST hooks (ARCHITECTURE §4.1 table) | feat | E01-S07, E01-S28, E01-S16 | HIGH | DONE (e6babf7) |
 | E02-S09 | Project hooks from `.ai/agents/hooks.yaml` | feat | E02-S08 | MEDIUM | DONE (340ea67) |
-| E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | feat | E01-S15, E02-S03 | MEDIUM | DONE (pending) |
-| E02-S11 | Approval requests and `walk approve/deny/approvals` | feat | E02-S10, E01-S26 | HIGH | TODO |
+| E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | feat | E01-S15, E02-S03 | MEDIUM | DONE (2522b25) |
+| E02-S11 | Approval requests and `walk approve/deny/approvals` | feat | E02-S10, E01-S26 | HIGH | DONE (pending) |
 | E02-S12 | Approved artifact registry and `walk artifacts` | feat | E02-S10, E01-S16 | HIGH | TODO |
 | E02-S13 | Human override CLI subset | feat | E01-S30, E02-S11 | MEDIUM | TODO |
 | E02-S14 | Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions | feat | E02-S10, E01-S23, E01-S25 | HIGH | TODO |

@@ -8,7 +8,7 @@ from walk.common.errors import ConfigError
 from walk.common.roles import AgentRole
 from walk.decisions import AutonomyLevel, DecisionCategory, Escalation
 from walk.hooks import Hook, HookContext, HookName
-from walk.orchestrator import DEFAULT_POLL_INTERVAL_S, Orchestrator
+from walk.orchestrator import DEFAULT_POLL_INTERVAL_S, DefaultOrchestrator, Orchestrator
 from walk.runtime import AgentRunState, CheckpointKind
 from walk.telemetry import LedgerEventKind
 from walk.workflow import PhaseDecision, WorkItemState
@@ -152,3 +152,27 @@ async def test_deferred_methods_name_their_story(make_kernel: KernelFactory) -> 
     for call in (orchestrator.resume(None), orchestrator.cancel_work_item("STORY-0001", "x")):
         with pytest.raises(ConfigError, match="implemented in E02-S13"):
             await call
+
+
+async def test_tick_expires_due_approvals_first(make_kernel: KernelFactory) -> None:
+    kernel = await make_kernel()
+    calls: list[str] = []
+
+    async def expire() -> None:
+        calls.append("expire")
+
+    orchestrator = DefaultOrchestrator(
+        kernel.scheduler,
+        kernel.env.executor,
+        kernel.recovery,
+        kernel.status,
+        kernel.env.hooks,
+        kernel.env.ledger,
+        kernel.env.executor._clock,  # noqa: SLF001 - the environment's clock
+        project_key="DEMO",
+        kernel_instance="instance-a",
+        expire_approvals=expire,
+    )
+
+    assert await orchestrator.tick() == 0
+    assert calls == ["expire"]

@@ -50,6 +50,7 @@ from walk.runtime import (
     AgentInputBuilder,
     AgentRun,
     AgentRunRepository,
+    ApprovalWaiter,
     Checkpoint,
     CheckpointRepository,
     DefaultAgentExecutor,
@@ -58,6 +59,7 @@ from walk.runtime import (
     DefaultOutputApplier,
     DefaultSandboxManager,
     DefaultToolInvoker,
+    EventApprovalWaiter,
     HandoverRepository,
     PollingApprovalWaiter,
 )
@@ -294,11 +296,13 @@ async def build_executor_env(
     sleep: Callable[[float], Awaitable[None]] = no_sleep,
     max_parallel_runs: int = 1,
     approval_sleep: Callable[[float], Awaitable[None]] = no_sleep,
+    event_waiter: bool = False,
 ) -> ExecutorEnv:
     """Wire the executor over ``base``; ``plan`` drives both fake adapters.
 
     ``approval_sleep`` is awaited between approval polls; a real (short) sleep keeps a run
-    paused for approval alive until the test decides the request.
+    paused for approval alive until the test decides the request. ``event_waiter`` wires the
+    E02-S11 `EventApprovalWaiter` (woken by the permission manager) instead of the polling one.
     """
     db, clock = base.db, base.clock
     adapters = adapters if adapters is not None else fake_adapters(plan or script(), clock)
@@ -365,9 +369,15 @@ async def build_executor_env(
         clock,
         project_key="DEMO",
     )
-    waiter = PollingApprovalWaiter(
+    waiter: ApprovalWaiter = PollingApprovalWaiter(
         ApprovalRepository(db), clock, permissions=permissions, sleep=approval_sleep
     )
+    if event_waiter:
+        events = EventApprovalWaiter(
+            ApprovalRepository(db), clock, permissions=permissions, sleep=approval_sleep
+        )
+        permissions.on_decided = lambda approval: events.resolve(approval.id, approval.state)
+        waiter = events
     tool_invoker = DefaultToolInvoker(
         permissions,
         tools,
@@ -379,6 +389,7 @@ async def build_executor_env(
         waiter,
         clock,
         project_key="DEMO",
+        approvals=ApprovalRepository(db),
     )
     evidence = DefaultEvidenceManager(
         db, db.path.parent, EvidenceRepository(db), base.ledger, IdSequenceStore(db), clock

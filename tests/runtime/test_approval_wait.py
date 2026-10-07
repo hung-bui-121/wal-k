@@ -68,7 +68,7 @@ async def test_polling_waiter_returns_on_decision(
 
     approved = await waiter.wait(approval_id, timeout_s=60)
 
-    assert approved is True
+    assert approved is ApprovalState.APPROVED
     assert sleeps == [0.5, 0.5]
 
 
@@ -89,7 +89,7 @@ async def test_polling_waiter_times_out_and_expires(
 
     approved = await waiter.wait(approval_id, timeout_s=3)
 
-    assert approved is False
+    assert approved is ApprovalState.EXPIRED
     stored = await ApprovalRepository(db).get(approval_id)
     assert stored is not None
     assert stored.state is ApprovalState.EXPIRED
@@ -124,7 +124,7 @@ async def test_polling_waiter_denied_and_decided_during_expiry(
     )
     racing = PollingApprovalWaiter(_Racing(db), fake_clock, permissions=permissions, sleep=sleep)
 
-    assert await waiter.wait(denied_id, timeout_s=10) is False
-    assert await racing.wait(late_id, timeout_s=0) is True
+    assert await waiter.wait(denied_id, timeout_s=10) is ApprovalState.DENIED
+    assert await racing.wait(late_id, timeout_s=0) is ApprovalState.APPROVED
     with pytest.raises(ConfigError, match="unknown approval"):
         await waiter.wait("APV-9999", timeout_s=1)

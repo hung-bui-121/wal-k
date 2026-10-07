@@ -3,6 +3,7 @@
 §41, §54, §81, §89, §126.
 """
 
+from walk.runtime.approvals import EventApprovalWaiter
 from walk.runtime.boundary import (
     DEFAULT_ALLOWED_PATHS,
     DEFAULT_FORBIDDEN_PATHS,
@@ -79,6 +80,7 @@ __all__ = [
     "DefaultOutputApplier",
     "DefaultSandboxManager",
     "DefaultToolInvoker",
+    "EventApprovalWaiter",
     "HandoverRepository",
     "KernelToolHandler",
     "OutputApplier",

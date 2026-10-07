@@ -105,8 +105,8 @@ from walk.runtime import (
     DefaultOutputApplier,
     DefaultSandboxManager,
     DefaultToolInvoker,
+    EventApprovalWaiter,
     HandoverRepository,
-    PollingApprovalWaiter,
     RecoveryManager,
 )
 from walk.runtime.sandbox import scrubbed_env
@@ -389,9 +389,7 @@ def build_kernel(
         default_branch=project.default_branch,
         project_skills=_skill_projection(router, skills),
     )
-    waiter = PollingApprovalWaiter(
-        ApprovalRepository(db), clock, permissions=permissions, sleep=sleep
-    )
+    waiter = _approval_waiter(db, clock, permissions)
     tool_invoker = DefaultToolInvoker(
         permissions,
         tools,
@@ -403,6 +401,7 @@ def build_kernel(
         waiter,
         clock,
         project_key=key,
+        approvals=ApprovalRepository(db),
     )
     applier = DefaultOutputApplier(memory, evidence, workflow, git, clock)
     executor = DefaultAgentExecutor(
@@ -489,6 +488,7 @@ def build_kernel(
             _version_pin_check(ai_root, clock),
             _drift_check(skills, router, repo, strict=settings.strict),
         ),
+        expire_approvals=lambda: permissions.expire_due(clock.now()),
     )
 
     async def wake_on_finish(run: AgentRun) -> None:
@@ -718,6 +718,15 @@ def _skills(
         clock=clock,
         project_key=key,
     )
+
+
+def _approval_waiter(
+    db: Database, clock: Clock, permissions: DefaultPermissionManager
+) -> EventApprovalWaiter:
+    """The run-side approval waiter, woken by every decision and expiry (E02-S11)."""
+    waiter = EventApprovalWaiter(ApprovalRepository(db), clock, permissions=permissions)
+    permissions.on_decided = lambda approval: waiter.resolve(approval.id, approval.state)
+    return waiter
 
 
 def _wire_hooks(

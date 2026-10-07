@@ -21,6 +21,7 @@ from walk.budgets.protocols import BudgetManager
 from walk.common.clock import Clock
 from walk.common.errors import (
     ConfigError,
+    GuardRejected,
     PermissionDenied,
     ToolCrashed,
     WalkError,
@@ -30,6 +31,7 @@ from walk.common.models import JsonDict
 from walk.hooks.models import HookContext, HookName
 from walk.hooks.protocols import HookManager
 from walk.permissions.models import (
+    ApprovalRequest,
     ApprovalState,
     Approver,
     PermissionDecision,
@@ -51,7 +53,11 @@ KernelToolHandler = Callable[[ToolCallRequest], Awaitable[JsonDict]]
 APPROVAL_TIMEOUT_S = 24 * 3600  # ADR-0006 D-4 default
 
 _SHELL_TOOL: Final = "bash"
-_DENIED_REASON: Final = "approval denied or expired"
+_DENIED_REASONS: Final = {
+    ApprovalState.DENIED: "approval denied",
+    ApprovalState.EXPIRED: "approval expired",
+}
+_REUSABLE: Final = frozenset({ApprovalState.PENDING, ApprovalState.APPROVED})
 _MS_PER_S: Final = 1000
 _EXPIRY_NOTE: Final = "timeout"
 _KERNEL_ACTOR: Final = "kernel"
@@ -59,10 +65,10 @@ _Outcome = Literal["OK", "FAILED", "DENIED"]
 
 
 class ApprovalWaiter(Protocol):
-    """Waits until an approval request is decided (E02-S11 adds an event-based waiter)."""
+    """Waits until an approval request is decided (E02-S11: `EventApprovalWaiter`)."""
 
-    async def wait(self, approval_id: ApprovalRequestId, *, timeout_s: int) -> bool:
-        """True = approved; False = denied or expired."""
+    async def wait(self, approval_id: ApprovalRequestId, timeout_s: int) -> ApprovalState:
+        """APPROVED, DENIED or EXPIRED (a timeout expires the request)."""
         ...
 
 
@@ -93,8 +99,8 @@ class PollingApprovalWaiter:
         self._sleep = sleep
         self._interval_s = interval_s
 
-    async def wait(self, approval_id: ApprovalRequestId, *, timeout_s: int) -> bool:
-        """Poll until APPROVED (True) or DENIED/EXPIRED (False); expire after ``timeout_s``.
+    async def wait(self, approval_id: ApprovalRequestId, timeout_s: int) -> ApprovalState:
+        """Poll until APPROVED, DENIED or EXPIRED; expire the request after ``timeout_s``.
 
         Raises:
             ConfigError: The approval request does not exist.
@@ -103,7 +109,7 @@ class PollingApprovalWaiter:
         while True:
             state = await self._state(approval_id)
             if state is not ApprovalState.PENDING:
-                return state is ApprovalState.APPROVED
+                return state
             if (self._clock.now() - started).total_seconds() >= timeout_s:
                 return await self._expire(approval_id)
             await self._sleep(self._interval_s)
@@ -115,15 +121,15 @@ class PollingApprovalWaiter:
             raise ConfigError(msg, detail={"approval_id": approval_id})
         return approval.state
 
-    async def _expire(self, approval_id: ApprovalRequestId) -> bool:
+    async def _expire(self, approval_id: ApprovalRequestId) -> ApprovalState:
         try:
             await self._permissions.decide_approval(
                 approval_id, approve=False, by=_KERNEL_ACTOR, note=_EXPIRY_NOTE, expired=True
             )
-        except ConfigError:
+        except GuardRejected:
             # Decided between the last poll and the expiry: the decision stands.
-            return await self._state(approval_id) is ApprovalState.APPROVED
-        return False
+            return await self._state(approval_id)
+        return ApprovalState.EXPIRED
 
 
 class DefaultToolInvoker:
@@ -144,6 +150,7 @@ class DefaultToolInvoker:
         handlers: dict[ToolName, KernelToolHandler] | None = None,
         approval_timeout_s: int = APPROVAL_TIMEOUT_S,
         project_key: ProjectKey,
+        approvals: ApprovalRepository | None = None,
     ) -> None:
         """Wire the invoker.
 
@@ -160,6 +167,9 @@ class DefaultToolInvoker:
             handlers: KERNEL tool handlers by tool name.
             approval_timeout_s: How long a run waits for an approval.
             project_key: Project of the ledger events, hook contexts and budgets.
+            approvals: Approval requests of earlier runs of the item; a run that continues an
+                interrupted one (recovery) reuses its PENDING or unused APPROVED request for
+                the same tool instead of asking again (E02-S11). None disables the reuse.
         """
         self._permissions = permissions
         self._tools = tools
@@ -173,6 +183,7 @@ class DefaultToolInvoker:
         self._handlers: dict[ToolName, KernelToolHandler] = dict(handlers or {})
         self._approval_timeout_s = approval_timeout_s
         self._project_key = project_key
+        self._approvals = approvals
 
     def register_handler(self, tool: ToolName, handler: KernelToolHandler) -> None:
         """Dispatch ``tool`` to ``handler``.
@@ -339,34 +350,78 @@ class DefaultToolInvoker:
     async def _await_approval(
         self, run: AgentRun, request: ToolCallRequest, decision: PermissionDecision
     ) -> PermissionDecision:
-        protected = self._protected_action(request.tool)
-        rule = decision.matched_rule
-        approver = (
-            rule.approver if rule is not None and rule.approver is not None else Approver.USER
-        )
-        approval = await self._permissions.request_approval(
-            request,
-            kind="PROTECTED_ACTION" if protected else "TOOL_CALL",
-            approver=approver,
-            requested_by=request.role,
-            run_id=run.id,
-            work_item_id=run.work_item_id,
-        )
-        paused = await self._runs.set_state(run.id, AgentRunState.PAUSED_FOR_APPROVAL)
-        await self._checkpoints.checkpoint(paused, CheckpointKind.PAUSE)
-        approved = await self._waiter.wait(approval.id, timeout_s=self._approval_timeout_s)
-        await self._runs.set_state(run.id, AgentRunState.RUNNING)
-        if approved:
+        approval = await self._inherited_approval(run, request)
+        if approval is None:
+            protected = self._protected_action(request.tool)
+            rule = decision.matched_rule
+            approver = (
+                rule.approver if rule is not None and rule.approver is not None else Approver.USER
+            )
+            approval = await self._permissions.request_approval(
+                request,
+                kind="PROTECTED_ACTION" if protected else "TOOL_CALL",
+                approver=approver,
+                requested_by=request.role,
+                run_id=run.id,
+                work_item_id=run.work_item_id,
+            )
+        state = approval.state
+        if state is ApprovalState.PENDING:
+            paused = await self._runs.set_state(run.id, AgentRunState.PAUSED_FOR_APPROVAL)
+            await self._checkpoints.checkpoint(paused, CheckpointKind.PAUSE)
+            state = await self._waiter.wait(approval.id, timeout_s=self._approval_timeout_s)
+            await self._runs.set_state(run.id, AgentRunState.RUNNING)
+        if state is ApprovalState.APPROVED:
             return decision.model_copy(
                 update={"effect": PermissionEffect.ALLOW, "approval_request_id": approval.id}
             )
         return decision.model_copy(
             update={
                 "effect": PermissionEffect.DENY,
-                "reason": _DENIED_REASON,
+                "reason": _DENIED_REASONS.get(state, _DENIED_REASONS[ApprovalState.DENIED]),
                 "approval_request_id": approval.id,
             }
         )
+
+    async def _inherited_approval(
+        self, run: AgentRun, request: ToolCallRequest
+    ) -> ApprovalRequest | None:
+        """The PENDING or unused APPROVED request an ancestor run made for the same tool.
+
+        After a restart the continuing run (``parent_run_id`` chain) repeats the tool call the
+        interrupted run was waiting on; it waits on, or uses, that request instead of asking
+        again (E02-S11 Behavior 5). An APPROVED request is used once: a ``TOOL_INVOKED``
+        carrying its id means it was consumed.
+        """
+        if self._approvals is None or run.parent_run_id is None:
+            return None
+        ancestors = await self._ancestors(run)
+        for approval in await self._approvals.for_work_item(run.work_item_id):
+            if (
+                approval.run_id in ancestors
+                and approval.state in _REUSABLE
+                and approval.payload.get("tool") == request.tool
+                and not await self._consumed(approval)
+            ):
+                return approval
+        return None
+
+    async def _ancestors(self, run: AgentRun) -> set[str]:
+        found: set[str] = set()
+        parent_id = run.parent_run_id
+        while parent_id is not None and parent_id not in found:
+            found.add(parent_id)
+            parent = await self._runs.get(parent_id)
+            parent_id = parent.parent_run_id if parent is not None else None
+        return found
+
+    async def _consumed(self, approval: ApprovalRequest) -> bool:
+        if approval.state is not ApprovalState.APPROVED:
+            return False
+        events = await self._ledger.query(
+            kinds=[LedgerEventKind.TOOL_INVOKED], work_item_id=approval.work_item_id
+        )
+        return any(e.payload.get("approval_request_id") == approval.id for e in events)
 
     def _identify(self, request: ToolCallRequest) -> ToolCallRequest:
         if request.tool != _SHELL_TOOL or request.command is None:

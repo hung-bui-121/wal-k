@@ -37,6 +37,10 @@ class ApprovalRepository(Repository[ApprovalRequest]):
         }
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]:
+        """PENDING requests, optionally for one approver, oldest first (`list_pending`)."""
+        return await self.list_pending(approver)
+
+    async def list_pending(self, approver: Approver | None = None) -> list[ApprovalRequest]:
         """PENDING requests, optionally for one approver, oldest first."""
         where = "state = ?"
         params: list[object] = [ApprovalState.PENDING.value]
@@ -44,3 +48,24 @@ class ApprovalRepository(Repository[ApprovalRequest]):
             where += " AND approver = ?"
             params.append(approver.value)
         return await self.list_where(where, params, order_by="requested_at, id")
+
+    async def expire_before(self, now: datetime) -> list[ApprovalRequest]:
+        """PENDING requests whose ``expires_at`` is at or before ``now``: the ones to expire.
+
+        Requests without ``expires_at`` never expire here (the waiter's timeout still applies).
+        """
+        return [
+            approval
+            for approval in await self.list_pending()
+            if approval.expires_at is not None and approval.expires_at <= now
+        ]
+
+    async def for_work_item(self, work_item_id: str) -> list[ApprovalRequest]:
+        """Every request of ``work_item_id``, oldest first."""
+        return await self.list_where(
+            "work_item_id = ?", [work_item_id], order_by="requested_at, id"
+        )
+
+    async def all(self) -> list[ApprovalRequest]:
+        """Every request, oldest first (`walk approvals`)."""
+        return await self.list_where("1 = 1", [], order_by="requested_at, id")

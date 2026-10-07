@@ -21,6 +21,7 @@ from walk.hooks import DefaultHookManager, Hook, HookContext, HookName
 from walk.memory import DefaultMemoryManager
 from walk.permissions import (
     ApprovalRepository,
+    ApprovalState,
     Approver,
     DefaultPermissionManager,
     PermissionDecision,
@@ -94,7 +95,7 @@ class _ScriptedWaiter:
         self.calls: list[tuple[str, int]] = []
         self.states_during_wait: list[AgentRunState] = []
 
-    async def wait(self, approval_id: str, *, timeout_s: int) -> bool:
+    async def wait(self, approval_id: str, timeout_s: int) -> ApprovalState:
         self.calls.append((approval_id, timeout_s))
         run = await self._runs.get(RUN_A)
         assert run is not None
@@ -102,7 +103,7 @@ class _ScriptedWaiter:
         await self._permissions.decide_approval(
             approval_id, approve=self._approve, by="user", note=None
         )
-        return self._approve
+        return ApprovalState.APPROVED if self._approve else ApprovalState.DENIED
 
 
 class _Env:
@@ -328,7 +329,7 @@ async def test_require_approval_denied(
     decision = await env.invoker.authorize(_request("git.merge_protected", ToolKind.KERNEL))
 
     assert decision.effect is PermissionEffect.DENY
-    assert "denied or expired" in decision.reason
+    assert decision.reason == "approval denied"
     assert decision.approval_request_id is not None
     denied = await _events(ledger, LedgerEventKind.TOOL_DENIED)
     assert len(denied) == 1

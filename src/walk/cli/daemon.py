@@ -36,6 +36,7 @@ _AI_DIR: Final = ".ai"
 _EXIT_OK: Final = 0
 _EXIT_ERROR: Final = 1
 _NO_PROJECT: Final = "no project - run 'walk bootstrap'"
+_USER: Final = "user"  # `decided_by` of a CLI approval decision
 
 
 async def run_daemon(
@@ -125,9 +126,14 @@ def _register_handlers(
         await handle.orchestrator.wake()
         return result
 
+    async def decide(args: JsonDict) -> JsonDict:
+        return await decide_in_kernel(handle, args)
+
     consumer.register("wake", wake)
     consumer.register("stop", stop_kernel)
     consumer.register("work.transition", transition)
+    consumer.register("approve", decide)  # E02-S11; args carry approve=True
+    consumer.register("deny", decide)
 
 
 async def transition_in_kernel(handle: KernelHandle, args: JsonDict) -> JsonDict:
@@ -147,6 +153,26 @@ async def transition_in_kernel(handle: KernelHandle, args: JsonDict) -> JsonDict
     )
     row = await handle.workflow.raise_event(str(args["work_item_id"]), str(args["event"]), context)
     return {"to_state": row.to_state.value, "transition": row.model_dump(mode="json")}
+
+
+async def decide_in_kernel(handle: KernelHandle, args: JsonDict) -> JsonDict:
+    """``approve``/``deny{approval_id, approve, note}`` decided by the user (E02-S11).
+
+    Shared by the daemon handlers and the in-process path of `walk approve|deny`; in the
+    daemon the permission manager wakes the run waiting on the request.
+
+    Raises:
+        ConfigError: Unknown approval id.
+        GuardRejected: The request is already decided.
+    """
+    note = args.get("note")
+    decided = await handle.permissions.decide_approval(
+        str(args["approval_id"]),
+        approve=bool(args["approve"]),
+        by=_USER,
+        note=str(note) if note is not None else None,
+    )
+    return {"approval": decided.model_dump(mode="json")}
 
 
 async def _heartbeat(

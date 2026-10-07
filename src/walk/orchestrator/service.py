@@ -54,6 +54,7 @@ class DefaultOrchestrator:
         kernel_instance: str,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
         startup_checks: Callable[[], Awaitable[None]] | None = None,
+        expire_approvals: Callable[[], Awaitable[object]] | None = None,
     ) -> None:
         """Wire the orchestrator.
 
@@ -72,6 +73,8 @@ class DefaultOrchestrator:
                 skill drift, E02-S07), awaited before recovery; an exception (e.g.
                 `VersionPinError`) aborts startup before ``PROJECT_STARTED`` and
                 ``ON_PROJECT_START``.
+            expire_approvals: Awaited at the start of every tick: expires approval requests
+                past their ``expires_at`` (``DefaultPermissionManager.expire_due``, E02-S11).
         """
         self._scheduler = scheduler
         self._executor = executor
@@ -84,6 +87,7 @@ class DefaultOrchestrator:
         self._kernel_instance = kernel_instance
         self._poll_interval_s = poll_interval_s
         self._startup_checks = startup_checks
+        self._expire_approvals = expire_approvals
         self._wake = asyncio.Event()
         self._stopping = False
         self._loop_exited: asyncio.Event | None = None
@@ -130,7 +134,9 @@ class DefaultOrchestrator:
         self._wake.set()
 
     async def tick(self) -> int:
-        """One scheduling pass; the number of runs started."""
+        """Expire due approvals, then one scheduling pass; the number of runs started."""
+        if self._expire_approvals is not None:
+            await self._expire_approvals()
         return await self._scheduler.tick()
 
     async def run_once(self, *, wait_runs: bool = True) -> int:

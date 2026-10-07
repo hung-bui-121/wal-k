@@ -1633,7 +1633,7 @@ Decisions (Level 0, recorded for the owner):
 
 ### E02-S10 — Permission defaults, `permissions.yaml` loader, protected actions
 
-**Status:** DONE (pending)
+**Status:** DONE (2522b25)
 **Type:** feat
 **Requirements:** §31, §92, §91, §63, §137
 **Depends on:** E01-S15, E02-S03
@@ -1789,7 +1789,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S11 — Approval requests and `walk approve/deny/approvals`
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §92, §31, §51, §93, §137
 **Depends on:** E02-S10, E01-S26
@@ -1874,7 +1874,44 @@ CLI: `walk approve APV_ID [--note TEXT]`, `walk deny APV_ID [--note TEXT]`, `wal
 - Commit subject: `feat: add approval request lifecycle and approve commands (E02-S11)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+395 files already formatted
+All checks passed!
+Success: no issues found in 394 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.86%
+1300 passed, 5 deselected in 504.68s (0:08:24)
+```
+Touched modules: `runtime/approvals.py` 100 %, `runtime/tool_invoker.py` 100 %, `permissions/service.py` 100 %, `permissions/repository.py` 100 %, `cli/cmd_approvals.py` 100 %, `cli/daemon.py` 100 %, `orchestrator/service.py` 100 %. All 10 acceptance tests pass, plus: a waiter woken by `resolve` without polling, a waiter that sees a decision made by another process on its next poll, an unknown request id, the daemon path (`approve`/`deny` commands DONE, an already-decided deny FAILED with exit 2), `walk approvals` without a database (exit 1), `expire_due` idempotence, and the orchestrator calling the expiry before each scheduling pass. The E2E part of the demo (a fake run requesting `git.merge_protected`) is the E02-S16 gate.
+
+Demo on the E02-S08 demo repository (outside this repository); one request was seeded through `build_kernel(...).permissions.request_approval` by a scratch script:
+```
+$ walk --repo <tmp>/game approvals --pending
+id        kind              tool                 state    approver  run  requested_at
+APV-0001  PROTECTED_ACTION  git.merge_protected  PENDING  USER           2026-10-07T01:01:58.230144+00:00
+$ walk --repo <tmp>/game approve APV-0001 --note "ok"
+APV-0001 APPROVED
+exit=0
+$ walk --repo <tmp>/game approve APV-0001
+error: approval already decided: APV-0001 is APPROVED
+exit=2
+$ walk --repo <tmp>/game deny APV-9999
+error: unknown approval request: APV-9999
+exit=1
+```
+
+Decisions and deviations (for the owner):
+- **`ApprovalWaiter` protocol.** `wait(approval_id, timeout_s)` now returns `ApprovalState` instead of `bool`, as the story's `EventApprovalWaiter.wait` contract says. DENIED and EXPIRED therefore give distinct DENY reasons: `approval denied` and `approval expired`, where the old reason was `approval denied or expired`. `PollingApprovalWaiter` and the E01-S26 test doubles (`tests/runtime/test_tool_invoker.py`, `tests/runtime/test_approval_wait.py`) were adapted. The composition root wires `EventApprovalWaiter`; `PollingApprovalWaiter` stays exported for tests.
+- **Waking.** `DefaultPermissionManager` gains `on_decided` (a constructor keyword and a public attribute, like `executor.on_run_finished`). It is called after the commit of every decision and expiry. The composition root binds it to `EventApprovalWaiter.resolve`, because `permissions` may not import `runtime`. The waiter also re-reads the request every `poll_interval_s` (1 s) and holds no connection while it waits, so a CLI decision made in-process by another process is seen (Notes pitfall).
+- **"already decided".** It raises `GuardRejected("approval already decided: ...")`, a `PermanentError` (AC 4). The CLI therefore exits 2, as Behavior 7 requires; an unknown id stays `ConfigError` (exit 1). The E01 test expecting `ConfigError("not pending")` was updated.
+- **Ledger.** `APPROVAL_DECIDED` now has outcome `OK` for APPROVED and `DENIED` for DENIED/EXPIRED. An expiry carries `reason: expired` and actor `KERNEL`. A user decision keeps the E01-S15 actor, the approver's role, instead of the literal `USER` of Behavior 2: for USER-approver requests the two are the same, and keeping it avoids breaking the E01 contract.
+- **`approval_timeout_s`.** It was **not** added to `agents/defaults/policies.yaml`. `_PolicyFile`/`RuntimePolicy` forbid unknown keys, so the key would need a `RuntimePolicy` schema field (`agents/models.py`, DOMAIN-MODEL), outside this story. Instead, `DefaultPermissionManager(approval_timeout_s=86400)` sets `expires_at`, and the waiter keeps using the tool invoker's existing `APPROVAL_TIMEOUT_S` (24 h, ADR-0006 D-4). To make the timeout configurable per role, a later story should add a `RuntimePolicy.approval_timeout_s` field.
+- **`executor.resume(run_id)` (Behavior 2) does not exist.** The tool invoker already sets the run back to RUNNING after `wait` returns, inside the run's own task, so no executor method was added.
+- **Recovery (Behavior 5).** The run task is gone after a restart, so nothing can "re-enter" the old wait. Instead, recovery continues the run as usual (native resume or handover). When the continuing run repeats the tool call, `ToolInvoker` reuses the request an ancestor run (`parent_run_id` chain) made for the same tool: it waits on a PENDING one, or uses an APPROVED one at once. An APPROVED request is used once, and a `TOOL_INVOKED` carrying its id marks it consumed. `RecoveryManager` itself is unchanged. `DefaultToolInvoker` gains the keyword `approvals: ApprovalRepository`, and `ApprovalRepository` gains `for_work_item` and `all` (used by `walk approvals`) next to the listed `list_pending` and `expire_before`. `expire_before` only selects the due PENDING requests; `expire_due` writes the expiry and its ledger events in one unit of work.
+- **Expiry trigger.** `DefaultOrchestrator` gains the keyword `expire_approvals`, awaited at the start of every `tick`; the composition root passes `permissions.expire_due(clock.now())`. `Scheduler.tick` was left unchanged, because `orchestrator/service.py` is the listed file.
+- **Daemon commands.** The `approve`/`deny` handlers are registered in `cli/daemon.py` `_register_handlers`, next to `work.transition`, through the shared `decide_in_kernel(handle, args)`, not in `orchestrator/commands.py`. `CommandConsumer` is generic, and E01-S30 registers every handler in the daemon.
+- **Files outside the table** (named in the commit body): `cli/daemon.py`, `cli/composition.py`, `runtime/__init__.py`, `tests/permissions/conftest.py`, `tests/runtime/executor_env.py` (`event_waiter` option), `tests/runtime/test_tool_invoker.py`, `tests/runtime/test_approval_wait.py` and `tests/orchestrator/test_service.py`. `tests/permissions/test_approvals.py` already existed (E01-S15) and was extended.
 
 ---
 

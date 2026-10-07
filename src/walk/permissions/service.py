@@ -2,14 +2,15 @@
 
 import fnmatch
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import ValidationError
 
 from walk.common.clock import Clock
-from walk.common.errors import ConfigError
+from walk.common.errors import ConfigError, GuardRejected
 from walk.common.ids import ApprovalRequestId, ProjectKey, RunId, WorkItemId
 from walk.common.models import JsonDict, WalkModel
 from walk.common.roles import AgentRole
@@ -40,6 +41,10 @@ from walk.telemetry.protocols import LedgerManager
 logger = logging.getLogger(__name__)
 
 _APPROVAL_PREFIX: Final = "APV"
+_APPROVAL_TIMEOUT_S: Final = 24 * 3600  # ADR-0006 D-4 kernel default: then EXPIRED
+_KERNEL: Final = "kernel"
+_EXPIRED: Final = "expired"
+_ALREADY_DECIDED: Final = "approval already decided"
 # Higher = more restrictive; an extra rule may not be less restrictive than an overlapping
 # kernel rule that denies or requires approval (ADR-0013 D-4).
 _RESTRICTIVENESS: Final = {
@@ -80,6 +85,8 @@ class DefaultPermissionManager:
         clock: Clock,
         *,
         project_key: ProjectKey,
+        approval_timeout_s: int = _APPROVAL_TIMEOUT_S,
+        on_decided: Callable[[ApprovalRequest], None] | None = None,
     ) -> None:
         """Wire the manager.
 
@@ -95,6 +102,10 @@ class DefaultPermissionManager:
             clock: Stamps requests and decisions.
             project_key: Project of this kernel database; ledger events and hook contexts
                 require it and the approval methods do not receive one.
+            approval_timeout_s: ``expires_at = requested_at + approval_timeout_s`` (E02-S11).
+            on_decided: Called with every decided or expired request after its commit (wakes
+                the `EventApprovalWaiter`); the composition root may bind it after
+                construction through the attribute of the same name.
         """
         self._rules = list(rules)
         self._protected = {action.name: action for action in protected_actions}
@@ -104,6 +115,8 @@ class DefaultPermissionManager:
         self._ids = ids
         self._clock = clock
         self._project_key = project_key
+        self._approval_timeout_s = approval_timeout_s
+        self.on_decided = on_decided
 
     def rules_for(
         self, role: AgentRole, extra: Sequence[PermissionRule] = ()
@@ -238,10 +251,15 @@ class DefaultPermissionManager:
     ) -> ApprovalRequest:
         """Persist a PENDING request with ``APPROVAL_REQUESTED``; then fire the hook.
 
+        ``expires_at`` is ``requested_at + approval_timeout_s``. The hook payload is the ledger
+        payload (``approval_id``, ``kind``, ``approver``) plus ``tool`` (the requested tool, or
+        the payload's ``tool``, else None); ``run_id`` is on the hook context (E02-S11).
+
         Raises:
             ConfigError: If ``kind`` is not an approval kind.
         """
         payload = request.model_dump(mode="json") if isinstance(request, WalkModel) else request
+        now = self._clock.now()
         async with UnitOfWork(self._repo.db) as uow:
             approval_id = self._ids.bind(uow).next_sequence(_APPROVAL_PREFIX)
             try:
@@ -254,7 +272,8 @@ class DefaultPermissionManager:
                         "run_id": run_id,
                         "work_item_id": work_item_id,
                         "payload": payload,
-                        "requested_at": self._clock.now(),
+                        "requested_at": now,
+                        "expires_at": now + timedelta(seconds=self._approval_timeout_s),
                     }
                 )
             except ValidationError as exc:
@@ -284,7 +303,7 @@ class DefaultPermissionManager:
                 work_item_id=work_item_id,
                 run_id=run_id,
                 role=requested_by,
-                payload=facts,
+                payload={**facts, "tool": _tool_of(payload)},
             )
             uow.after_commit(lambda: self._fire(context))
         return approval
@@ -298,14 +317,15 @@ class DefaultPermissionManager:
         note: str | None,
         expired: bool = False,
     ) -> ApprovalRequest:
-        """Set APPROVED or DENIED with ``APPROVAL_DECIDED`` (actor = the approver's role).
+        """Set APPROVED or DENIED with ``APPROVAL_DECIDED``; then call ``on_decided``.
 
-        ``expired=True`` (with ``approve=False``) records EXPIRED instead of DENIED: the kernel
-        gave up waiting (E01-S26 approval timeout).
+        The event's actor is the approver's role (KERNEL for an expiry) and its outcome OK for
+        APPROVED, DENIED otherwise. ``expired=True`` (with ``approve=False``) records EXPIRED
+        instead of DENIED, with ``reason: expired``: the kernel gave up waiting.
 
         Raises:
-            ConfigError: If the id is unknown, the request is no longer PENDING, or
-                ``approve`` and ``expired`` are both set.
+            ConfigError: If the id is unknown, or ``approve`` and ``expired`` are both set.
+            GuardRejected: ``approval already decided`` (the request is no longer PENDING).
         """
         if approve and expired:
             msg = f"cannot approve and expire approval request {approval_id}"
@@ -320,42 +340,90 @@ class DefaultPermissionManager:
                 msg = f"unknown approval request: {approval_id}"
                 raise ConfigError(msg, detail={"approval_id": approval_id})
             if current.state is not ApprovalState.PENDING:
-                msg = f"approval request {approval_id} is not pending ({current.state.value})"
-                raise ConfigError(msg, detail={"approval_id": approval_id})
-            decided = current.model_copy(
-                update={
-                    "state": state,
-                    "decided_at": self._clock.now(),
-                    "decided_by": by,
-                    "decision_note": note,
-                }
-            )
-            await self._repo.upsert(decided, uow)
-            event = LedgerEvent(
-                kind=LedgerEventKind.APPROVAL_DECIDED,
-                at=decided.decided_at,
-                project_key=self._project_key,
-                actor_role=AgentRole(decided.approver.value),
-                work_item_id=decided.work_item_id,
-                run_id=decided.run_id,
-                outcome="OK",
-                payload={
-                    "approval_id": decided.id,
-                    "kind": decided.kind,
-                    "approver": decided.approver.value,
-                    "state": decided.state.value,
-                    "decided_by": by,
-                },
-            )
-            await self._ledger.append(event, uow=uow)
+                msg = f"{_ALREADY_DECIDED}: {approval_id} is {current.state.value}"
+                raise GuardRejected(msg, detail={"approval_id": approval_id})
+            decided = await self._decide(current, state, by, note, uow)
+        self._notify(decided)
         return decided
+
+    async def expire_due(self, now: datetime) -> list[ApprovalRequest]:
+        """PENDING with expires_at <= now → EXPIRED; ledger APPROVAL_DECIDED outcome=DENIED.
+
+        The payload carries ``reason: expired``; idempotent (an expired request is no longer
+        PENDING). ``on_decided`` is called for each, after the commit. The orchestrator calls
+        it every tick; the waiter expires its own request on timeout.
+        """
+        async with UnitOfWork(self._repo.db) as uow:
+            expired = [
+                await self._decide(approval, ApprovalState.EXPIRED, _KERNEL, _EXPIRED, uow)
+                for approval in await self._repo.expire_before(now)
+            ]
+        for approval in expired:
+            self._notify(approval)
+        return expired
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]:
         """PENDING requests, optionally for one approver, oldest first."""
         return await self._repo.pending(approver)
 
+    async def _decide(
+        self,
+        current: ApprovalRequest,
+        state: ApprovalState,
+        by: str,
+        note: str | None,
+        uow: UnitOfWork,
+    ) -> ApprovalRequest:
+        """Write the decision and its ``APPROVAL_DECIDED`` on ``uow``."""
+        decided = current.model_copy(
+            update={
+                "state": state,
+                "decided_at": self._clock.now(),
+                "decided_by": by,
+                "decision_note": note,
+            }
+        )
+        await self._repo.upsert(decided, uow)
+        expired = state is ApprovalState.EXPIRED
+        outcome: Literal["OK", "DENIED"] = "OK" if state is ApprovalState.APPROVED else "DENIED"
+        payload: JsonDict = {
+            "approval_id": decided.id,
+            "kind": decided.kind,
+            "approver": decided.approver.value,
+            "state": decided.state.value,
+            "decided_by": by,
+        }
+        if expired:
+            payload["reason"] = _EXPIRED
+        event = LedgerEvent(
+            kind=LedgerEventKind.APPROVAL_DECIDED,
+            at=decided.decided_at,
+            project_key=self._project_key,
+            actor_role=AgentRole.KERNEL if expired else AgentRole(decided.approver.value),
+            work_item_id=decided.work_item_id,
+            run_id=decided.run_id,
+            outcome=outcome,
+            payload=payload,
+        )
+        await self._ledger.append(event, uow=uow)
+        return decided
+
+    def _notify(self, approval: ApprovalRequest) -> None:
+        callback = self.on_decided
+        if callback is None:
+            return
+        try:
+            callback(approval)
+        except Exception:
+            logger.exception("on_decided callback failed", extra={"approval_id": approval.id})
+
     async def _fire(self, context: HookContext) -> None:
         await self._hooks.fire(context.name, context)
+
+
+def _tool_of(payload: JsonDict) -> str | None:
+    tool = payload.get("tool")
+    return tool if isinstance(tool, str) else None
 
 
 def _check_path(path: str, worktree: str, rules: list[PermissionRule]) -> PermissionDecision | None:

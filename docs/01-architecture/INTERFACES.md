@@ -542,7 +542,9 @@ class PermissionManager(Protocol):
         run_id: RunId | None,
         work_item_id: WorkItemId | None,
     ) -> ApprovalRequest:
-        """Persists PENDING; fires ON_PROTECTED_ACTION_REQUESTED; ledger APPROVAL_REQUESTED."""
+        """Persists PENDING; fires ON_PROTECTED_ACTION_REQUESTED; ledger APPROVAL_REQUESTED.
+        E02-S11: `expires_at = requested_at + approval_timeout_s` (DefaultPermissionManager keyword, default 24 h); the hook
+        payload is the ledger payload {approval_id, kind, approver} plus `tool`."""
 
     async def decide_approval(
         self,
@@ -554,9 +556,17 @@ class PermissionManager(Protocol):
         expired: bool = False,
     ) -> ApprovalRequest:
         """CLI `walk approve|deny`. Ledger APPROVAL_DECIDED; wakes the paused run.
-        `expired=True` (kernel wait timeout, E01-S26; `approve` must be False) records EXPIRED instead of DENIED."""
+        `expired=True` (kernel wait timeout, E01-S26; `approve` must be False) records EXPIRED instead of DENIED.
+        E02-S11: a request that is no longer PENDING → GuardRejected("approval already decided") (CLI exit 2; unknown id
+        ConfigError, exit 1). APPROVAL_DECIDED outcome OK (APPROVED) / DENIED (DENIED, EXPIRED; payload reason "expired",
+        actor KERNEL). After the commit `DefaultPermissionManager.on_decided(request)` is called: the composition root binds
+        it to `EventApprovalWaiter.resolve`."""
 
     async def pending(self, approver: Approver | None = None) -> list[ApprovalRequest]: ...
+
+    # DefaultPermissionManager only (E02-S11): called by every Orchestrator tick
+    async def expire_due(self, now: datetime) -> list[ApprovalRequest]:
+        """PENDING with expires_at <= now → EXPIRED; ledger APPROVAL_DECIDED outcome=DENIED payload {'reason': 'expired'}."""
 ```
 
 ### 1.11 `walk.skills.protocols`, `walk.tools.protocols`, `walk.hooks.protocols`
@@ -766,6 +776,11 @@ class ToolInvoker(Protocol):
     async def authorize(self, request: ToolCallRequest) -> PermissionDecision:
         """PermissionManager.decide; ALLOW → ON_TOOL_BEFORE; DENY → ON_TOOL_DENIED + ledger TOOL_DENIED;
         REQUIRE_APPROVAL → request_approval, pause run, await decision (timeout → DENY).
+        E02-S11: `ApprovalWaiter.wait(approval_id, timeout_s) -> ApprovalState` (APPROVED/DENIED/EXPIRED; the composition root
+        wires `runtime.approvals.EventApprovalWaiter`, woken by `on_decided`, re-reading the request every second for
+        decisions made by another process). DENY reasons "approval denied" / "approval expired". A run continuing an
+        interrupted one (`parent_run_id` chain, recovery) reuses the ancestor's PENDING or unused APPROVED request for the same
+        tool instead of asking again (an APPROVED request is used once: a TOOL_INVOKED carries its id).
         E01-S27: an adapter that reports tool calls after they ran (Codex, `configure_sandbox`) gets the post-hoc
         authorizer `DefaultToolInvoker.authorizer_for(run, wait_for_approval=False)`: DENY/REQUIRE_APPROVAL are
         recorded (TOOL_DENIED) and returned unchanged, the run is never paused, and the executor fails the run
@@ -1651,8 +1666,8 @@ Global options: `--repo PATH` (default: cwd ancestor containing `.ai/` or `GDD/`
 | `walk handover create` | `RUN_ID --reason REASON` | force checkpoint + handover (operator) |
 | `walk runs list` / `walk runs show RUN_ID` / `walk runs cancel RUN_ID` | | |
 | `walk pause` / `walk resume` | `[--agent RUN_ID]` | §93 |
-| `walk approve` / `walk deny` | `APV_ID --note TEXT` | §92 |
-| `walk approvals` | `--pending` | |
+| `walk approve` / `walk deny` | `APV_ID --note TEXT` | §92; E02-S11: daemon command `approve`/`deny` when a daemon holds the lock, else in-process; prints `<id> <STATE>`; exit 1 unknown id, 2 already decided |
+| `walk approvals` | `--pending` | E02-S11: reads the DB; table id, kind, tool, state, approver, run, requested_at |
 | `walk decisions list` / `show ID` / `override ID --outcome TEXT --rationale TEXT` | | §44, §93 |
 | `walk debates list` / `show ID` | | `[MVP minimal]` |
 | `walk ledger tail` | `--follow` `--since SEQ` | |
