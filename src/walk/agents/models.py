@@ -115,6 +115,10 @@ class RuntimePolicy(WalkModel):
     checkpoint_every_tool_calls: int = Field(
         default=10, description="Periodic checkpoint interval in tool calls."
     )
+    allowed_paths: list[str] = Field(
+        default_factory=lambda: ["**"],
+        description="Worktree globs the role may change (boundary audit); [] = none (E02-S14).",
+    )
 
 
 class AgentInstance(WalkModel):

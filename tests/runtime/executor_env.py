@@ -297,6 +297,7 @@ async def build_executor_env(
     max_parallel_runs: int = 1,
     approval_sleep: Callable[[float], Awaitable[None]] = no_sleep,
     event_waiter: bool = False,
+    allowed_paths: tuple[str, ...] = ("**",),
 ) -> ExecutorEnv:
     """Wire the executor over ``base``; ``plan`` drives both fake adapters.
 
@@ -421,6 +422,7 @@ async def build_executor_env(
         ready_env_keys=lambda: {"git"},
         sleep=sleep,
         prompt_version=prompt_version,
+        allowed_paths=allowed_paths,
     )
     agent = await agents.instantiate(SENIOR, base.story, model_id, Effort.MEDIUM, [], {"git"})
     policy = agent.runtime_policy.model_copy(

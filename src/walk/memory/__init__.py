@@ -32,7 +32,7 @@ from walk.memory.repository import (
     MemoryIndexRepository,
     MemoryIndexRow,
 )
-from walk.memory.secrets import SECRET_PATTERNS, find_secrets
+from walk.memory.secrets import SECRET_PATTERNS, contains_secret, find_secrets
 from walk.memory.sections import SECTION_ORDER, sections_for, skeleton_for
 from walk.memory.service import DefaultMemoryManager
 
@@ -65,6 +65,7 @@ __all__ = [
     "RelatedLinks",
     "SecretDetected",
     "approved_doc",
+    "contains_secret",
     "doc_path_for",
     "find_secrets",
     "folder_for_type",

@@ -192,3 +192,14 @@ async def test_adopt_reuses_or_re_adds_worktree(git: GitCliProvider, tmp_game_re
 
     with pytest.raises(ConfigError, match="no worktree to adopt"):
         await sandbox.adopt(make_run(RUN_B), make_run(RUN_A), story)
+
+
+async def test_create_removes_worktree_when_guard_hooks_fail(tmp_game_repo: Path) -> None:
+    fake = FakeGitProvider()
+    fake.fail_on["install_guard_hooks"] = GitError("hooks folder not writable", detail={})
+    sandbox = DefaultSandboxManager(tmp_game_repo, fake, PROTECTED)
+
+    with pytest.raises(ConfigError, match="guard hooks"):
+        await sandbox.create(make_run(RUN_A), _story())
+
+    assert [call[0] for call in fake.calls][-1] == "remove_worktree"

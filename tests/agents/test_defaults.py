@@ -85,6 +85,7 @@ def test_default_policies_match_adr_0011() -> None:
             [preferred],
             [fallback],
         ), role
-        assert policy.version == "1.0"
+        assert policy.version == ("1.1" if role is AgentRole.QC else "1.0")  # QC: E02-S14
     assert policies.load(AgentRole.QC).model_policy.cross_model_review is True
+    assert policies.load(AgentRole.QC).allowed_paths == []
     assert policies.load(AgentRole.SENIOR_DEV).checkpoint_every_tool_calls == 10

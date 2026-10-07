@@ -7,8 +7,11 @@ class DocumentNotFound(PermanentError):
     """No `.ai/` document exists for the requested id; ``detail`` carries ``doc_id``."""
 
 
-class SecretDetected(BoundaryViolation):
-    """Content matches a secret pattern (ARCHITECTURE §6); nothing was written."""
+class SecretDetected(BoundaryViolation, PermissionDenied):
+    """Content matches a secret pattern (ARCHITECTURE §6); nothing was written.
+
+    Also a `PermissionDenied` (E02-S14: the write is refused).
+    """
 
 
 class ApprovedWriteRefused(PermissionDenied):

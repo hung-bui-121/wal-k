@@ -10,7 +10,11 @@ from tests.fakes.fake_codex_launcher import FakeCodexProcessLauncher
 from tests.fakes.fake_model_adapter import fake_descriptor
 from tests.runtime.executor_env import CODEX_MODEL, EnvFactory
 from walk.agents import AgentInput
-from walk.integrations import CREDENTIAL_NAMES, AsyncioSubprocessRunner
+from walk.integrations import (
+    CREDENTIAL_NAMES,
+    UNITY_SECRET_NAMES,
+    AsyncioSubprocessRunner,
+)
 from walk.integrations.subprocess import resolve_executable
 from walk.model_router.adapters.codex import CodexAdapter
 from walk.runtime.sandbox import AGENT_ENV_ALLOWLIST, WINDOWS_AGENT_ENV_ALLOWLIST, scrubbed_env
@@ -30,17 +34,35 @@ def test_scrubbed_env_drops_secrets_and_keeps_allowlist() -> None:
 
 
 def test_scrubbed_env_glob_matches_prefix_only() -> None:
-    env = {"UNITY_": "a", "UNITY_LICENSE": "b", "UNITYX": "c", "XUNITY_A": "d", "HOMEPATH": "e"}
+    env = {"WALKX_A": "a", "WALKX": "b", "XWALKX_A": "c", "HOMEPATH": "d"}
 
-    assert scrubbed_env(env) == {"UNITY_": "a", "UNITY_LICENSE": "b"}
-    assert "UNITY_*" in AGENT_ENV_ALLOWLIST
+    assert scrubbed_env(env, allowlist=("WALKX_*",)) == {"WALKX_A": "a"}
+    assert "UNITY_*" not in AGENT_ENV_ALLOWLIST
+
+
+def test_unity_secrets_never_reach_agents() -> None:
+    secrets = dict.fromkeys(UNITY_SECRET_NAMES, "secret")
+    env = {**secrets, "UNITY_EDITOR_PATH": "/opt/unity", "UNITY_VERSION": "6000.0.1f1"}
+
+    kept = scrubbed_env(env)
+
+    assert kept == {"UNITY_EDITOR_PATH": "/opt/unity", "UNITY_VERSION": "6000.0.1f1"}
+    assert set(UNITY_SECRET_NAMES) == {
+        "UNITY_PASSWORD",
+        "UNITY_SERIAL",
+        "UNITY_LICENSE",
+        "UNITY_EMAIL",
+    }
+    assert set(UNITY_SECRET_NAMES) <= set(CREDENTIAL_NAMES)
+    for platform in ("win32", "linux"):
+        assert not set(UNITY_SECRET_NAMES) & set(scrubbed_env(env, platform=platform))
 
 
 def test_scrubbed_env_case_rules_follow_platform() -> None:
-    env = {"Path": "C:/bin", "unity_editor": "u", "SystemRoot": "C:/Windows", "Secret": "s"}
+    env = {"Path": "C:/bin", "unity_editor_path": "u", "SystemRoot": "C:/Windows", "Secret": "s"}
 
     kept = scrubbed_env(env, platform="win32")
-    assert kept == {"Path": "C:/bin", "unity_editor": "u", "SystemRoot": "C:/Windows"}
+    assert kept == {"Path": "C:/bin", "unity_editor_path": "u", "SystemRoot": "C:/Windows"}
 
     assert scrubbed_env(env, platform="linux") == {}
 

@@ -151,7 +151,7 @@ def test_bootstrap_prompts_on_a_terminal(
     assert (tmp_game_repo / ".ai" / "agents").exists() is (code == 0)
 
 
-def test_bootstrap_refused_secret_exits_one(
+def test_bootstrap_refused_secret_exits_two(
     tmp_game_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _scripted(monkeypatch)
@@ -171,5 +171,6 @@ def test_bootstrap_refused_secret_exits_one(
         ],
     )
 
-    assert result.exit_code == 1, result.output
+    # E02-S14: a refused secret is a permission refusal (SecretDetected is PermissionDenied).
+    assert result.exit_code == 2, result.output
     assert "secret" in result.stderr.lower()

@@ -440,8 +440,8 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S10 | Permission defaults, `permissions.yaml` loader, protected actions | feat | E01-S15, E02-S03 | MEDIUM | DONE (2522b25) |
 | E02-S11 | Approval requests and `walk approve/deny/approvals` | feat | E02-S10, E01-S26 | HIGH | DONE (1d693da) |
 | E02-S12 | Approved artifact registry and `walk artifacts` | feat | E02-S10, E01-S16 | HIGH | DONE (8747f97) |
-| E02-S13 | Human override CLI subset | feat | E01-S30, E02-S11 | MEDIUM | DONE (pending) |
-| E02-S14 | Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions | feat | E02-S10, E01-S23, E01-S25 | HIGH | TODO |
+| E02-S13 | Human override CLI subset | feat | E01-S30, E02-S11 | MEDIUM | DONE (915995d) |
+| E02-S14 | Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions | feat | E02-S10, E01-S23, E01-S25 | HIGH | DONE (pending) |
 | E02-S15 | `walk doctor --fix --strict` | feat | E02-S07, E02-S14, E02-S04 | MEDIUM | TODO |
 | E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | feat | E02-S15, E02-S13, E02-S12, E02-S09 | MEDIUM | TODO |
 | E02-R01 | Review E02 | docs | E02-S16 | MEDIUM | TODO |

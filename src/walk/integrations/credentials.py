@@ -25,8 +25,20 @@ CREDENTIAL_NAMES: tuple[str, ...] = (
     "MESHY_API_KEY",
     "OPENART_OAUTH_CLIENT",
     "OPENART_OAUTH_REFRESH_TOKEN",
+    "UNITY_PASSWORD",
+    "UNITY_SERIAL",
+    "UNITY_LICENSE",
+    "UNITY_EMAIL",
 )
 """Every credential the kernel knows (ADR-0009 D-8)."""
+
+UNITY_SECRET_NAMES: tuple[str, ...] = (
+    "UNITY_PASSWORD",
+    "UNITY_SERIAL",
+    "UNITY_LICENSE",
+    "UNITY_EMAIL",
+)
+"""Unity licence credentials (CI activation); never in an agent's environment (E02-S14)."""
 
 KEYRING_SERVICE: Final[str] = "walk"
 """Keyring service name; the username is the credential name."""

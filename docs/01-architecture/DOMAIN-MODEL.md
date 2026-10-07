@@ -988,6 +988,7 @@ class RuntimePolicy(WalkModel):
     execution_strategy: Literal["single_run", "plan_then_execute", "review_only"] = "single_run"
     max_parallel_runs: int = 1
     checkpoint_every_tool_calls: int = 10
+    allowed_paths: list[str] = ["**"]  # E02-S14: worktree globs the role may change (boundary audit); QC: []
 
 
 class AgentInstance(WalkModel):

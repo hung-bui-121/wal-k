@@ -2047,7 +2047,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S13 — Human override CLI subset
 
-**Status:** DONE (pending)
+**Status:** DONE (915995d)
 **Type:** feat
 **Requirements:** §93, §6.12, §137
 **Depends on:** E01-S30, E02-S11
@@ -2174,7 +2174,7 @@ Decisions and contract additions (for the owner):
 
 ### E02-S14 — Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §91, §92, §31, §60, §137, §138
 **Depends on:** E02-S10, E01-S23, E01-S25
@@ -2320,7 +2320,38 @@ Guard hook scripts: `pre-commit.sh` aborts when current branch matches any prote
 - Commit subject: `feat: enforce repository boundary guard hooks and secret scan (E02-S14)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+406 files already formatted
+All checks passed!
+Success: no issues found in 405 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.84%
+1358 passed, 5 deselected in 568.70s (0:09:28)
+```
+Touched modules: `runtime/boundary.py`, `memory/secrets.py`, `integrations/git/guard_hooks.py`, `integrations/git/provider.py`, `runtime/sandbox.py`, `integrations/credentials.py`, `cli/composition.py` 100 %; `skills/service.py` 98 % and `runtime/executor.py` 99 % (the uncovered lines are pre-existing E02-S07/E01 branches). All 13 acceptance tests pass, plus: Unity licence variables never reach `scrubbed_env` and are kernel credentials; a pre-existing hook is chained (it still runs) and a hook whose `.local` copy already exists is refused; push of `release/*` is refused before git runs; a guard-hook installation failure removes the new worktree; a role with `allowed_paths: []` and a kernel-wide allow bound both end the run `FAILED_BOUNDARY`; the secret scan skips binary, oversized and deleted files.
+
+Demo on the E02-S08 demo repository (outside this repository): one scheduling tick with a fake adapter on a READY story (scratch script driving `build_kernel(...).orchestrator.run_once()`), then the shared hooks folder:
+```
+$ walk --repo <tmp>/game run --once     # before updating the pins
+VersionPinError: ... pin EFFORT_POLICY/QC wants 1.0, kernel provides 1.1 ...
+$ (EFFORT_POLICY/QC set to '1.1' in .ai/project/kernel-versions.yaml)
+started 1 [('RUN-01M4A5TR91NNSPEZWA0JFWJN9M', 'COMPLETED', '<tmp>\game\.walk\worktrees\RUN-...')]
+$ git rev-parse --git-path hooks && ls <hooks>
+.git/hooks  ['pre-commit', 'pre-push']
+```
+
+Decisions and findings (for the owner):
+- **Secret scan injection.** `runtime` may import only `memory`'s models/protocols/errors (ARCHITECTURE §2.2; the E01-B06 architecture test enforces it). `DefaultBoundaryAuditor` therefore takes `secret_scan=` (keyword), and the composition root passes `walk.memory.secrets.contains_secret`, so one scanner serves both `.ai/` writes and agent diffs. Without it no file content is read.
+- **Existing E01 behaviour kept and extended, not replaced.** `DEFAULT_FORBIDDEN_PATHS` keeps the E01-S25 provider folders (`.git/**`, `.claude/**`, `AGENTS.md`, `.codex/**`) next to the story's six entries. `EVIDENCE_EXCEPTIONS` keeps `.ai/phases/*/evidence/**` (ADR-0006 D-5) next to the two listed globs. `memory/secrets.py` already existed: `SECRET_PATTERNS` became the story's `(name, regex)` table, with a leading `\b` on the key prefixes so that `task-…`/`risk-…` words are not keys, and `find_secrets` stays.
+- **`SecretDetected` is now also a `PermissionDenied`** (`BoundaryViolation, PermissionDenied`, AC 7), with the message `secret-like content: <pattern>`. CLI side effect: `walk bootstrap` refusing a secret exits 2 instead of 1. The E02-S03 test is now `test_bootstrap_refused_secret_exits_two`.
+- **Guard hooks.** The scripts are now the templates `integrations/git/hooks/pre-commit.sh`/`pre-push.sh`, rendered by `render_guard_hook`. They print `walk: protected branch '<name>': <action> refused`. Installation is idempotent (same bytes → no rewrite). A pre-existing foreign hook is no longer refused: it is moved to `<kind>.local` and chained after the check (pre-push replays its stdin), also outside run worktrees, so a developer's hook keeps running in their own checkout. The E01 test `test_foreign_hook_is_not_overwritten` was changed accordingly.
+- **AC 9 setup.** The hooks act only inside run worktrees (E01-S25), so the test checks `main` out in a run worktree under `.walk/worktrees/` after moving the main checkout to `dev`.
+- **`hide_local_changes(path, files, *, mark=True)`.** `mark=False` (a keyword not in the story) only reports the tracked files. `tracked_projection_guard` (public in `cli/composition.py`, the `HideTracked` of `DefaultSkillRegistry`) uses it to refuse tracked targets outside run worktrees without setting a flag. Behavior 12 (clearing the flag before `squash_wip`/rebase) belongs to E03-S01.
+- **Allowed paths.** `RuntimePolicy.allowed_paths` defaults to `["**"]`; QC is `[]`. The QC policy version was bumped to `1.1` (§105), so existing projects must update the `EFFORT_POLICY/QC` pin (the demo shows the startup refusal). The executor audits with the role's `allowed_paths`, and also with its own kernel-wide `allowed_paths` when that is not `["**"]`. `executor.py` was outside the Files table.
+- **Unity variables.** `AGENT_ENV_ALLOWLIST` lists `UNITY_EDITOR_PATH`, `UNITY_PATH`, `UNITY_VERSION` and `UNITY_PROJECT_PATH` instead of `UNITY_*`. `UNITY_SECRET_NAMES` (`UNITY_PASSWORD`, `UNITY_SERIAL`, `UNITY_LICENSE`, `UNITY_EMAIL`) were added to `CREDENTIAL_NAMES`. `scrubbed_env` gained an `allowlist=` keyword (the old prefix test now uses it). ARCHITECTURE §6 was updated.
+- **Finding, not fixed here.** A freshly bootstrapped repository whose `.gitignore` (written by `walk bootstrap`) is not committed yet gives every run worktree an untracked `.walk/output.json`. `.walk/**` is forbidden, so the first audit ends the run FAILED_BOUNDARY. In an empty repository the follow-up `git checkout -- .` then fails ("git command failed"). The demo repository needed `git commit .gitignore`. This predates E02-S14 (E01-S25/E02-S03); candidates for E02-R01 are to exclude `/.walk/` via `info/exclude` when a worktree is created, or to have bootstrap commit or stage its kit files.
+- **Other files outside the table:** `runtime/executor.py`, `integrations/credentials.py`, `integrations/__init__.py`, `memory/errors.py`, `memory/__init__.py`, `skills/__init__.py`, `runtime/__init__.py`, `docs/01-architecture/ARCHITECTURE.md`, `docs/01-architecture/DOMAIN-MODEL.md`, and the tests `tests/runtime/test_sandbox_env.py`, `tests/runtime/test_executor_boundary.py`, `tests/runtime/test_sandbox.py`, `tests/runtime/executor_env.py`, `tests/agents/test_defaults.py` and `tests/cli/test_cmd_bootstrap.py`.
 
 ---
 

@@ -7,6 +7,7 @@ from walk.runtime.approvals import EventApprovalWaiter
 from walk.runtime.boundary import (
     DEFAULT_ALLOWED_PATHS,
     DEFAULT_FORBIDDEN_PATHS,
+    EVIDENCE_EXCEPTIONS,
     DefaultBoundaryAuditor,
 )
 from walk.runtime.checkpoints import DefaultCheckpointManager
@@ -53,6 +54,7 @@ __all__ = [
     "APPROVAL_TIMEOUT_S",
     "DEFAULT_ALLOWED_PATHS",
     "DEFAULT_FORBIDDEN_PATHS",
+    "EVIDENCE_EXCEPTIONS",
     "IMPLEMENT_OUTPUT_EVENTS",
     "MAX_REPAIR_TURNS",
     "REPAIR_INSTRUCTION",

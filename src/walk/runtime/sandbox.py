@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final
 
 from walk.common.errors import ConfigError
+from walk.integrations.errors import GitError
 from walk.integrations.protocols import GitProvider
 from walk.runtime.models import AgentRun
 from walk.workflow.models import WorkItem
@@ -27,9 +28,16 @@ AGENT_ENV_ALLOWLIST: tuple[str, ...] = (
     "TEMP",
     "USERPROFILE",
     "SYSTEMROOT",
-    "UNITY_*",
+    "UNITY_EDITOR_PATH",
+    "UNITY_PATH",
+    "UNITY_VERSION",
+    "UNITY_PROJECT_PATH",
 )
-"""Environment keys an agent subprocess may see; a trailing ``*`` matches a key prefix."""
+"""Environment keys an agent subprocess may see; a trailing ``*`` matches a key prefix.
+
+Only named, non-secret Unity variables pass (E02-S14): the Unity licence credentials
+(``UNITY_PASSWORD``, ``UNITY_SERIAL``, ``UNITY_LICENSE``, ``UNITY_EMAIL``) are kernel credentials.
+"""
 
 WINDOWS_AGENT_ENV_ALLOWLIST: tuple[str, ...] = ("APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC")
 """Extra keys on Windows: npm-installed CLIs read their config under ``APPDATA``/``LOCALAPPDATA``;
@@ -41,16 +49,22 @@ _NON_SLUG: Final = re.compile(r"[^a-z0-9]+")
 _PostCreate = Callable[[AgentRun, WorkItem, str], Awaitable[None]]
 
 
-def scrubbed_env(os_env: Mapping[str, str], *, platform: str = sys.platform) -> dict[str, str]:
+def scrubbed_env(
+    os_env: Mapping[str, str],
+    *,
+    platform: str = sys.platform,
+    allowlist: tuple[str, ...] = AGENT_ENV_ALLOWLIST,
+) -> dict[str, str]:
     """Keys equal to an allowlist entry or matching a trailing-`*` glob; values copied verbatim.
 
-    `AGENT_ENV_ALLOWLIST` applies everywhere; `WINDOWS_AGENT_ENV_ALLOWLIST` is added when
-    ``platform == "win32"``. Keys compare case-sensitively on POSIX and case-insensitively on
-    Windows (``ComSpec`` and ``SystemRoot`` match), where environment variable names are
-    case-insensitive; the key spelling of ``os_env`` is kept.
+    ``allowlist`` (default `AGENT_ENV_ALLOWLIST`) applies everywhere;
+    `WINDOWS_AGENT_ENV_ALLOWLIST` is added when ``platform == "win32"``. Keys compare
+    case-sensitively on POSIX and case-insensitively on Windows (``ComSpec`` and
+    ``SystemRoot`` match), where environment variable names are case-insensitive; the key
+    spelling of ``os_env`` is kept.
     """
     fold = platform == "win32"
-    entries = AGENT_ENV_ALLOWLIST + (WINDOWS_AGENT_ENV_ALLOWLIST if fold else ())
+    entries = allowlist + (WINDOWS_AGENT_ENV_ALLOWLIST if fold else ())
     exact = {_fold(e, fold=fold) for e in entries if not e.endswith("*")}
     prefixes = tuple(_fold(e[:-1], fold=fold) for e in entries if e.endswith("*"))
     return {
@@ -112,8 +126,8 @@ class DefaultSandboxManager:
         path; the caller stores it with the branch on the run.
 
         Raises:
-            ConfigError: Skill projection failed; the new worktree has been removed (the
-                branch is kept).
+            ConfigError: Skill projection or the guard hook installation failed; the new
+                worktree has been removed (the branch is kept).
         """
         branch = branch_name_for(item)
         await self._git.ensure_branch(
@@ -122,10 +136,13 @@ class DefaultSandboxManager:
         path = await self._git.add_worktree(str(self._worktree_path(run)), branch)
         try:
             await self._project(run, item, path)
-        except ConfigError:
+            await self._git.install_guard_hooks(path, self._protected)
+        except (ConfigError, GitError) as exc:
             await self._git.remove_worktree(path, force=True)
-            raise
-        await self._git.install_guard_hooks(path, self._protected)
+            if isinstance(exc, ConfigError):
+                raise
+            msg = f"guard hooks could not be installed in {path}"
+            raise ConfigError(msg, detail={"run_id": run.id, "error": str(exc)}) from exc
         for hook in self.post_create:
             await hook(run, item, path)
         return path

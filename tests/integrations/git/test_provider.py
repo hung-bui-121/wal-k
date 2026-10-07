@@ -456,3 +456,23 @@ async def test_commit_all_falls_back_to_message_trailer_on_old_git(
         sha="3f9c2e1aa", message="wip\n\nWalk-Work-Item: TASK-0001", files=["src/A.cs"]
     )
     assert fake.argvs.count(["git", "--version"]) == 1
+
+
+async def test_hide_local_changes_marks_only_tracked_files(
+    git: GitCliProvider, tmp_game_repo: Path
+) -> None:
+    (tmp_game_repo / "a.txt").write_bytes(b"a\n")
+    _git(tmp_game_repo, "add", "a.txt")
+    _git(tmp_game_repo, "commit", "-q", "-m", "chore: a")
+    (tmp_game_repo / "b.txt").write_bytes(b"b\n")
+
+    reported = await git.hide_local_changes(str(tmp_game_repo), ["a.txt", "b.txt"], mark=False)
+    hidden = await git.hide_local_changes(str(tmp_game_repo), ["a.txt", "b.txt"])
+    (tmp_game_repo / "a.txt").write_bytes(b"changed\n")
+
+    assert reported == ["a.txt"]
+    assert hidden == ["a.txt"]
+    status = await git.status(str(tmp_game_repo))
+    assert "a.txt" not in status
+    assert "b.txt" in status
+    assert await git.hide_local_changes(str(tmp_game_repo), []) == []

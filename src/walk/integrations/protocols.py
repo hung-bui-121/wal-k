@@ -197,6 +197,17 @@ class GitProvider(Protocol):
         """Install the pre-commit/pre-push guard hooks for ``path`` (ADR-0006 D-1)."""
         ...
 
+    async def hide_local_changes(
+        self, path: str, files: list[str], *, mark: bool = True
+    ) -> list[str]:
+        """Mark the tracked ones of ``files`` with ``skip-worktree``; return them (E02-S14).
+
+        ``files`` are relative to the worktree at ``path``: those tracked in its index get
+        ``git update-index --skip-worktree``. Untracked files are left alone (info/exclude
+        covers them). ``mark=False`` only reports the tracked ones.
+        """
+        ...
+
     async def is_ancestor(self, ancestor: Sha, descendant: Sha, path: str) -> bool:
         """Whether ``ancestor`` is an ancestor of ``descendant``."""
         ...

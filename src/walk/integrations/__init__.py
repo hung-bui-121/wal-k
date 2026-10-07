@@ -1,6 +1,10 @@
 """Provider boundary: integration protocols, credentials, subprocesses and the git provider."""
 
-from walk.integrations.credentials import CREDENTIAL_NAMES, CredentialStore
+from walk.integrations.credentials import (
+    CREDENTIAL_NAMES,
+    UNITY_SECRET_NAMES,
+    CredentialStore,
+)
 from walk.integrations.errors import GitError, NotSupported
 from walk.integrations.git import GitCliProvider
 from walk.integrations.git.guard_hooks import GUARD_HOOK_MARKER, render_guard_hook
@@ -44,6 +48,7 @@ __all__ = [
     "CREDENTIAL_NAMES",
     "FORBIDDEN_COMMIT_PATHSPECS",
     "GUARD_HOOK_MARKER",
+    "UNITY_SECRET_NAMES",
     "WORK_ITEM_TRAILER",
     "AssetJob",
     "AssetProvenance",

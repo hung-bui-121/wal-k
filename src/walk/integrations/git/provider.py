@@ -40,6 +40,7 @@ _TRAILER_MIN_VERSION = (2, 32)  # first git release with `git commit --trailer`
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)")
 _EXIT_NOT_ANCESTOR = 1
 _HOOK_MODE = 0o755
+_LOCAL_SUFFIX = ".local"
 _RENAME_OR_COPY = ("R", "C")
 _STATUS_PREFIX_LEN = 3  # "XY " before the path in porcelain v1
 
@@ -234,8 +235,16 @@ class GitCliProvider:
         return info
 
     async def push(self, path: str, branch: str, *, protected_branches: list[str]) -> None:
-        """Not available before E03-S01 (raises `ConfigError`)."""
-        del path, protected_branches
+        """Refuse a protected branch before git runs (E02-S14); pushing itself is E03-S01.
+
+        Raises:
+            PermissionDenied: ``branch`` matches a ``protected_branches`` glob (git not run).
+            ConfigError: Pushing is not available before E03-S01.
+        """
+        del path
+        if any(fnmatch.fnmatchcase(branch, glob) for glob in protected_branches):
+            msg = f"protected branch {branch!r}: push refused"
+            raise PermissionDenied(msg, detail={"branch": branch})
         _deferred("push", branch)
 
     async def open_pr(
@@ -261,11 +270,13 @@ class GitCliProvider:
         """Write the ``pre-commit`` and ``pre-push`` guard hooks into ``path``'s hooks folder.
 
         The folder is ``git rev-parse --git-path hooks``; git shares it between all worktrees
-        of a repository. Only hooks carrying `GUARD_HOOK_MARKER` are overwritten.
+        of a repository. Only hooks carrying `GUARD_HOOK_MARKER` are overwritten, and only
+        when their text changes (idempotent). A hook without the marker is moved to
+        ``<kind>.local`` first; the guard hook runs it after its check (E02-S14).
 
         Raises:
-            ConfigError: A hook file without the marker exists (nothing is written), or a
-                protected branch glob is invalid.
+            ConfigError: A foreign hook exists while ``<kind>.local`` exists too (nothing is
+                written), or a protected branch glob is invalid.
         """
         out = (await self._git(path, "rev-parse", "--git-path", "hooks")).stdout.strip()
         hooks_dir = Path(out) if Path(out).is_absolute() else Path(path) / out
@@ -277,6 +288,28 @@ class GitCliProvider:
             "guard hooks installed",
             extra={"hooks_dir": str(hooks_dir), "protected": protected_branches},
         )
+
+    async def hide_local_changes(
+        self, path: str, files: list[str], *, mark: bool = True
+    ) -> list[str]:
+        """Mark the tracked ones of ``files`` with ``git update-index --skip-worktree``.
+
+        ``files`` are relative to the worktree at ``path``; each linked worktree has its own
+        index, so the flag stays local to that worktree. Untracked files are left alone
+        (``info/exclude`` covers them). Returns the tracked files, in input order;
+        ``mark=False`` only reports them (E02-S14).
+
+        Raises:
+            GitError: A git command failed.
+        """
+        if not files:
+            return []
+        listed = await self._git(path, "ls-files", "-z", "--", *files)
+        tracked = set(_nul_split(listed.stdout))
+        hidden = [name for name in files if name in tracked]
+        if hidden and mark:
+            await self._git(path, "update-index", "--skip-worktree", "--", *hidden)
+        return hidden
 
     async def is_ancestor(self, ancestor: Sha, descendant: Sha, path: str) -> bool:
         """``git merge-base --is-ancestor``; exit 1 → False.
@@ -407,16 +440,28 @@ def _ensure_dir(path: Path) -> None:
 
 
 def _write_hooks(hooks_dir: Path, scripts: dict[str, str]) -> None:
-    """Write ``scripts`` (hook name → text) after checking every target is ours."""
-    for kind in scripts:
-        target = hooks_dir / kind
-        if target.exists() and GUARD_HOOK_MARKER.encode() not in target.read_bytes():
-            msg = "refusing to overwrite a foreign git hook"
-            raise ConfigError(msg, detail={"hook": str(target)})
+    """Write ``scripts`` (hook name → text); a foreign hook moves to ``<name>.local``."""
+    foreign = [
+        hooks_dir / kind
+        for kind in scripts
+        if (hooks_dir / kind).exists()
+        and GUARD_HOOK_MARKER.encode() not in (hooks_dir / kind).read_bytes()
+    ]
+    for target in foreign:
+        local = target.with_name(target.name + _LOCAL_SUFFIX)
+        if local.exists():
+            msg = "a foreign git hook and its .local copy both exist"
+            raise ConfigError(msg, detail={"hook": str(target), "local": str(local)})
     hooks_dir.mkdir(parents=True, exist_ok=True)
+    for target in foreign:
+        target.replace(target.with_name(target.name + _LOCAL_SUFFIX))
+        _LOG.info("existing git hook chained", extra={"hook": str(target)})
     for kind, script in scripts.items():
         target = hooks_dir / kind
-        target.write_bytes(script.encode("utf-8"))  # bytes keep LF endings on Windows
+        data = script.encode("utf-8")  # bytes keep LF endings on Windows
+        if target.is_file() and target.read_bytes() == data:
+            continue
+        target.write_bytes(data)
         target.chmod(_HOOK_MODE)
 
 

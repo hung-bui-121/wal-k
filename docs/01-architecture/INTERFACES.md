@@ -868,7 +868,11 @@ class BoundaryAuditor(Protocol):
         allowed_paths: list[str],
         forbidden_paths: list[str],
     ) -> list[str]:
-        """Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .)."""
+        """Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .).
+        E02-S14: DefaultBoundaryAuditor(*, forbidden=DEFAULT_FORBIDDEN_PATHS, exceptions=EVIDENCE_EXCEPTIONS,
+        secret_scan=None); exceptions win over forbidden, forbidden over allowed; `SECRET:<path>` for an added/modified
+        text file ≤ 1 MB in which the injected scan (walk.memory.secrets.contains_secret) finds a secret. The executor audits
+        with the role's RuntimePolicy.allowed_paths (QC: []), and with its kernel-wide allowed_paths when not ["**"]."""
 ```
 
 ### 1.14 `walk.telemetry.protocols`
@@ -1169,7 +1173,8 @@ class GitProvider(Protocol):
         """Stages everything except forbidden paths; message gets trailer `Walk-Work-Item: <id>` (§59 traceability). None if clean."""
 
     async def push(self, path: str, branch: str, *, protected_branches: list[str]) -> None:
-        """Raises PermissionDenied if branch ∈ protected (protected ops go through ToolInvoker with approval)."""
+        """Raises PermissionDenied if branch ∈ protected (protected ops go through ToolInvoker with approval).
+        E02-S14: the check runs before git; the remote push itself arrives in E03-S01."""
 
     async def open_pr(
         self, branch: str, base: str, title: str, body: str, *, idempotency_key: str
@@ -1184,7 +1189,15 @@ class GitProvider(Protocol):
     async def squash_wip(self, path: str, branch: str, base: Sha, message: str) -> Sha:
         """Collapse `wip(...)` checkpoint commits into one commit before PR (ADR-0002 §D-4)."""
 
-    async def install_guard_hooks(self, path: str, protected_branches: list[str]) -> None: ...
+    async def install_guard_hooks(self, path: str, protected_branches: list[str]) -> None:
+        """E02-S14: renders walk/integrations/git/hooks/pre-commit.sh and pre-push.sh (LF, 0o755) into
+        `git rev-parse --git-path hooks`; same text → no rewrite; a pre-existing non-walk hook is moved to <kind>.local and
+        chained (runs after the check, pre-push with the same stdin); both exit 1 with `walk: protected branch '<name>'`."""
+
+    async def hide_local_changes(self, path: str, files: list[str], *, mark: bool = True) -> list[str]:
+        """E02-S14: mark those of `files` (worktree-relative) that are tracked in the index of the worktree at `path`
+        with `git update-index --skip-worktree`; return them. Untracked files are left alone (info/exclude covers them).
+        `mark=False` only reports them. Used by the skill projection (HideTracked) for a tracked AGENTS.md in run worktrees."""
     async def is_ancestor(self, ancestor: Sha, descendant: Sha, path: str) -> bool: ...
     async def merge_base(self, a: str, b: str, path: str) -> Sha:
         """`git merge-base a b`; refs or shas; no common ancestor → GitError. Squash base of the integration step (E03-S12)."""

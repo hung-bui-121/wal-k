@@ -144,3 +144,24 @@ async def test_codex_run_is_never_paused_for_approval(
     assert [event.tool for event in denied] == ["dotnet"]
     assert "requires USER approval" in str(denied[0].payload["reason"])
     assert run.tool_calls == 2
+
+
+async def test_role_and_kernel_allowed_paths_bound_the_run(make_executor_env: EnvFactory) -> None:
+    env = await make_executor_env(script(tool_calls=2))
+    policy = env.agent.runtime_policy.model_copy(update={"allowed_paths": []})  # QC (E02-S14)
+    reviewer = env.agent.model_copy(update={"runtime_policy": policy})
+
+    started = await env.executor.start(reviewer, env.story, "IMPLEMENT")
+    run = await env.executor.wait(started.id)
+
+    assert run.state is AgentRunState.FAILED_BOUNDARY
+    assert "src/Fake1.cs" in str(run.failure_reason)
+
+
+async def test_kernel_allowed_paths_also_apply(make_executor_env: EnvFactory) -> None:
+    env = await make_executor_env(script(tool_calls=2), allowed_paths=("Assets/**",))
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.FAILED_BOUNDARY
+    assert "src/Fake1.cs" in str(run.failure_reason)

@@ -74,7 +74,7 @@ roles:
     max_parallel_runs: 1
     checkpoint_every_tool_calls: 10
   QC:
-    version: "1.0"
+    version: "1.1"  # E02-S14: allowed_paths [] (QC does not change the repository)
     model_policy: {preferred: [claude/sonnet], fallback: [codex/default], cross_model_review: true}
     effort_policy: {default: MEDIUM, min: LOW, max: HIGH}
     budget_policy: {}
@@ -83,6 +83,7 @@ roles:
     execution_strategy: single_run
     max_parallel_runs: 1
     checkpoint_every_tool_calls: 10
+    allowed_paths: []
   UA_RELEASE:
     version: "1.0"
     model_policy: {preferred: [claude/opus], fallback: [codex/default]}

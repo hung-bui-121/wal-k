@@ -31,6 +31,7 @@ class FakeGitProvider:
         self.diffs: dict[str, list[str]] = {}
         self.commits: list[CommitInfo] = []
         self.hooks_installed: list[tuple[str, list[str]]] = []
+        self.tracked: dict[str, list[str]] = {}
         self._replays: dict[str, CommitInfo | None] = {}
 
     def _record(self, method: str, *args: object) -> None:
@@ -139,6 +140,14 @@ class FakeGitProvider:
         """Record the squash; returns the current head."""
         self._record("squash_wip", path, branch, base, message)
         return self.heads.get(path, _BASE_SHA)
+
+    async def hide_local_changes(
+        self, path: str, files: list[str], *, mark: bool = True
+    ) -> list[str]:
+        """Record the call; ``tracked[path]`` lists the tracked files (default none)."""
+        self._record("hide_local_changes", path, list(files), mark)
+        known = set(self.tracked.get(path, []))
+        return [name for name in files if name in known]
 
     async def install_guard_hooks(self, path: str, protected_branches: list[str]) -> None:
         """Record the installation."""

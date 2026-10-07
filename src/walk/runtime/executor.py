@@ -232,7 +232,8 @@ class DefaultAgentExecutor:
                 ``scrubbed_env(os.environ)`` taken when the run starts (E02-S01).
             on_run_finished: Awaited after a run reached an end state (wakes the scheduler);
                 the composition root may bind it after construction.
-            allowed_paths: Boundary audit allow globs.
+            allowed_paths: Kernel-wide boundary audit allow globs; a changed file must also
+                match the role's ``RuntimePolicy.allowed_paths`` (E02-S14).
             forbidden_paths: Boundary audit deny globs.
             prompt_version: Version of the task template of a purpose, reported as
                 ``behavior_versions["prompt:<purpose>"]`` on the run's ledger events.
@@ -973,9 +974,12 @@ class DefaultAgentExecutor:
 
     async def _violates_boundary(self, live: _Live, changed: list[str]) -> bool:
         """Audit ``changed`` plus remembered advisory denials; end the run on a violation."""
-        found = self._auditor.audit(
-            _worktree(live), changed, self._allowed_paths, self._forbidden_paths
-        )
+        policy = live.agent.runtime_policy.allowed_paths  # per role (E02-S14; QC: none)
+        found = self._auditor.audit(_worktree(live), changed, policy, self._forbidden_paths)
+        if self._allowed_paths != list(DEFAULT_ALLOWED_PATHS):  # a kernel-wide bound as well
+            found += self._auditor.audit(
+                _worktree(live), changed, self._allowed_paths, self._forbidden_paths
+            )
         violations = list(dict.fromkeys([*found, *live.advisory]))
         if not violations:
             return False

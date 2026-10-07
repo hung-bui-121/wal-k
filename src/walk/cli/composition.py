@@ -59,7 +59,12 @@ from walk.integrations import (
     SubprocessRunner,
 )
 from walk.integrations.credentials import KeyringBackend, SystemKeyringBackend
-from walk.memory import DefaultMemoryManager, MemoryIndexRepository, split_document
+from walk.memory import (
+    DefaultMemoryManager,
+    MemoryIndexRepository,
+    contains_secret,
+    split_document,
+)
 from walk.model_router import (
     DefaultModelRouter,
     ModelAdapter,
@@ -109,8 +114,8 @@ from walk.runtime import (
     HandoverRepository,
     RecoveryManager,
 )
-from walk.runtime.sandbox import scrubbed_env
-from walk.skills import DefaultSkillRegistry, DriftReport, SkillProjector
+from walk.runtime.sandbox import WORKTREES_DIR, scrubbed_env
+from walk.skills import DefaultSkillRegistry, DriftReport, HideTracked, SkillProjector
 from walk.telemetry import (
     DefaultEvidenceManager,
     DefaultLedgerManager,
@@ -422,7 +427,7 @@ def build_kernel(
         sandbox,
         checkpoints,
         tool_invoker,
-        DefaultBoundaryAuditor(),
+        DefaultBoundaryAuditor(secret_scan=contains_secret),  # E02-S14: one secret scanner
         applier,
         git,
         budgets,
@@ -732,7 +737,34 @@ def _skills(
         ledger=ledger,
         clock=clock,
         project_key=key,
+        hide_tracked=tracked_projection_guard(ai_root.parent, git),
     )
+
+
+def _inside(path: str, root: Path) -> bool:
+    return Path(path).resolve().is_relative_to(root)
+
+
+def tracked_projection_guard(repo: Path, git: GitProvider) -> HideTracked:
+    """The skill projection's ``hide_tracked`` step (E02-S14 Behavior 9-10).
+
+    In a run worktree (`<repo>/.walk/worktrees/`) the tracked targets (e.g. the repository's
+    own ``AGENTS.md``) get ``skip-worktree`` in that worktree's index, so the projection never
+    shows as a change. Anywhere else a tracked target refuses the projection: the user's
+    checkout never gets a hidden index flag.
+    """
+    runs = (repo / WORKTREES_DIR).resolve()
+
+    async def hide(worktree: str, targets: list[str]) -> list[str]:
+        if _inside(worktree, runs):
+            return await git.hide_local_changes(worktree, targets)
+        tracked = await git.hide_local_changes(worktree, targets, mark=False)
+        if tracked:
+            msg = f"{tracked[0]} is tracked; skills are projected into run worktrees only"
+            raise ConfigError(msg, detail={"worktree": worktree, "tracked": tracked})
+        return []
+
+    return hide
 
 
 def _approval_waiter(

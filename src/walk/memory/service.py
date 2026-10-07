@@ -44,7 +44,7 @@ from walk.memory.repository import (
     MemoryIndexRepository,
     MemoryIndexRow,
 )
-from walk.memory.secrets import find_secrets
+from walk.memory.secrets import contains_secret
 from walk.memory.sections import sections_for, skeleton_for
 from walk.persistence import IdSequenceStore, UnitOfWork
 from walk.telemetry.models import LedgerEvent, LedgerEventKind
@@ -121,10 +121,10 @@ def _check_change_decision(decision: object, relative: Path) -> None:
 
 
 def _refuse_secrets(text: str, where: str) -> None:
-    found = find_secrets(text)
-    if found:
-        msg = f"secret-like content ({', '.join(found)}) refused in {where}"
-        raise SecretDetected(msg, detail={"path": where, "patterns": found})
+    found = contains_secret(text)
+    if found is not None:
+        msg = f"secret-like content: {found} (refused in {where})"
+        raise SecretDetected(msg, detail={"path": where, "pattern": found})
 
 
 def _changed_sections(previous: MemoryDocument | None, current: MemoryDocument) -> list[str]:

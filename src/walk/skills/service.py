@@ -31,6 +31,12 @@ _NOT_CONFIGURED: Final = (
 ExcludePath = Callable[[str], Awaitable[str]]
 """Absolute ``info/exclude`` file of a worktree (``GitProvider.git_path``, E02-S06)."""
 
+HideTracked = Callable[
+    [str, list[str]], Awaitable[list[str]]
+]  # (worktree, relative targets) -> hidden
+"""Hides the targets a worktree tracks (``GitProvider.hide_local_changes``) before they are
+written, or raises ``ConfigError`` to refuse the projection (E02-S14)."""
+
 
 class DefaultSkillRegistry:
     """`SkillRegistry` over ``walk/skills/builtin/`` and ``.ai/agents/skills/``."""
@@ -47,6 +53,7 @@ class DefaultSkillRegistry:
         ledger: LedgerManager | None = None,
         clock: Clock | None = None,
         project_key: ProjectKey | None = None,
+        hide_tracked: HideTracked | None = None,
     ) -> None:
         """Wire the registry (nothing is read until `load`).
 
@@ -61,6 +68,8 @@ class DefaultSkillRegistry:
             ledger: Write point of the ``CONTEXT_UPDATED`` event of `regenerate` (E02-S07).
             clock: Stamps that event.
             project_key: Project of that event.
+            hide_tracked: Called by `project_all` with every target before anything is written
+                (E02-S14: a tracked ``AGENTS.md`` of a run worktree gets ``skip-worktree``).
         """
         self._builtin_root = builtin_root
         self._project_root = project_root
@@ -71,6 +80,7 @@ class DefaultSkillRegistry:
         self._ledger = ledger
         self._clock = clock
         self._project_key = project_key
+        self._hide_tracked = hide_tracked
         self._skills: dict[SkillName, Skill] | None = None
 
     def load(self) -> list[Skill]:
@@ -132,19 +142,31 @@ class DefaultSkillRegistry:
         targets; an unchanged entry keeps its ``generated_at`` so the lock only changes when a
         projection does). Re-running with the same skills writes identical files.
 
+        Every target is first passed to ``hide_tracked`` (E02-S14), so a tracked target is
+        hidden from the worktree's git index, or the projection is refused, before any write.
+
         Raises:
             ConfigError: The registry was built without ``db``, ``ai_root`` or
-                ``exclude_path``, or the lock file is invalid.
+                ``exclude_path``, the lock file is invalid, or ``hide_tracked`` refused a
+                tracked target (nothing written).
         """
         if self._db is None or self._ai_root is None or self._exclude_path is None:
             raise ConfigError(_NOT_CONFIGURED, detail={"worktree": worktree_path})
         worktree = Path(worktree_path)
+        rendered = {
+            Path(target): content
+            for projector in projectors
+            for target, content in projector.render(skills, worktree_path).items()
+        }
+        if self._hide_tracked is not None:
+            relative = [_relative(target, worktree) for target in rendered]
+            await self._hide_tracked(worktree_path, relative)
         projections: list[SkillProjection] = []
         written: list[Path] = []
+        for target, content in rendered.items():
+            _atomic_write(target, content)
+            written.append(target)
         for projector in projectors:
-            for target, content in projector.render(skills, worktree_path).items():
-                _atomic_write(Path(target), content)
-                written.append(Path(target))
             projections.extend(projector.project(skill, worktree_path) for skill in skills)
         _exclude(Path(await self._exclude_path(worktree_path)), worktree, written)
         async with UnitOfWork(self._db) as uow:
