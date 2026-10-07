@@ -1501,7 +1501,7 @@ Decisions and contract changes (owner decision option A, plus small additive fix
 
 ### E02-S09 — Project hooks from `.ai/agents/hooks.yaml`
 
-**Status:** DONE (pending)
+**Status:** DONE (340ea67)
 **Type:** feat
 **Requirements:** §32, §24, §137
 **Depends on:** E02-S08
@@ -1633,7 +1633,7 @@ Decisions (Level 0, recorded for the owner):
 
 ### E02-S10 — Permission defaults, `permissions.yaml` loader, protected actions
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §31, §92, §91, §63, §137
 **Depends on:** E01-S15, E02-S03
@@ -1746,7 +1746,44 @@ def merge_narrowing(defaults: PermissionsFile, project: PermissionsFile) -> Perm
 - Commit subject: `feat: add default permission rules and protected actions (E02-S10)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+390 files already formatted
+All checks passed!
+Success: no issues found in 389 source files
+Contracts: 21 kept, 0 broken.
+Required test coverage of 85% reached. Total coverage: 99.85%
+1280 passed, 5 deselected in 475.99s (0:07:55)
+```
+Touched modules: `permissions/loader.py` 100 %, `permissions/service.py` 100 %, `cli/composition.py` 100 %. All 11 acceptance tests pass, plus negative paths: an ALLOW restatement that adds command patterns or drops all patterns, redefining a default protected action with another approver, a project ALLOW glob over a project-added protected action, invalid YAML, a non-mapping file, unknown top-level keys, `rules` not a list, a non-mapping rule, a rule without a role, a rule with both `role` and `roles`, an empty `tools` list, an unknown role, and REQUIRE_APPROVAL without an approver. The bootstrap narrowing file (comments, `rules: []`, `protected_actions: []`), an empty file and an absent file all narrow nothing.
+
+Demo on the E02-S08 demo repository (outside this repository):
+```
+$ cat .ai/agents/permissions.yaml
+# Project narrowing of the kernel permission defaults (ADR-0006 D-6).
+# Rules may only add DENY/REQUIRE_APPROVAL or restate a default ALLOW (E02-S10).
+rules: []
+protected_actions: []
+$ walk --repo <tmp>/game doctor
+...
+exit=0
+$ walk --repo <tmp>/game run --once          # build_kernel loads defaults.yaml + permissions.yaml
+started 0 run(s)
+$ printf 'rules:\n  - {role: QC, tool: edit, effect: ALLOW}\n' > .ai/agents/permissions.yaml
+$ walk --repo <tmp>/game run --once
+walk.common.errors.ConfigError: project rule QC edit ALLOW widens the kernel defaults
+exit=1                                        (file restored afterwards)
+```
+`walk doctor` does not read the permission files yet. They are loaded by `build_kernel`, so the kernel refuses to start on an invalid or widening file; `walk run` logs this as an error with a traceback, which is the existing E01-S30 handling of startup errors. The demo therefore shows `walk run --once`.
+
+Decisions (Level 0 unless marked):
+- **Tool names.** `defaults.yaml` uses the catalogue names (`read`, `edit`, `write`, `glob`, `grep`, `bash`; E01-S14 `tools.yaml`; the Claude bridge lower-cases native names). The story table's `Read`/`Edit` would never match a request.
+- **File format.** An entry names `role` or `roles` and `tool` or `tools`, plus the `PermissionRule` fields. Role `"*"` expands to every agent role (every `AgentRole` except the USER/KERNEL actors), because `PermissionRule.role` is an `AgentRole`. The same format applies to the project file; `PermissionsFile` holds the expanded rules.
+- **Protected actions keep a role DENY.** Behavior 3 says "regardless of any ALLOW rule". The existing E01-S15 behaviour is kept: a protected action turns ALLOW/REQUIRE_APPROVAL into REQUIRE_APPROVAL by its approver, and a role-specific DENY stays a DENY (`SENIOR_DEV git.merge_protected` → DENY, as the table lists; E01-S15 test `test_protected_action_never_relaxes_a_deny`). `decide` needed no change: the `*` REQUIRE_APPROVAL rows of the defaults give every role a matching rule. `merge_narrowing` generates the same rows, with the action's approver, for a project-added protected action (AC 11), so it no longer hits "no matching rule". `service.py` only renames the constructor parameter to `protected_actions` and documents it.
+- **ALLOW restatement.** A project ALLOW for (role, tool) is accepted only when the defaults have an ALLOW for the same (role, tool). It replaces those default rows, so it really narrows: `decide` unions ALLOW patterns, and keeping both rows would widen nothing but also narrow nothing. Its command patterns must be a non-empty subset of the defaults' patterns; its path patterns must be non-empty, and must be a subset of the defaults' patterns unless the default is `**`. Anything else is `ConfigError` ("widens" / "adds patterns").
+- **AC 4 reading.** Project `protected_actions` are appended, so a project file cannot "omit" a default action. The bootstrap file's `protected_actions: []` must stay valid (Notes). Two cases raise `ConfigError`: a merged list missing a `DEFAULT_PROTECTED_ACTIONS` entry (e.g. defaults without `store.publish`), and a project entry redefining a default action with another approver, which would downgrade it. Restating it with the same approver is accepted.
+- **Behavior 7.** `rules_for(role, extra)` now receives the merged kernel rules. The constitution's `extra` rules keep E01-S15's narrowing (a widening extra is dropped with a warning) instead of `merge_narrowing`'s `ConfigError`. Several builtin constitutions restate `bash` ALLOW with their own patterns, so raising would make agent instantiation fail. `decide` evaluates only the kernel rules, as before.
+- **Kernel rule source.** The composition root used every constitution's `tool_permissions` as the kernel rule set ("until E02-S10"). It now uses `merge_narrowing(load_defaults(), load_project_rules(.ai/agents/permissions.yaml))` and passes the merged protected actions (it passed `[]` before). `load_defaults()` runs at kernel construction, so a malformed shipped file surfaces there as `ConfigError`. INTERFACES §1.10 documents the source.
 
 ---
 

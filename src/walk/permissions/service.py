@@ -72,7 +72,7 @@ class DefaultPermissionManager:
     def __init__(  # noqa: PLR0917 - positional parameters fixed by the E01-S15 contract
         self,
         rules: list[PermissionRule],
-        protected: list[ProtectedAction],
+        protected_actions: list[ProtectedAction],
         repo: ApprovalRepository,
         ledger: LedgerManager,
         hooks: HookManager,
@@ -84,8 +84,10 @@ class DefaultPermissionManager:
         """Wire the manager.
 
         Args:
-            rules: Kernel rule set (defaults merged with the project's permissions.yaml).
-            protected: §92 protected actions, by tool name.
+            rules: Kernel rule set: `load_defaults()` narrowed by the project's
+                `.ai/agents/permissions.yaml` (`merge_narrowing`, E02-S10).
+            protected_actions: §92 protected actions (merged list), by tool name; each one
+                evaluates to REQUIRE_APPROVAL by its approver unless a rule denies it.
             repo: Approval request rows.
             ledger: Write point for ``APPROVAL_REQUESTED`` / ``APPROVAL_DECIDED``.
             hooks: Fires ``ON_PROTECTED_ACTION_REQUESTED``.
@@ -95,7 +97,7 @@ class DefaultPermissionManager:
                 require it and the approval methods do not receive one.
         """
         self._rules = list(rules)
-        self._protected = {action.name: action for action in protected}
+        self._protected = {action.name: action for action in protected_actions}
         self._repo = repo
         self._ledger = ledger
         self._hooks = hooks

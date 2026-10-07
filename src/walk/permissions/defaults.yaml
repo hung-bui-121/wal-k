@@ -1,0 +1,69 @@
+# Kernel permission defaults (ADR-0006 D-6; E02-S10). The single source of the kernel rules:
+# projects may only narrow them in .ai/agents/permissions.yaml. Tool names are the catalogue
+# names of src/walk/tools/builtin/tools.yaml (provider-native tools in lower case).
+# An entry names `role` or `roles` and `tool` or `tools`; role "*" means every agent role.
+rules:
+  # Developers.
+  - {roles: [SENIOR_DEV, LEAD_DEV], tools: [read, edit, write, glob, grep], effect: ALLOW, path_patterns: ["**"]}
+  - roles: [SENIOR_DEV, LEAD_DEV]
+    tool: bash
+    effect: ALLOW
+    command_patterns: ['^(dotnet|unity|Unity|graphify|git (status|diff|log|add|stash)|pytest|npm test|ls|cat|rg|grep|find)\b']
+  - {roles: [SENIOR_DEV, LEAD_DEV], tool: git.commit, effect: ALLOW, reason: "The kernel executes the commit."}
+  - role: SENIOR_DEV
+    tools: [git.merge_protected, git.push_protected, jira.close_feature, review.approve, review.reject, "qc.*"]
+    effect: DENY
+  - {role: LEAD_DEV, tools: [review.approve, review.reject, jira.create_task], effect: ALLOW}
+  - {role: LEAD_DEV, tool: jira.close_feature, effect: DENY, reason: "Only QC closes a feature."}
+  - {role: LEAD_DEV, tool: git.merge_protected, effect: REQUIRE_APPROVAL, approver: USER}
+
+  # Quality control: reads, runs tests, reports; never fixes code.
+  - {role: QC, tools: [read, glob, grep], effect: ALLOW}
+  - role: QC
+    tool: bash
+    effect: ALLOW
+    command_patterns: ['^(dotnet test|unity|Unity|pytest|npm test|ls|cat|rg|grep|find)\b']
+  - {role: QC, tools: [jira.create_bug, jira.reopen, qc.approve, qc.reject], effect: ALLOW}
+  - {role: QC, tools: [edit, write, git.commit], effect: DENY, reason: "QC does not fix code."}
+
+  # Orchestration and product roles: plan and decide, never touch the code.
+  - {role: ORCHESTRATOR, tools: ["jira.create_*", jira.transition, work.plan, read, glob, grep], effect: ALLOW}
+  - {role: ORCHESTRATOR, tools: [edit, write, bash], effect: DENY}
+  - {roles: [PRODUCT_OWNER, DESIGN_LEADER, ART_DIRECTOR], tools: [read, glob, grep, decision.propose], effect: ALLOW}
+  - {roles: [PRODUCT_OWNER, DESIGN_LEADER, ART_DIRECTOR], tools: [edit, write, bash], effect: DENY}
+
+  # Every role: dangerous shell commands (DENY wins over any role ALLOW, ADR-0006 D-3).
+  - role: "*"
+    tool: bash
+    effect: DENY
+    command_patterns:
+      - 'rm\s+-rf\s+/'
+      - 'git\s+push\s+.*--force'
+      - '\bcurl\b'
+      - '\bwget\b'
+      - '^(pip|uv|npm|dotnet)\s+(install|add)\b'
+      - 'git\s+merge\b'
+    reason: "Destructive, network or dependency-changing commands are not allowed."
+
+  # Every role: §92 protected actions need the user's approval.
+  - role: "*"
+    tools:
+      - git.merge_protected
+      - git.delete_branch_protected
+      - repo.delete_data
+      - store.publish
+      - credentials.change
+      - monetization.change
+      - jira.delete
+      - permissions.alter
+    effect: REQUIRE_APPROVAL
+    approver: USER
+protected_actions:
+  - {name: git.merge_protected, description: Merge into a protected branch}
+  - {name: git.delete_branch_protected, description: Delete a protected branch}
+  - {name: repo.delete_data, description: Delete repository data}
+  - {name: store.publish, description: Publish a build to a store}
+  - {name: credentials.change, description: Change stored credentials}
+  - {name: monetization.change, description: Change monetization settings}
+  - {name: jira.delete, description: Delete an issue}
+  - {name: permissions.alter, description: Change permission rules}

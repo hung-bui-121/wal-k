@@ -85,7 +85,14 @@ from walk.orchestrator import (
     StatusBuilder,
     register_builtins,
 )
-from walk.permissions import ApprovalRepository, DefaultPermissionManager, PermissionRule
+from walk.permissions import (
+    ApprovalRepository,
+    DefaultPermissionManager,
+    PermissionsFile,
+    load_defaults,
+    load_project_rules,
+    merge_narrowing,
+)
 from walk.persistence import Database, IdempotencyStore, IdSequenceStore, MigrationRunner
 from walk.runtime import (
     AgentInputBuilder,
@@ -152,6 +159,7 @@ PROJECTIONS_DIR: Final = Path(".walk") / "projections"
 """Repo-level projection folder per provider (`walk skills sync`, startup drift check)."""
 _PROBE_TIMEOUT_S: Final = 30  # `claude --version` health probe
 _PROJECT_HOOKS: Final = Path("agents") / "hooks.yaml"
+_PERMISSIONS: Final = Path("agents") / "permissions.yaml"
 
 
 class KernelSettings(WalkModel):
@@ -658,9 +666,10 @@ def _agent_services(  # noqa: PLR0917 - private wiring step of build_kernel
     tools = DefaultToolRegistry(load_tool_specs([]))
     constitutions = ConstitutionLoader(_AGENT_DEFAULTS, ai_root / "agents" / "roles")
     policies = PolicyLoader(_AGENT_DEFAULTS / "policies.yaml", ai_root / "agents" / "policies.yaml")
+    kernel_rules = _permission_rules(ai_root)
     permissions = DefaultPermissionManager(
-        _constitution_rules(constitutions),
-        [],
+        kernel_rules.rules,
+        kernel_rules.protected_actions,
         ApprovalRepository(db),
         ledger,
         hooks,
@@ -929,13 +938,13 @@ def _ready_env_keys() -> set[str]:
     return set(DEFAULT_READY_ENV_KEYS) if shutil.which(_GIT) else set()
 
 
-def _constitution_rules(constitutions: ConstitutionLoader) -> list[PermissionRule]:
-    """The kernel rule set until E02-S10: every role's constitution rules (ADR-0006 D-6)."""
-    return [
-        rule
-        for role in constitutions.available_roles()
-        for rule in constitutions.load(role).tool_permissions
-    ]
+def _permission_rules(ai_root: Path) -> PermissionsFile:
+    """Kernel defaults narrowed by `.ai/agents/permissions.yaml` (ADR-0006 D-6; E02-S10).
+
+    Raises:
+        ConfigError: A malformed default or project file, or a widening project rule.
+    """
+    return merge_narrowing(load_defaults(), load_project_rules(ai_root / _PERMISSIONS))
 
 
 def _model_router(

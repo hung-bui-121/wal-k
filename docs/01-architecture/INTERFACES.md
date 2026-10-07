@@ -526,7 +526,11 @@ class PermissionManager(Protocol):
 
     def decide(self, request: ToolCallRequest) -> PermissionDecision:
         """Pure. Most-specific `tool` pattern wins; tie → DENY > REQUIRE_APPROVAL > ALLOW. Shell: command must match an ALLOW
-        command_pattern and no DENY pattern. Paths outside worktree → DENY. Protected action → REQUIRE_APPROVAL(approver)."""
+        command_pattern and no DENY pattern. Paths outside worktree → DENY. Protected action → REQUIRE_APPROVAL(approver).
+        E02-S10: the kernel rule set is `walk.permissions.loader.merge_narrowing(load_defaults(), load_project_rules(
+        <repo>/.ai/agents/permissions.yaml))` (`defaults.yaml` ships the ADR-0006 D-6 table; role "*" expands to every agent
+        role). A protected action keeps a role-specific DENY (DENY wins); a project-added protected action gets a
+        REQUIRE_APPROVAL rule for every agent role with its approver. Tool names are catalogue names (`read`, `edit`, ...)."""
 
     async def request_approval(
         self,
