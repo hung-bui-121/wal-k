@@ -5,6 +5,7 @@ agent (Claude Code, Codex, others) before doing anything. The goal of these rule
 the output does not depend on which model does the work.
 
 ## Read first, every session
+0. `docs/HANDOFF.md` — where work stopped and what comes next.
 1. `docs/00-governance/IMPLEMENTATION-PROTOCOL.md` — the exact procedure per story.
 2. `docs/00-governance/CONVENTIONS.md` — code, test and layout rules (enforced by tooling).
 3. `docs/00-governance/DEFINITION-OF-DONE.md` — when a story may be committed.
