@@ -9,40 +9,31 @@ procedure itself is in `docs/00-governance/IMPLEMENTATION-PROTOCOL.md`.
 |---|---|
 | Planning | Complete: governance, architecture (ADR-0001..0020), 175 stories in 11 epics, traceability 140/140 |
 | Epic 01 Kernel Core | DONE — 31 stories, gate E01-S31, review E01-R01, bugfixes E01-B01..B06 |
-| Epic 02 Production Kit | E02-S01..S15 and E02-B01..B03 DONE. **E02-B04 (BLOCKER bugfix) TODO**, next. E02-S16 (epic gate) TODO, unblocked by the owner decision of 2026-10-12, depends on B04. E02-R01 (review) TODO, waits on S16 |
+| Epic 02 Production Kit | E02-S01..S16 and E02-B01..B04 DONE (gate E02-S16, 8/8). **E02-R01 (review) TODO**, next |
 | Epics 03–11 | Not started |
-| `main` | Pushed, working tree clean; last commit is the `docs: unblock E02-S16 ...` planning commit |
+| `main` | Pushed, working tree clean; last commit is `feat: add epic 02 production kit gate test (E02-S16)` |
 
-E02-S15 is recorded as `DONE (7e16573)`. E02-S16 was BLOCKED on two gate assertions. The owner
-decided both on 2026-10-12, and the decisions are recorded in the E02-S16 Notes in
-`EPIC-02-production-kit.md`:
-- **AC 5 → option A (scenario change, no kernel change).** The gate now uses a SENIOR_DEV
-  IMPLEMENT run requesting `git.delete_branch_protected`, which needs USER approval and is not
-  denied for SENIOR_DEV. In E02 only SENIOR_DEV may end an IMPLEMENT run, and SENIOR_DEV is
-  denied `git.merge_protected`.
-- **AC 7 → option A (kernel bugfix E02-B04).** The executor writes one `TOOL_DENIED` per
-  violating path when a run fails on the repository boundary (ADR-0006 D-5). It keeps
-  `ERROR{kind: BOUNDARY}`. ARCHITECTURE §4.3 already lists the new write point.
-
-Work-in-progress gate code (conftest fixtures + `tests/e2e/test_e02_gate.py`, 6/8 passing) is
-**not committed**. It is in the local stash `E02-S16 gate tests WIP (6/8 pass; AC5+AC7
-blocked)` on this host (`git stash list`; restore with `git stash pop`).
+E02-B04 is `DONE (7031db8)`: the executor writes one `TOOL_DENIED` (payload
+`source: BOUNDARY_AUDIT`, `path`) per violating path when a run fails on the repository
+boundary, next to the kept `ERROR {kind: BOUNDARY}` (ADR-0006 D-5). E02-S16 is
+`DONE (pending)`; the next commit replaces it with the S16 sha (protocol §5.3). The gate's
+AC 5 uses a SENIOR_DEV `git.delete_branch_protected` run (owner decision 2026-10-12); the
+gate fake picks its scenario by work item title. The former WIP stash is consumed.
 
 ## Next steps, in order
 
-1. **E02-B04** (BLOCKER bugfix, `bugfix: write tool denied event on boundary violation
-   (E02-B04)`): add the executor `TOOL_DENIED` write for boundary violations, keep `ERROR`,
-   and update INTERFACES §1.13 and ADR-0006 as the story lists.
-2. **E02-S16** (only after E02-B04 is committed and pushed, so B04's `git add -A` cannot pick
-   up the WIP files): restore the test code from the local stash `E02-S16 gate tests WIP (6/8 pass;
-   AC5+AC7 blocked)` (`git stash list`, then `git stash pop`). Change the AC 5 test and the
-   conftest fake to the SENIOR_DEV `git.delete_branch_protected` scenario: the fake picks its
-   scenario by work item, not by role (Level-0 note in the story). AC 7 passes unchanged once
-   E02-B04 is DONE. Then finish the story (8/8).
-3. **E02-R01**: review by a *different* agent/model than the implementer
-   (reviewer protocol). Defects become `E02-Bxx` bugfix stories.
-4. Fix any `E02-Bxx` marked BLOCKER before Epic 03.
-5. **Epic 03 Coding Workflow** — E03-S01 onward. Read the binding notes already added to
+1. **E02-R01**: review by a *different* agent/model than the implementer of E02
+   (reviewer protocol). Defects become `E02-Bxx` bugfix stories. Candidates already noted:
+   - E02-S16 Notes: `StoryContract.owner_role` accepts any role, but only SENIOR_DEV can
+     finish an E02 IMPLEMENT run.
+   - E02-S14 Evidence: an uncommitted bootstrap `.gitignore` makes the first audit of a run
+     fail on `.walk/output.json`.
+   - Seen in the E02-S16 demo: on a freshly bootstrapped repo the kernel logs
+     "skipping unparsable memory document" four times at startup. Most likely these are the
+     four `.ai/agents/roles/*.md` files, which `memory/service.py` `_excluded` does not skip
+     (not investigated further). Log noise only; the gate passes.
+2. Fix any `E02-Bxx` marked BLOCKER before Epic 03.
+3. **Epic 03 Coding Workflow** — E03-S01 onward. Read the binding notes already added to
    E03-S07 (version `scheduled_states.yaml`), E03-S13 (REVIEW variant of the E01-B01 test)
    and E03-S18 (clean up FAILED/BLOCKED worktrees).
 

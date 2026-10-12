@@ -2490,7 +2490,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S16 — Epic gate: bootstrap → doctor → skills → approval → override (e2e)
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** feat
 **Requirements:** §24, §25, §26, §28, §31, §32, §33, §91, §92, §93, §136, §137
 **Depends on:** E02-S15, E02-S13, E02-S12, E02-S09, E02-B04
@@ -2585,7 +2585,127 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 - Commit subject: `feat: add epic 02 production kit gate test (E02-S16)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+410 files already formatted
+All checks passed!
+Success: no issues found in 409 source files
+Contracts: 21 kept, 0 broken.
+tests\e2e\test_e02_gate.py ........                                      [ 21%]
+Required test coverage of 85% reached. Total coverage: 99.85%
+=============== 1382 passed, 5 deselected in 628.85s (0:10:28) ================
+```
+`uv run pytest tests/e2e/test_e02_gate.py -v`: 8 passed (AC 1–8). No `src/` file changed.
+```
+test_bootstrap_creates_production_kit PASSED                 (AC 1)
+test_doctor_passes_and_writes_manifest PASSED                (AC 2)
+test_skill_projections_clean_for_both_providers PASSED       (AC 3)
+test_edited_projection_detected_as_modified PASSED           (AC 4)
+test_protected_action_pauses_and_approval_resumes PASSED     (AC 5)
+test_pause_resume_recorded_as_user_override PASSED           (AC 6)
+test_boundary_auditor_rejects_agents_dir_write PASSED        (AC 7)
+test_project_hook_executes_on_start PASSED                   (AC 8)
+```
+- AC 5 (amended): a SENIOR_DEV story; the fake's one call `git.delete_branch_protected` resolves to REQUIRE_APPROVAL(USER), the run is `PAUSED_FOR_APPROVAL`, `walk approvals --pending` lists `APV-0001` with the tool, `walk approve APV-0001 --note ok` prints `APV-0001 APPROVED`, and the run ends `COMPLETED`. The ledger has `APPROVAL_REQUESTED`, `APPROVAL_DECIDED` and `TOOL_INVOKED`; the tool's `TOOL_INVOKED` events are `(pre, APV-0001)` and `(post, None)`.
+- AC 7: the run ends `FAILED_BOUNDARY` (`boundary: .ai/agents/roles/senior_dev.md`), the worktree is clean, the repository's role file is unchanged, and the run has exactly one `BOUNDARY_AUDIT` `TOOL_DENIED`: `tool` None, `path` `.ai/agents/roles/senior_dev.md` (E02-B04).
+
+Demo transcript. A fresh temporary git repository (README, `.gitignore`, `GDD/combat.md`, one commit) and the real `walk` CLI (`uv run walk … --repo <repo>`). The probes are real on this host, so `walk doctor` shows the host's actual tools. The approval part needs a paused run: one `run_once()` tick of `build_kernel` with the gate's fake adapters (`_GateAdapter`, SENIOR_DEV story) ran in a Python process, and `walk approvals`, `walk approve`, `walk pause`, `walk resume` and `walk ledger query` ran as separate CLI processes against the same repository. The repeated stderr lines `claude_agent_sdk is not installed; claude models are disabled` / `models without an adapter disabled` are left out below.
+```
+$ walk bootstrap --provider local --key DEMO --name Demo --yes
+created:
+  .walk/
+  .ai/features/
+  .ai/bugs/
+  .ai/decisions/
+  .ai/handovers/
+  .ai/agents/roles/
+  .ai/agents/skills/
+  .ai/agents/roles/lead_dev.md
+  .ai/agents/roles/orchestrator.md
+  .ai/agents/roles/qc.md
+  .ai/agents/roles/senior_dev.md
+  .ai/agents/policies.yaml
+  .ai/agents/models.yaml
+  .ai/agents/permissions.yaml
+  .ai/agents/hooks.yaml
+  .ai/agents/projections.lock.yaml
+  .ai/project/work-provider.yaml
+  .ai/project/project.md
+  .ai/project/constitution.md
+  .ai/project/kernel-versions.yaml
+  .ai/.gitignore
+  .gitignore
+  .ai/project/production-kit.yaml
+exit 0
+$ walk doctor
+component                                state          version   detail
+---------------------------------------  -------------  --------  ------------------------------------------------------
+unity                                    misconfigured            error: unknown option '-version'
+tools.git                                ready          2.41.0
+tools.graphify                           ready          0.9.48
+tools.dotnet                             ready          10.0.100
+providers.codex                          missing                  executable not found: codex
+providers.claude                         missing                  claude-agent-sdk is not installed (the 'claude' extra)
+work_provider                            ready                    local
+credentials.ANTHROPIC_API_KEY            missing
+credentials.JIRA_BASE_URL                missing
+credentials.JIRA_EMAIL                   missing
+credentials.JIRA_API_TOKEN               missing
+credentials.WALK_WEBHOOK_SECRET          missing
+credentials.MESHY_API_KEY                missing
+credentials.OPENART_OAUTH_CLIENT         missing
+credentials.OPENART_OAUTH_REFRESH_TOKEN  missing
+credentials.UNITY_PASSWORD               missing
+credentials.UNITY_SERIAL                 missing
+credentials.UNITY_LICENSE                missing
+credentials.UNITY_EMAIL                  missing
+
+drift from CPU12432:
+  work_provider: unknown -> ready
+
+skills:
+  claude: missing 5
+  codex: missing 5
+
+approved: ok
+
+versions: ok
+exit 0
+$ walk skills sync
+projected 5 skills for 2 providers
+exit 0
+$ walk skills check-drift --strict
+ok
+exit 0
+# run RUN-01M4Q7M2B9SDHRQAXF4GV66TAX (SENIOR_DEV) is PAUSED_FOR_APPROVAL
+$ walk approvals --pending
+id        kind              tool                         state    approver  run                             requested_at
+--------  ----------------  ---------------------------  -------  --------  ------------------------------  --------------------------------
+APV-0001  PROTECTED_ACTION  git.delete_branch_protected  PENDING  USER      RUN-01M4Q7M2B9SDHRQAXF4GV66TAX  2026-10-12T04:58:32.802747+00:00
+exit 0
+$ walk approve APV-0001 --note ok
+APV-0001 APPROVED
+exit 0
+# run RUN-01M4Q7M2B9SDHRQAXF4GV66TAX ended COMPLETED
+$ walk pause
+project paused
+exit 0
+$ walk resume
+project resumed
+exit 0
+$ walk ledger query --kind USER_OVERRIDE
+seq  at                                kind           actor  item  run  outcome
+---  --------------------------------  -------------  -----  ----  ---  -------
+34   2026-10-12T04:58:37.354790+00:00  USER_OVERRIDE  USER              OK
+36   2026-10-12T04:58:38.638599+00:00  USER_OVERRIDE  USER              OK
+exit 0
+```
+`unity` is misconfigured on this host: the `Unity` on PATH is an npm tool, not the Editor (`docs/HANDOFF.md`). Unity is optional, so the doctor still exits 0.
+
+Level-0 decisions (on resume, as the Notes prescribe):
+- **Scenario by work item.** `_GateAdapter` picks its scenario from `AgentInput.task.title`. A story titled `BOUNDARY_STORY` (`Rogue role rewrite`) gets the boundary-file edit. Any other story gets the one-call `PROTECTED_TOOL` (`git.delete_branch_protected`) script. `_ready_story` takes the title as an optional argument (default `Shotgun spread`). Only SENIOR_DEV is pointed at the fake model now (`_GATE_ROLE`); LEAD_DEV is no longer needed.
+- **AC 7 assertion.** The test selects the run's `TOOL_DENIED` events with `source: BOUNDARY_AUDIT` and expects exactly `[(None, BOUNDARY_FILE)]`.
+- Observation for E02-R01, not a gate failure: at kernel start in the demo repository the memory index logged `skipping unparsable memory document` four times. Most likely these are the four bootstrapped `.ai/agents/roles/*.md` files, which `memory/service.py` `_excluded` does not skip. This was not investigated further.
 
 ---
 
@@ -2925,7 +3045,7 @@ Level-0 decisions:
 
 ### E02-B04 — Executor writes `TOOL_DENIED` when a run fails on the repository boundary
 
-**Status:** DONE (pending)
+**Status:** DONE (7031db8)
 **Type:** bugfix
 **Requirements:** §31, §81, §86, §91
 **Depends on:** E02-S14
