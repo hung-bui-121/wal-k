@@ -1,6 +1,6 @@
 # HANDOFF — current state and next steps
 
-Updated: 2026-10-08. Read this first when resuming. It records where work stopped; the
+Updated: 2026-10-12. Read this first when resuming. It records where work stopped; the
 procedure itself is in `docs/00-governance/IMPLEMENTATION-PROTOCOL.md`.
 
 ## Where we are
@@ -9,17 +9,28 @@ procedure itself is in `docs/00-governance/IMPLEMENTATION-PROTOCOL.md`.
 |---|---|
 | Planning | Complete: governance, architecture (ADR-0001..0020), 174 stories in 11 epics, traceability 140/140 |
 | Epic 01 Kernel Core | DONE — 31 stories, gate E01-S31, review E01-R01, bugfixes E01-B01..B06 |
-| Epic 02 Production Kit | E02-S01..S15 and E02-B01..B03 DONE. **E02-S16 (epic gate) and E02-R01 (review) TODO** |
+| Epic 02 Production Kit | E02-S01..S15 and E02-B01..B03 DONE. **E02-S16 (epic gate) BLOCKED** (2 of 8 gate assertions fail on kernel behaviour); E02-R01 (review) TODO, waits on S16 |
 | Epics 03–11 | Not started |
-| `main` | Pushed, working tree clean, last commit `7e16573` (E02-S15) |
+| `main` | Pushed, working tree clean; last commit is the `docs: block E02-S16 ...` commit |
 
-E02-S15 still reads `DONE (pending)`; the next commit replaces it with `7e16573` in both
-the epic file and `WBS.md` §5 (protocol §5.3).
+E02-S15 is recorded as `DONE (7e16573)`. E02-S16 is BLOCKED. Its Notes in
+`EPIC-02-production-kit.md` hold both defects with evidence and the decision options:
+- **AC 5.** A tick-scheduled LEAD_DEV run cannot complete in E02. Only SENIOR_DEV may raise the
+  IMPLEMENT outcome events, and SENIOR_DEV is denied `git.merge_protected`.
+- **AC 7.** The executor writes `ERROR{kind: BOUNDARY}`, not the `TOOL_DENIED` that ADR-0006
+  D-5 requires on a boundary violation.
+
+Work-in-progress gate code (conftest fixtures + `tests/e2e/test_e02_gate.py`, 6/8 passing) is
+**not committed**. It is in the local stash `E02-S16 gate tests WIP (6/8 pass; AC5+AC7
+blocked)` on this host (`git stash list`; restore with `git stash pop`).
 
 ## Next steps, in order
 
-1. **E02-S16** — Epic 02 gate (e2e under `tests/e2e/`). Implement with the protocol.
-2. **E02-R01** — review by a *different* agent/model than the implementer
+1. **Owner/architect decision on E02-S16 Notes** (AC 5 options A/B/C, AC 7 options A/B).
+   Then unblock E02-S16 (`docs: unblock E02-S16 ...`), add any bugfix stories the decision
+   needs (`E02-Bxx`), restore the stashed gate code, adjust AC 5/AC 7 to the decision, and
+   finish the story.
+2. **E02-R01**: review by a *different* agent/model than the implementer
    (reviewer protocol). Defects become `E02-Bxx` bugfix stories.
 3. Fix any `E02-Bxx` marked BLOCKER before Epic 03.
 4. **Epic 03 Coding Workflow** — E03-S01 onward. Read the binding notes already added to
@@ -38,7 +49,7 @@ the epic file and `WBS.md` §5 (protocol §5.3).
 - Context-switch guard (global `~/.claude/CLAUDE.md`): a request that targets a different
   repo/task than the current one must be confirmed by the owner before any action.
 
-## Waiting on the owner (not blocking E02-S16)
+## Waiting on the owner (besides the E02-S16 decision)
 
 - Install Codex CLI (`npm i -g @openai/codex`) and `codex login` when real provider tests
   are wanted; then run the integration tests listed in E02-B01/E02-B02 Evidence, e.g.

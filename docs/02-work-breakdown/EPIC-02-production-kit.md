@@ -2357,7 +2357,7 @@ Decisions and findings (for the owner):
 
 ### E02-S15 — `walk doctor --fix --strict`
 
-**Status:** DONE (pending)
+**Status:** DONE (7e16573)
 **Type:** feat
 **Requirements:** §26, §27, §28, §91, §105, §137
 **Depends on:** E02-S07, E02-S14, E02-S04
@@ -2490,7 +2490,7 @@ Decisions (Level 0 unless marked):
 
 ### E02-S16 — Epic gate: bootstrap → doctor → skills → approval → override (e2e)
 
-**Status:** TODO
+**Status:** BLOCKED
 **Type:** feat
 **Requirements:** §24, §25, §26, §28, §31, §32, §33, §91, §92, §93, §136, §137
 **Depends on:** E02-S15, E02-S13, E02-S12, E02-S09
@@ -2553,6 +2553,30 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 
 #### Notes
 - Gate text: WBS.md §4 E02. Uses only fakes and a real temp git repo (WBS.md §3.6).
+- Also read: `tests/conftest.py`, `tests/e2e/test_e01_gate.py`, `tests/fakes/fake_model_adapter.py`, `tests/orchestrator/test_bootstrap.py` (`ProbeRunner`), `tests/integrations/test_preflight.py` (`script_environment`), `src/walk/cli/{composition,cmd_approvals,cmd_doctor,cmd_skills,cmd_run,ipc,daemon}.py`, `src/walk/orchestrator/{scheduler,service}.py`, `src/walk/runtime/{executor,tool_invoker,boundary,approvals,output_applier}.py`, `src/walk/permissions/{defaults.yaml,service.py}`, `src/walk/workflow/tables/{scheduled_states,story_workflow}.yaml`, ADR-0006.
+- **BLOCKING (implementer, 2026-10-12): two gate assertions fail on kernel behaviour. The other six tests (AC 1–4, 6, 8) pass.**
+  - **AC 5: a tick-scheduled LEAD_DEV run cannot complete in E02.**
+    - What passes: one `run_once()` tick admits a LEAD_DEV-owned READY story. The fake's `git.merge_protected` call resolves to REQUIRE_APPROVAL(USER) and creates `APV-0001`, and the run is `PAUSED_FOR_APPROVAL` (PAUSE checkpoint). `walk approvals --pending` lists `APV-0001` / `git.merge_protected`. `walk approve APV-0001 --note ok` prints `APV-0001 APPROVED` (in-process, no daemon), and the waiting run resumes. The run's ledger holds `APPROVAL_REQUESTED`, `APPROVAL_DECIDED`, `TOOL_INVOKED(phase=pre, approval_request_id=APV-0001)` and `TOOL_INVOKED(phase=post)`.
+    - What fails: the run ends `FAILED` with `failure_reason` `error: none: LEAD_DEV may not raise 'submit_for_review'; allowed: SENIOR_DEV`.
+    - Why: the E02 `Scheduler` admits only `ADMISSION_EVENTS`, i.e. STORY/TASK in READY/REWORK, as IMPLEMENT runs of `contract.owner_role` (REVIEW/QC/TRIAGE/PLAN/DESIGN admission is E03, `orchestrator/scheduler.py`). For an IMPLEMENT output `OutputApplier` raises `submit_for_review`, `partial` or `block`, and `story_workflow.yaml` allows all three to SENIOR_DEV only. Every outcome of a LEAD_DEV-owned IMPLEMENT run therefore fails at output application. SENIOR_DEV cannot carry the scenario either: `permissions/defaults.yaml` has an exact SENIOR_DEV DENY for `git.merge_protected`, which outranks the `*` REQUIRE_APPROVAL, and a project cannot relax a DENY.
+    - Also observed (candidate for E02-R01): `StoryContract.owner_role` accepts any role, but only SENIOR_DEV can finish an IMPLEMENT run.
+    - Decision needed (owner/planner, changes an acceptance criterion or a transition table):
+      - (A) Amend Behavior 5 to a run E02 can complete, e.g. SENIOR_DEV requesting a §92 protected action that has no SENIOR_DEV DENY (`git.delete_branch_protected` → `*` REQUIRE_APPROVAL USER), and move the LEAD_DEV `git.merge_protected` case to the E03 gate.
+      - (B) Keep LEAD_DEV and `git.merge_protected`, and replace "run completes" with "the approved action runs and the run reaches a terminal state" (the run still ends FAILED on the workflow role check).
+      - (C) A kernel change through a bugfix story: widen the `story_workflow` roles (a table change, `story_workflow` version and pin bump), or bring LEAD_DEV admission forward from E03.
+  - **AC 7: a boundary violation writes no `TOOL_DENIED`.**
+    - What passes: a SENIOR_DEV run's scripted `edit` writes `.ai/agents/roles/senior_dev.md`. The permission decision is ALLOW (`edit` with `path_patterns: ["**"]`). The run ends `FAILED_BOUNDARY` with `failure_reason` `boundary: .ai/agents/roles/senior_dev.md`. The worktree is clean afterwards (file removed, `git status --porcelain` empty), and the repository's role file is unchanged.
+    - What fails: the run has no `TOOL_DENIED` event. `DefaultAgentExecutor._violates_boundary` writes `ERROR {kind: BOUNDARY, violations: [...]}` and then `AGENT_RUN_ENDED(FAILED_BOUNDARY)`.
+    - Documents disagree: ADR-0006 D-5 lists a "`TOOL_DENIED` ledger event" as a consequence of a boundary violation. ARCHITECTURE §4.3 gives the `TOOL_DENIED` write point to `ToolInvoker`/`can_use_tool` only, and INTERFACES §1.13 says only FAILED_BOUNDARY plus discard. Today a boundary-related `TOOL_DENIED` appears only for an advisory provider (Codex) whose post-hoc decision is DENY.
+    - Decision needed (architect, changes a ledger write point):
+      - (A) A bugfix story: the executor writes `TOOL_DENIED` for each violating path when it fails a run on the boundary, and ARCHITECTURE §4.3 adds that write point.
+      - (B) Amend Behavior 7 / AC 7 to assert the `ERROR {kind: BOUNDARY}` event, and align ADR-0006 D-5 with it.
+  - Level-0 decisions already taken, kept for the resume:
+    - The preflight probes of `walk bootstrap` and `walk doctor` are scripted (`ProbeRunner` + `script_environment` with Unity absent). The fixture monkeypatches `cmd_bootstrap.open_bootstrapper` and `cmd_doctor.open_integrations`, so the doctor exits 0 with `unity` MISSING on any host.
+    - The `cli` fixture is bound to `bootstrapped_repo`. `bootstrapped_repo` does not commit the kit.
+    - `kernel_with_fakes` runs on the system clock, the same clock as the CLI that decides approvals and overrides next to it. It points SENIOR_DEV and LEAD_DEV of the bootstrapped `policies.yaml` at `fake-codex/sim`. Its adapters are a conftest-private `FakeModelAdapter` subclass: SENIOR_DEV edits `.ai/agents/roles/senior_dev.md` once, and any other role runs the one-call `git.merge_protected` script.
+    - AC 8 runs `walk run --once` for real; the hook `project.echo` (`echo hello`) runs in the platform shell.
+  - No E02-S16 code was committed (gate must stay green); `docs/HANDOFF.md` says where the work-in-progress test code is kept.
 - Commit subject: `feat: add epic 02 production kit gate test (E02-S16)`.
 
 #### Evidence (filled by implementer)
