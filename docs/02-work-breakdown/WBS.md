@@ -169,7 +169,7 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 ### E02 — Production Kit (§135 Stage 2)
 **Goal.** A game repository can be bootstrapped into a validated, reproducible Production Kit: environment manifest, `.ai/` tree, canonical skills with projections and drift detection, MUST hooks, permission rule set with protected actions and approvals, approved-artifact registry, security hardening.
 **Requirements.** §24–§29, §31–§33, §91–§93 (pause/resume/priority/policy subset), §105 (pins), §123–§124, §137 (Inv. 7, 10, 11), §138 (Model Lock-In), §139 (credentials).
-**Epic gate.** `tests/e2e/test_e02_gate.py`: on a fresh temp repo with a `GDD/` folder, `walk bootstrap --provider local --key DEMO --name Demo --yes` creates the full `.ai/` tree and DB; `walk doctor` exits 0 and writes `environment.yaml`; skills are projected for both providers and `walk skills check-drift` is clean, then a hand-edited projection is reported `modified`; a fake run requesting `git.merge_protected` pauses with an `ApprovalRequest`, `walk approve APV-0001` resumes it; `walk pause`/`walk resume` write `USER_OVERRIDE`; an agent diff touching `.ai/agents/roles/` is rejected by `BoundaryAuditor`.
+**Epic gate.** `tests/e2e/test_e02_gate.py`: on a fresh temp repo with a `GDD/` folder, `walk bootstrap --provider local --key DEMO --name Demo --yes` creates the full `.ai/` tree and DB; `walk doctor` exits 0 and writes `environment.yaml`; skills are projected for both providers and `walk skills check-drift` is clean, then a hand-edited projection is reported `modified`; a fake SENIOR_DEV run requesting the protected action `git.delete_branch_protected` pauses with an `ApprovalRequest`, `walk approve APV-0001` resumes it and the run completes; `walk pause`/`walk resume` write `USER_OVERRIDE`; an agent diff touching `.ai/agents/roles/` is rejected by `BoundaryAuditor` (run `FAILED_BOUNDARY`, change reverted, `TOOL_DENIED` written).
 
 | ID | Title | Package(s) | One-line goal |
 |---|---|---|---|
@@ -193,6 +193,7 @@ Each epic: goal · requirement sections · epic gate (the demo/test that closes 
 | E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | integrations, adapters | Installed npm tools found on Windows; batch arguments guarded |
 | E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | runtime | `APPDATA`, `LOCALAPPDATA`, `PATHEXT`, `COMSPEC` on Windows only; secrets still scrubbed |
 | E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | docs | Security model matches the E02-S01 transport |
+| E02-B04 | Executor writes `TOOL_DENIED` when a run fails on the repository boundary | runtime | ADR-0006 D-5 audit trail: one `TOOL_DENIED` per violating path, `ERROR {kind: BOUNDARY}` kept; BLOCKER for the E02 gate |
 
 ### E03 — Coding Workflow (§135 Stage 3)
 **Goal.** The §131 MVP feature lifecycle runs end-to-end on a real git repository with `LocalWorkProvider` (and `JiraWorkProvider` behind the same contract): plan → technical design → implementation → Lead Dev review → CI → QC → fix loop → feature complete, including the §132 failover.
@@ -443,11 +444,12 @@ Effort: LOW ≈ 0.5 d · MEDIUM ≈ 1 d · HIGH ≈ 1.5–2 d. Status: `TODO | B
 | E02-S13 | Human override CLI subset | feat | E01-S30, E02-S11 | MEDIUM | DONE (915995d) |
 | E02-S14 | Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions | feat | E02-S10, E01-S23, E01-S25 | HIGH | DONE (6c19569) |
 | E02-S15 | `walk doctor --fix --strict` | feat | E02-S07, E02-S14, E02-S04 | MEDIUM | DONE (7e16573) |
-| E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | feat | E02-S15, E02-S13, E02-S12, E02-S09 | MEDIUM | BLOCKED |
+| E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | feat | E02-S15, E02-S13, E02-S12, E02-S09, E02-B04 | MEDIUM | TODO |
 | E02-R01 | Review E02 | docs | E02-S16 | MEDIUM | TODO |
 | E02-B01 | Subprocess runner resolves Windows `.cmd`/`.bat` shims | bugfix | E02-S02 | MEDIUM | DONE (1960027) |
 | E02-B02 | Agent environment allowlist keeps the Windows variables provider CLIs need | bugfix | E02-S01 | LOW | DONE (e5e5a7d) |
 | E02-B03 | ARCHITECTURE §6: Claude runs as a CLI subprocess under the scrubbed environment | bugfix | E02-S01, E02-B02 | LOW | DONE (aba2c85) |
+| E02-B04 | Executor writes `TOOL_DENIED` when a run fails on the repository boundary | bugfix | E02-S14 | LOW | TODO |
 | E03-S01 | `GitCliProvider` remote operations: push, PR, merge, `squash_wip` | feat | E01-S23, E02-S14 | HIGH | TODO |
 | E03-S02 | `LocalWorkProvider` and work-provider contract test suite | feat | E01-S23, E01-S04 | HIGH | TODO |
 | E03-S03 | `IntegrationManager`: ingest, reconcile, idempotency, `WorkPoller` | feat | E03-S02, E01-S09 | HIGH | TODO |
@@ -643,7 +645,7 @@ Checkpoints inside E01 (points where `walk` must still run end-to-end): after S0
 
 ### 7.3 Story level, E02–E04
 
-- **E02:** S01→S02→S03→S04 is the bootstrap spine; S05→S06→S07 (skills) and S08→S09 (hooks) and S10→S11→S12 (permissions/artifacts) are three independent chains that join at S14/S15→S16. Bugfixes B01 (after S02) and B02→B03 (after S01) are independent of every chain; B01 and B02 should land before E02-S16 so the gate runs on Windows.
+- **E02:** S01→S02→S03→S04 is the bootstrap spine; S05→S06→S07 (skills) and S08→S09 (hooks) and S10→S11→S12 (permissions/artifacts) are three independent chains that join at S14/S15→S16. Bugfixes B01 (after S02) and B02→B03 (after S01) are independent of every chain; B01 and B02 should land before E02-S16 so the gate runs on Windows. B04 (after S14) is a BLOCKER for the gate: E02-S16 depends on it, so the order is B04 → S16 → R01.
 - **E03:** two spines — providers (S01, S02→S03→S04→S05) and workflow (S06→S07→S08→S09, S10→S11→S12, S13, S14→S15→S16, S17, S18) — join at S19→S20.
 - **E04:** memory (S01→S02, S03→S04), decisions (S05), handovers (S06→S07), context (S08→S09/S10, S11→S12), S13, S14 → S15.
 

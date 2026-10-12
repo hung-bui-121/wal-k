@@ -345,8 +345,8 @@ Agents never hold credentials for Jira/Git remotes/stores (§91). All such opera
 |---|---|
 | `workflow.StateMachine.commit()` | `WORK_ITEM_CREATED`, `WORK_ITEM_TRANSITION`, `PHASE_TRANSITION`, `RC_TRANSITION` |
 | `orchestrator.Orchestrator.start()` (`DefaultOrchestrator.start`, E01-S29) | `PROJECT_STARTED` |
-| `runtime.AgentExecutor` (and `runtime.RecoveryManager` on its behalf, same package) | `AGENT_ASSIGNED`, `AGENT_RUN_STARTED`, `AGENT_RUN_ENDED`, `MODEL_SELECTED`, `EFFORT_SET`, `EFFORT_CHANGED`, `MODEL_FALLBACK`, `HANDOVER_CREATED`, `CHECKPOINT_CREATED`, `RETRY`, `ERROR`, `RECOVERY_RESUMED` |
-| `runtime.ToolInvoker` / adapters' `can_use_tool` | `TOOL_INVOKED`, `TOOL_DENIED`, `APPROVAL_REQUESTED` |
+| `runtime.AgentExecutor` (and `runtime.RecoveryManager` on its behalf, same package) | `AGENT_ASSIGNED`, `AGENT_RUN_STARTED`, `AGENT_RUN_ENDED`, `MODEL_SELECTED`, `EFFORT_SET`, `EFFORT_CHANGED`, `MODEL_FALLBACK`, `HANDOVER_CREATED`, `CHECKPOINT_CREATED`, `RETRY`, `ERROR`, `RECOVERY_RESUMED`; `TOOL_DENIED` for the repository-boundary audit only (one per violating path when a run fails on the boundary, written before that run's `ERROR`; ADR-0006 D-5, E02-B04) |
+| `runtime.ToolInvoker` / adapters' `can_use_tool` | `TOOL_INVOKED`, `TOOL_DENIED` (permission decisions, including the post-hoc authorizer of advisory providers), `APPROVAL_REQUESTED` |
 | `permissions.PermissionManager.decide_approval()` | `APPROVAL_DECIDED` |
 | `budgets.BudgetManager` / `CostManager` | `BUDGET_EVENT`, `COST_RECORDED` |
 | `integrations.GitCliProvider` | `COMMIT`, `PR_OPENED`, `MERGED` |

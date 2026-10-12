@@ -3,7 +3,7 @@
 **Roadmap stage:** §135 Stage 2
 **Goal.** A game repository can be bootstrapped into a validated, reproducible Production Kit: environment manifest, `.ai/` tree, canonical skills with projections and drift detection, MUST hooks, permission rule set with protected actions and approvals, approved-artifact registry, security hardening.
 **Requirements.** §24–§29, §31–§33, §91–§93 (pause/resume/priority/policy subset), §105 (pins), §123–§124, §137 (Inv. 7, 10, 11), §138 (Model Lock-In), §139 (credentials).
-**Epic gate.** `tests/e2e/test_e02_gate.py`: on a fresh temp repo with a `GDD/` folder, `walk bootstrap --provider local --key DEMO --name Demo --yes` creates the full `.ai/` tree and DB; `walk doctor` exits 0 and writes `environment.yaml`; skills are projected for both providers and `walk skills check-drift` is clean, then a hand-edited projection is reported `modified`; a fake run requesting `git.merge_protected` pauses with an `ApprovalRequest`, `walk approve APV-0001` resumes it; `walk pause`/`walk resume` write `USER_OVERRIDE`; an agent diff touching `.ai/agents/roles/` is rejected by `BoundaryAuditor`.
+**Epic gate.** `tests/e2e/test_e02_gate.py`: on a fresh temp repo with a `GDD/` folder, `walk bootstrap --provider local --key DEMO --name Demo --yes` creates the full `.ai/` tree and DB; `walk doctor` exits 0 and writes `environment.yaml`; skills are projected for both providers and `walk skills check-drift` is clean, then a hand-edited projection is reported `modified`; a fake SENIOR_DEV run requesting the protected action `git.delete_branch_protected` pauses with an `ApprovalRequest`, `walk approve APV-0001` resumes it and the run completes; `walk pause`/`walk resume` write `USER_OVERRIDE`; an agent diff touching `.ai/agents/roles/` is rejected by `BoundaryAuditor` (run `FAILED_BOUNDARY`, change reverted, `TOOL_DENIED` written).
 **Precondition.** E01-R01 is `DONE` with no `BLOCKER` bugfix stories. All E01 symbols referenced below exist (`Default*` services per `WBS.md` §3.1).
 
 ## Story index
@@ -25,7 +25,7 @@
 | E02-S13 | Human override CLI subset | E01-S30, E02-S11 | MEDIUM |
 | E02-S14 | Security hardening: forbidden paths, git guard hooks, secret scan, command restrictions | E02-S10, E01-S23, E01-S25 | HIGH |
 | E02-S15 | `walk doctor --fix --strict` | E02-S07, E02-S14, E02-S04 | MEDIUM |
-| E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | E02-S15, E02-S13, E02-S12, E02-S09 | MEDIUM |
+| E02-S16 | Epic gate: bootstrap → doctor → skills → approval → override (e2e) | E02-S15, E02-S13, E02-S12, E02-S09, E02-B04 | MEDIUM |
 | E02-R01 | Review E02 | E02-S16 | MEDIUM |
 
 ## Reading order for implementers
@@ -2490,10 +2490,10 @@ Decisions (Level 0 unless marked):
 
 ### E02-S16 — Epic gate: bootstrap → doctor → skills → approval → override (e2e)
 
-**Status:** BLOCKED
+**Status:** TODO
 **Type:** feat
 **Requirements:** §24, §25, §26, §28, §31, §32, §33, §91, §92, §93, §136, §137
-**Depends on:** E02-S15, E02-S13, E02-S12, E02-S09
+**Depends on:** E02-S15, E02-S13, E02-S12, E02-S09, E02-B04
 **Effort:** MEDIUM   **Risk:** LOW
 **Owner role:** QC   **Reviewer role:** LeadDev
 
@@ -2502,7 +2502,7 @@ One end-to-end test module proves the Production Kit: a fresh repository is boot
 
 #### Scope
 - In: `tests/e2e/test_e02_gate.py`, shared e2e fixtures, CLI invocation helper, documentation of the gate transcript.
-- Out: any new kernel behaviour (defects found here become `E02-B*` stories via E02-R01).
+- Out: any new kernel behaviour (defects found here become `E02-B*` stories via E02-R01; the boundary `TOOL_DENIED` that AC 7 needs is E02-B04); the LEAD_DEV `git.merge_protected` approval path (kernel-requested merge approval is E03-S12 AC 5; LEAD_DEV run admission is E03).
 
 #### Files
 | Path | Action | Public symbols |
@@ -2530,9 +2530,9 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 2. `walk doctor` exits 0 (git present in CI image; unity MISSING is not required) and `environment.yaml` validates.
 3. `walk skills sync` then `walk skills check-drift --strict` exits 0; lock has `claude` and `codex` entries.
 4. Editing one Claude projection file then `walk skills check-drift --strict` exits 1 and names the skill.
-5. A `FakeModelAdapter` script for LEAD_DEV emits `TOOL_CALL_REQUESTED(tool="git.merge_protected")`; after one tick the run is `PAUSED_FOR_APPROVAL`, `walk approvals --pending` lists `APV-0001`; `walk approve APV-0001` → run completes; ledger contains `APPROVAL_REQUESTED`, `APPROVAL_DECIDED`, `TOOL_INVOKED`.
+5. A tick-scheduled SENIOR_DEV IMPLEMENT run whose `FakeModelAdapter` script emits `TOOL_CALL_REQUESTED(tool="git.delete_branch_protected")`: the call resolves to REQUIRE_APPROVAL(USER) through the `"*"` §92 protected-action rule of `src/walk/permissions/defaults.yaml` (SENIOR_DEV has no DENY for this tool in `defaults.yaml` or in `agents/defaults/senior_dev.md`). After one tick the run is `PAUSED_FOR_APPROVAL`, and `walk approvals --pending` lists `APV-0001` with `git.delete_branch_protected`. `walk approve APV-0001` → the run resumes and ends `COMPLETED`. The run's ledger contains `APPROVAL_REQUESTED`, `APPROVAL_DECIDED` and `TOOL_INVOKED`, and the `TOOL_INVOKED(phase=pre)` for the tool carries `approval_request_id=APV-0001`.
 6. `walk pause` then `walk resume` → two `USER_OVERRIDE` events with commands `pause`, `resume`.
-7. A fake SENIOR_DEV run whose scripted tool writes `.ai/agents/roles/senior_dev.md` ends `FAILED_BOUNDARY`, the file change is reverted, `TOOL_DENIED` ledger event present.
+7. A fake SENIOR_DEV run whose scripted tool writes `.ai/agents/roles/senior_dev.md` ends `FAILED_BOUNDARY`, the file change is reverted, and the run's ledger has a `TOOL_DENIED` event for that path (payload `source: BOUNDARY_AUDIT`, `path: .ai/agents/roles/senior_dev.md`, written by the executor per E02-B04).
 8. A project hook `project.echo` on `on_project_start` appears in `HOOK_EXECUTED` after `walk run --once`.
 
 #### Acceptance criteria
@@ -2542,9 +2542,9 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 | 2 | Given bootstrapped repo When `walk doctor` Then exit 0 and manifest file valid | `tests/e2e/test_e02_gate.py::test_doctor_passes_and_writes_manifest` |
 | 3 | Given sync When `check-drift --strict` Then exit 0 with both providers in lock | `tests/e2e/test_e02_gate.py::test_skill_projections_clean_for_both_providers` |
 | 4 | Given edited projection When `check-drift --strict` Then exit 1 naming skill | `tests/e2e/test_e02_gate.py::test_edited_projection_detected_as_modified` |
-| 5 | Given fake run requesting protected action When tick + approve Then run completes with approval trail | `tests/e2e/test_e02_gate.py::test_protected_action_pauses_and_approval_resumes` |
+| 5 | Given a READY story owned by SENIOR_DEV whose fake run requests `git.delete_branch_protected` When one tick runs Then the run is `PAUSED_FOR_APPROVAL` and `walk approvals --pending` lists `APV-0001`; When `walk approve APV-0001` Then the run ends `COMPLETED` and its ledger contains `APPROVAL_REQUESTED`, `APPROVAL_DECIDED`, `TOOL_INVOKED` | `tests/e2e/test_e02_gate.py::test_protected_action_pauses_and_approval_resumes` |
 | 6 | Given `walk pause`/`walk resume` Then two `USER_OVERRIDE` events | `tests/e2e/test_e02_gate.py::test_pause_resume_recorded_as_user_override` |
-| 7 | Given fake run writing under `.ai/agents/roles/` Then `FAILED_BOUNDARY` and change reverted | `tests/e2e/test_e02_gate.py::test_boundary_auditor_rejects_agents_dir_write` |
+| 7 | Given fake run writing under `.ai/agents/roles/` Then `FAILED_BOUNDARY`, change reverted, and a `TOOL_DENIED` event for the path in the run's ledger | `tests/e2e/test_e02_gate.py::test_boundary_auditor_rejects_agents_dir_write` |
 | 8 | Given project hook on `on_project_start` When `walk run --once` Then `HOOK_EXECUTED` for `project.echo` | `tests/e2e/test_e02_gate.py::test_project_hook_executes_on_start` |
 
 #### Evidence required
@@ -2554,7 +2554,11 @@ Each gate assertion is one test; tests run in file order but must not depend on 
 #### Notes
 - Gate text: WBS.md §4 E02. Uses only fakes and a real temp git repo (WBS.md §3.6).
 - Also read: `tests/conftest.py`, `tests/e2e/test_e01_gate.py`, `tests/fakes/fake_model_adapter.py`, `tests/orchestrator/test_bootstrap.py` (`ProbeRunner`), `tests/integrations/test_preflight.py` (`script_environment`), `src/walk/cli/{composition,cmd_approvals,cmd_doctor,cmd_skills,cmd_run,ipc,daemon}.py`, `src/walk/orchestrator/{scheduler,service}.py`, `src/walk/runtime/{executor,tool_invoker,boundary,approvals,output_applier}.py`, `src/walk/permissions/{defaults.yaml,service.py}`, `src/walk/workflow/tables/{scheduled_states,story_workflow}.yaml`, ADR-0006.
-- **BLOCKING (implementer, 2026-10-12): two gate assertions fail on kernel behaviour. The other six tests (AC 1–4, 6, 8) pass.**
+- **Owner decisions (2026-10-12), unblocking this story.**
+  - **AC 5 → option A (scenario change, no kernel change).** Behavior 5 and AC 5 now use a SENIOR_DEV IMPLEMENT run requesting `git.delete_branch_protected`. Reason: in E02 only SENIOR_DEV may end an IMPLEMENT run (`story_workflow.yaml` allows `submit_for_review`/`partial`/`block` to SENIOR_DEV only, and the E02 `Scheduler` admits IMPLEMENT runs only), and SENIOR_DEV is denied `git.merge_protected` (exact DENY in `permissions/defaults.yaml`). `git.delete_branch_protected` is a §92 protected action that SENIOR_DEV is not denied: it resolves to the `"*"` REQUIRE_APPROVAL(USER) rule (checked 2026-10-12 against `src/walk/permissions/defaults.yaml` and `src/walk/agents/defaults/senior_dev.md`). The test name is unchanged. The LEAD_DEV `git.merge_protected` approval is not part of this gate: E03-S12 AC 5 covers the kernel-requested merge approval, and LEAD_DEV run admission arrives in E03. The epic gate text (this file's header, WBS.md §4 E02) names `git.delete_branch_protected`.
+  - **AC 7 → option A (kernel bugfix E02-B04).** The executor writes a `TOOL_DENIED` ledger event for each violating path when it fails a run on the repository boundary, as ADR-0006 D-5 requires. It still writes `ERROR {kind: BOUNDARY}` (decision in E02-B04 Notes). ARCHITECTURE §4.3 now lists `TOOL_DENIED` at the executor write point. This story depends on E02-B04. Behavior 7 and AC 7 keep the `TOOL_DENIED` assertion.
+  - Resume (after E02-B04 is committed, so its `git add -A` cannot pick up the WIP files): restore the work-in-progress test code from the local stash `E02-S16 gate tests WIP (6/8 pass; AC5+AC7 blocked)` (`git stash list`), then change the AC 5 test and the fake (Level-0 decision below). The AC 7 test needs no change; it passes once E02-B04 is DONE.
+- **Blocking analysis (implementer, 2026-10-12; resolved by the decisions above).** Two gate assertions failed on kernel behaviour. The other six tests (AC 1–4, 6, 8) passed.
   - **AC 5: a tick-scheduled LEAD_DEV run cannot complete in E02.**
     - What passes: one `run_once()` tick admits a LEAD_DEV-owned READY story. The fake's `git.merge_protected` call resolves to REQUIRE_APPROVAL(USER) and creates `APV-0001`, and the run is `PAUSED_FOR_APPROVAL` (PAUSE checkpoint). `walk approvals --pending` lists `APV-0001` / `git.merge_protected`. `walk approve APV-0001 --note ok` prints `APV-0001 APPROVED` (in-process, no daemon), and the waiting run resumes. The run's ledger holds `APPROVAL_REQUESTED`, `APPROVAL_DECIDED`, `TOOL_INVOKED(phase=pre, approval_request_id=APV-0001)` and `TOOL_INVOKED(phase=post)`.
     - What fails: the run ends `FAILED` with `failure_reason` `error: none: LEAD_DEV may not raise 'submit_for_review'; allowed: SENIOR_DEV`.
@@ -2575,6 +2579,7 @@ Each gate assertion is one test; tests run in file order but must not depend on 
     - The preflight probes of `walk bootstrap` and `walk doctor` are scripted (`ProbeRunner` + `script_environment` with Unity absent). The fixture monkeypatches `cmd_bootstrap.open_bootstrapper` and `cmd_doctor.open_integrations`, so the doctor exits 0 with `unity` MISSING on any host.
     - The `cli` fixture is bound to `bootstrapped_repo`. `bootstrapped_repo` does not commit the kit.
     - `kernel_with_fakes` runs on the system clock, the same clock as the CLI that decides approvals and overrides next to it. It points SENIOR_DEV and LEAD_DEV of the bootstrapped `policies.yaml` at `fake-codex/sim`. Its adapters are a conftest-private `FakeModelAdapter` subclass: SENIOR_DEV edits `.ai/agents/roles/senior_dev.md` once, and any other role runs the one-call `git.merge_protected` script.
+    - Change needed on resume (Level 0, test fixture internals): AC 5 and AC 7 are now both SENIOR_DEV runs, so the fake can no longer pick its scenario by role. It picks it by the work item instead (for example the key or title that the test's `_ready_story` helper gives the story): the AC 7 story gets the boundary-file edit, and the AC 5 story gets the one-call `git.delete_branch_protected` script (`PROTECTED_TOOL`). The public fixture names in the Files table are unchanged. Pointing LEAD_DEV at the fake is no longer needed.
     - AC 8 runs `walk run --once` for real; the hook `project.echo` (`echo hello`) runs in the platform shell.
   - No E02-S16 code was committed (gate must stay green); `docs/HANDOFF.md` says where the work-in-progress test code is kept.
 - Commit subject: `feat: add epic 02 production kit gate test (E02-S16)`.
@@ -2915,3 +2920,92 @@ Level-0 decisions:
 - **Row lookup.** The docs tests find a table row by its first cell (`| Secret isolation |`, `| D-8 |`) and require exactly one such row, so a duplicated or renamed row fails loudly.
 - **Allowlist check.** It reads `AGENT_ENV_ALLOWLIST` and `WINDOWS_AGENT_ENV_ALLOWLIST` from `walk.runtime.sandbox` and requires each entry as inline code (`` `UNITY_*` ``), so a future allowlist change fails the test until §6 is updated.
 - **ADR-0009 sentence.** AC 3 matches the exact sentence `` `ANTHROPIC_API_KEY` is never passed to an agent subprocess `` plus `claude login` in the D-8 row.
+
+---
+
+### E02-B04 — Executor writes `TOOL_DENIED` when a run fails on the repository boundary
+
+**Status:** TODO
+**Type:** bugfix
+**Requirements:** §31, §81, §86, §91
+**Depends on:** E02-S14
+**Effort:** LOW   **Risk:** MEDIUM
+**Owner role:** SeniorDev   **Reviewer role:** LeadDev
+
+#### Goal
+When the run executor fails a run because a write breaks the repository boundary, the ledger records each violating path as a `TOOL_DENIED` event, as ADR-0006 D-5 requires. Today the executor writes only `ERROR {kind: BOUNDARY}` and `AGENT_RUN_ENDED(FAILED_BOUNDARY)`. The existing behaviour stays: the run ends `FAILED_BOUNDARY`, the write is reverted, and `ERROR {kind: BOUNDARY}` is still written.
+
+#### Scope
+- In: the `TOOL_DENIED` write in `DefaultAgentExecutor`'s boundary path (`_violates_boundary`, used by the audited checkpoint, by completion and by fallback). Not writing a duplicate for denials the post-hoc authorizer already recorded. The INTERFACES §1.13 contract text. A dated ADR-0006 consequence line.
+- Out: ARCHITECTURE §4.3 (amended by the planning commit that added this story; do not change it again). Firing `ON_TOOL_DENIED` (Behavior 5). The improvement observation that D-5 also lists (E10; the E10 `repeated_tool_denial` signal reads `TOOL_DENIED` ledger events, so it counts these once this story lands). The E02 gate test (E02-S16 AC 7).
+
+#### Files
+| Path | Action | Public symbols |
+|---|---|---|
+| `src/walk/runtime/executor.py` | modify | — (`DefaultAgentExecutor._violates_boundary` and the run-end ledger write; no public signature changes) |
+| `tests/runtime/test_executor_boundary.py` | modify | — |
+| `docs/01-architecture/INTERFACES.md` | modify | — (§1.13 `BoundaryAuditor.audit` docstring: the ledger consequences of a non-empty result) |
+| `docs/01-architecture/adr/ADR-0006-permission-enforcement-at-tool-boundary.md` | modify | — (a dated consequence line for D-5: executor write point, `ERROR` kept) |
+| `docs/02-work-breakdown/EPIC-02-production-kit.md` | modify | — (Evidence section of this story) |
+
+#### Interface contract
+No public signature changes. `AgentExecutor`, `BoundaryAuditor` and `ToolInvoker` (INTERFACES §1.13) keep their signatures. The write point is `runtime.AgentExecutor` (ARCHITECTURE §4.3, amended 2026-10-12).
+
+The new ledger event, written once per boundary violation that Behavior 3 selects, built like the executor's other run events (`_event`: `project_key`, `actor_role=run.role`, `work_item_id`, `run_id`, `model_id`, `effort`, `behavior_versions`):
+```python
+LedgerEvent(
+    kind=LedgerEventKind.TOOL_DENIED,
+    tool=None,                      # an audit finding from git status/diff, not a tool call
+    outcome="DENIED",
+    payload={
+        "source": "BOUNDARY_AUDIT",
+        "path": violation,          # verbatim from BoundaryAuditor.audit, e.g. ".ai/agents/roles/qc.md" or "SECRET:src/a.cs"
+        "reason": f"boundary: {violation}",
+        "matched_rule": None,       # same key as ToolInvoker's TOOL_DENIED payload; no permission rule matched
+    },
+    ...                             # remaining fields as in DefaultAgentExecutor._event
+)
+```
+`ERROR` payload is unchanged: `{"kind": "BOUNDARY", "violations": [...]}`. `AGENT_RUN_ENDED` payload is unchanged.
+
+INTERFACES §1.13, `BoundaryAuditor.audit` docstring, first sentence after the change: "Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .), and the executor writes, in one unit of work, one `TOOL_DENIED` (payload `source: BOUNDARY_AUDIT`, `path`, `reason`, `matched_rule: None`) per audited violation not already recorded by the post-hoc authorizer, then `ERROR {kind: BOUNDARY, violations}` and `AGENT_RUN_ENDED` (ADR-0006 D-5; E02-B04)."
+
+#### Behavior
+1. When `_violates_boundary` finds violations, it discards the worktree changes as today. It then records the end in one unit of work, in this order: the `TOOL_DENIED` events (Behavior 3), then `ERROR {kind: BOUNDARY, violations}`, then `AGENT_RUN_ENDED(FAILED_BOUNDARY)`. All of them are in the same transaction as the run's state change (WBS.md §3.5: inside the writer's transaction).
+2. This applies to every caller of `_violates_boundary`: the audited checkpoint (periodic), `_complete` and `_fall_back`. There is still one boundary path, not one per caller.
+3. Which violations get a `TOOL_DENIED`: each distinct entry that `BoundaryAuditor.audit` returned (role audit plus kernel-wide audit, deduplicated, in the order of `violations`), except entries that are also in `live.advisory`. Entries from `live.advisory` (tool results whose post-hoc `kernel_decision` was DENY or REQUIRE_APPROVAL) were already recorded as `TOOL_DENIED` by `ToolInvoker` through the post-hoc authorizer (`authorizer_for(..., wait_for_approval=False)`, ARCHITECTURE §4.3 `ToolInvoker` row). A second event for them would double-count the denial.
+4. Unchanged: run state `FAILED_BOUNDARY`, `failure_reason` `boundary: <violations>`, the discard, the checkpoints written so far, the `ERROR` payload, the `AGENT_RUN_ENDED` payload, and `ON_TASK_FAILED`.
+5. `ON_TOOL_DENIED` is not fired for an audit finding. Its trigger is a permission decision DENY (ARCHITECTURE §4.1), and its payload names a tool, which an audit finding does not have. The failed run already fires `ON_TASK_FAILED`.
+6. A run with no boundary violation gets no `TOOL_DENIED` from the executor.
+
+#### Acceptance criteria
+| # | Given / When / Then | Test |
+|---|---|---|
+| 1 | Given a SENIOR_DEV run that writes `.ai/agents/roles/qc.md` before its periodic checkpoint When the run ends Then it is `FAILED_BOUNDARY`, the worktree is clean, and the run has exactly one `TOOL_DENIED` with `tool` None, `outcome` `DENIED`, `actor_role` SENIOR_DEV and payload `{source: BOUNDARY_AUDIT, path: .ai/agents/roles/qc.md, reason: "boundary: .ai/agents/roles/qc.md", matched_rule: None}` | `tests/runtime/test_executor_boundary.py::test_boundary_violation_writes_tool_denied` |
+| 2 | Given the run of AC 1 When its ledger is read in `seq` order Then the `TOOL_DENIED` precedes `ERROR {kind: BOUNDARY, violations: [.ai/agents/roles/qc.md]}`, which precedes `AGENT_RUN_ENDED` with state `FAILED_BOUNDARY` | `tests/runtime/test_executor_boundary.py::test_boundary_tool_denied_precedes_error_and_run_end` |
+| 3 | Given a run that leaves two violating paths (one forbidden, one outside the kernel-wide `allowed_paths`) and reaches completion When `_complete` audits Then the run has two `TOOL_DENIED` events with source `BOUNDARY_AUDIT`, one per path, in the order of `ERROR.payload["violations"]` | `tests/runtime/test_executor_boundary.py::test_boundary_tool_denied_per_violation_on_completion` |
+| 4 | Given an advisory run in which a path is both in `live.advisory` and found by the auditor, and another path is found only by the auditor When the run fails on the boundary Then the executor writes a `BOUNDARY_AUDIT` `TOOL_DENIED` only for the auditor-only path | `tests/runtime/test_executor_boundary.py::test_advisory_denial_not_duplicated_by_boundary_audit` |
+| 5 | Given a run with no boundary violation When it completes Then its ledger has no `TOOL_DENIED` with source `BOUNDARY_AUDIT` | `tests/runtime/test_executor_boundary.py::test_clean_run_writes_no_boundary_tool_denied` |
+| 6 | Given the existing boundary tests When run without changes to their assertions Then they pass: the `ERROR` payload is still `{kind: BOUNDARY, violations: [...]}` and the real-Codex advisory run still has exactly one `TOOL_DENIED` (`dotnet`) | `tests/runtime/test_executor_boundary.py::test_violation_detected_before_wip_commit` |
+
+#### Evidence required
+- Quality gate output (`sh scripts/check.sh`).
+- Coverage of `runtime/executor.py` in the full suite (at least its current level).
+- `tests/runtime/test_executor_boundary.py` result listing AC 1–6, and confirmation that `test_codex_run_is_never_paused_for_approval` and `test_advisory_deny_fails_run` pass with unchanged assertions.
+
+#### Notes
+- **Severity: BLOCKER.** It blocks the E02 epic gate: E02-S16 AC 7 (`test_boundary_auditor_rejects_agents_dir_write`) asserts the `TOOL_DENIED`. Found by the E02-S16 implementer on 2026-10-12 (E02-S16 Notes, "Blocking analysis", AC 7). The owner chose option A on 2026-10-12: a kernel bugfix, not an amended acceptance criterion.
+- **Decision: `ERROR {kind: BOUNDARY}` is kept, and `TOOL_DENIED` is added next to it, not instead of it.** Reasons:
+  - ADR-0006 D-5 lists `TOOL_DENIED` as one consequence of a boundary violation, together with `FAILED_BOUNDARY`, the revert and an improvement observation. It does not say the run-failure record changes. D-7 requires every denial to produce `TOOL_DENIED`, and the boundary audit is a post-hoc denial.
+  - ARCHITECTURE §4.3 gives `ERROR` to the executor write point. `DefaultAgentExecutor._end` writes `ERROR` before `AGENT_RUN_ENDED` whenever an end carries an error payload: `FAILED` (output invalid, output application, adapter failure, not resumable), `BLOCKED_PROVIDER`, `BLOCKED_BUDGET` and `FAILED_BOUNDARY`. `RecoveryManager` does the same for interrupted runs. Dropping it for `FAILED_BOUNDARY` alone would make the ledger's failure record inconsistent.
+  - `ERROR` carries one record per run with all violations; `TOOL_DENIED` carries one record per path for denial counting (E10 `repeated_tool_denial`). They answer different questions.
+  - E01 tests already assert the `ERROR` payload (`test_violation_detected_before_wip_commit`). Replacing it would change an E01 contract for no gain.
+- ARCHITECTURE §4.3 was amended in the planning commit that added this story: the `runtime.AgentExecutor` row lists `TOOL_DENIED` (boundary audit only). The ADR-0006 consequence line this story adds reads: *(2026-10-12, E02-B04)* the `TOOL_DENIED` of D-5 is written by `runtime.AgentExecutor`, one per violating path (payload `source: BOUNDARY_AUDIT`); the executor's `ERROR {kind: BOUNDARY}` run-failure record stays.
+- Test hints (Level 0): AC 1–2 reuse the `test_violation_detected_before_wip_commit` setup (an `ON_TOOL_AFTER` test hook writes `FORBIDDEN`). For AC 3, the hook writes `FORBIDDEN` and the run uses `make_executor_env(..., allowed_paths=("Assets/**",))` with a `checkpoint_every` above the script's tool calls, so the audit happens in `_complete`. For AC 4, `_AdvisoryAdapter` together with `allowed_paths=("Assets/**",)`: the second fake file is advisory and audited, and the first is audited only. Check the fake's file names in `tests/runtime/executor_env.py` before fixing the expected paths.
+- The executor's private `_Outcome` literal gains `"DENIED"` (Level 0).
+- Also read: `src/walk/runtime/tool_invoker.py` (`_denied_payload`, `authorizer_for`), `tests/runtime/executor_env.py`, ADR-0006 D-5 and D-7, ARCHITECTURE §4.1 (`ON_TOOL_DENIED` row) and §4.3, WBS.md §3.5.
+- `NEW NAME:` `TOOL_DENIED` payload keys `source` (value `BOUNDARY_AUDIT`) and `path`, for executor-written boundary denials.
+- Commit subject: `bugfix: write tool denied event on boundary violation (E02-B04)`.
+
+#### Evidence (filled by implementer)
+_pending_

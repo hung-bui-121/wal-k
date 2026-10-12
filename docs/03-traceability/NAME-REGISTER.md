@@ -11,7 +11,7 @@ Rules (WBS.md §2 rule 6):
   the same commit (CONVENTIONS.md §4); the epic review task checks this register for names
   that were promoted but are still story-local, and for conflicting definitions.
 
-Entries: 203
+Entries: 204
 
 | Story | Kind | Names / note | File |
 |---|---|---|---|
@@ -68,6 +68,7 @@ Entries: 203
 | `E02-S15` | NEW NAME | `DoctorReport`, `walk.cli.lints`, `PROVIDER_NAME_PATTERN`. | `EPIC-02-production-kit.md` |
 | `E02-B01` | NEW NAME | `resolve_executable`, `unsafe_batch_argument`, `BATCH_UNSAFE_CHARS` (`walk.integrations.subprocess`), exit code 126 for a refused batch call, `tests/fakes/fake_shim.py` (`write_shim`). | `EPIC-02-production-kit.md` |
 | `E02-B02` | NEW NAME | `WINDOWS_AGENT_ENV_ALLOWLIST`, `scrubbed_env(..., platform=)`. | `EPIC-02-production-kit.md` |
+| `E02-B04` | NEW NAME | `TOOL_DENIED` payload keys `source` (value `BOUNDARY_AUDIT`) and `path`, for executor-written boundary denials. | `EPIC-02-production-kit.md` |
 | `EPIC-03-coding-workflow header` | NEW NAME | per-kind branch prefixes (INTERFACES §1.13 only names `feat/<id>-<slug>`). | `EPIC-03-coding-workflow.md` |
 | `E03-S01` | NEW NAME | `LocalPrStub` and path `.walk/prs/<branch>.json`; `ProtectedBranchRefused`; `GitCliProvider.detect_gh`. | `EPIC-03-coding-workflow.md` |
 | `E03-S03` | NEW NAME | `external_events.yaml`, `ExternalEventMap`, `load_external_event_map`, `WebhookDeliveryRepository`, `WorkProviderSyncRepository`, `WorkPoller.poll_once`. | `EPIC-03-coding-workflow.md` |

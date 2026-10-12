@@ -7,18 +7,22 @@ procedure itself is in `docs/00-governance/IMPLEMENTATION-PROTOCOL.md`.
 
 | Area | State |
 |---|---|
-| Planning | Complete: governance, architecture (ADR-0001..0020), 174 stories in 11 epics, traceability 140/140 |
+| Planning | Complete: governance, architecture (ADR-0001..0020), 175 stories in 11 epics, traceability 140/140 |
 | Epic 01 Kernel Core | DONE — 31 stories, gate E01-S31, review E01-R01, bugfixes E01-B01..B06 |
-| Epic 02 Production Kit | E02-S01..S15 and E02-B01..B03 DONE. **E02-S16 (epic gate) BLOCKED** (2 of 8 gate assertions fail on kernel behaviour); E02-R01 (review) TODO, waits on S16 |
+| Epic 02 Production Kit | E02-S01..S15 and E02-B01..B03 DONE. **E02-B04 (BLOCKER bugfix) TODO**, next. E02-S16 (epic gate) TODO, unblocked by the owner decision of 2026-10-12, depends on B04. E02-R01 (review) TODO, waits on S16 |
 | Epics 03–11 | Not started |
-| `main` | Pushed, working tree clean; last commit is the `docs: block E02-S16 ...` commit |
+| `main` | Pushed, working tree clean; last commit is the `docs: unblock E02-S16 ...` planning commit |
 
-E02-S15 is recorded as `DONE (7e16573)`. E02-S16 is BLOCKED. Its Notes in
-`EPIC-02-production-kit.md` hold both defects with evidence and the decision options:
-- **AC 5.** A tick-scheduled LEAD_DEV run cannot complete in E02. Only SENIOR_DEV may raise the
-  IMPLEMENT outcome events, and SENIOR_DEV is denied `git.merge_protected`.
-- **AC 7.** The executor writes `ERROR{kind: BOUNDARY}`, not the `TOOL_DENIED` that ADR-0006
-  D-5 requires on a boundary violation.
+E02-S15 is recorded as `DONE (7e16573)`. E02-S16 was BLOCKED on two gate assertions. The owner
+decided both on 2026-10-12, and the decisions are recorded in the E02-S16 Notes in
+`EPIC-02-production-kit.md`:
+- **AC 5 → option A (scenario change, no kernel change).** The gate now uses a SENIOR_DEV
+  IMPLEMENT run requesting `git.delete_branch_protected`, which needs USER approval and is not
+  denied for SENIOR_DEV. In E02 only SENIOR_DEV may end an IMPLEMENT run, and SENIOR_DEV is
+  denied `git.merge_protected`.
+- **AC 7 → option A (kernel bugfix E02-B04).** The executor writes one `TOOL_DENIED` per
+  violating path when a run fails on the repository boundary (ADR-0006 D-5). It keeps
+  `ERROR{kind: BOUNDARY}`. ARCHITECTURE §4.3 already lists the new write point.
 
 Work-in-progress gate code (conftest fixtures + `tests/e2e/test_e02_gate.py`, 6/8 passing) is
 **not committed**. It is in the local stash `E02-S16 gate tests WIP (6/8 pass; AC5+AC7
@@ -26,14 +30,19 @@ blocked)` on this host (`git stash list`; restore with `git stash pop`).
 
 ## Next steps, in order
 
-1. **Owner/architect decision on E02-S16 Notes** (AC 5 options A/B/C, AC 7 options A/B).
-   Then unblock E02-S16 (`docs: unblock E02-S16 ...`), add any bugfix stories the decision
-   needs (`E02-Bxx`), restore the stashed gate code, adjust AC 5/AC 7 to the decision, and
-   finish the story.
-2. **E02-R01**: review by a *different* agent/model than the implementer
+1. **E02-B04** (BLOCKER bugfix, `bugfix: write tool denied event on boundary violation
+   (E02-B04)`): add the executor `TOOL_DENIED` write for boundary violations, keep `ERROR`,
+   and update INTERFACES §1.13 and ADR-0006 as the story lists.
+2. **E02-S16** (only after E02-B04 is committed and pushed, so B04's `git add -A` cannot pick
+   up the WIP files): restore the test code from the local stash `E02-S16 gate tests WIP (6/8 pass;
+   AC5+AC7 blocked)` (`git stash list`, then `git stash pop`). Change the AC 5 test and the
+   conftest fake to the SENIOR_DEV `git.delete_branch_protected` scenario: the fake picks its
+   scenario by work item, not by role (Level-0 note in the story). AC 7 passes unchanged once
+   E02-B04 is DONE. Then finish the story (8/8).
+3. **E02-R01**: review by a *different* agent/model than the implementer
    (reviewer protocol). Defects become `E02-Bxx` bugfix stories.
-3. Fix any `E02-Bxx` marked BLOCKER before Epic 03.
-4. **Epic 03 Coding Workflow** — E03-S01 onward. Read the binding notes already added to
+4. Fix any `E02-Bxx` marked BLOCKER before Epic 03.
+5. **Epic 03 Coding Workflow** — E03-S01 onward. Read the binding notes already added to
    E03-S07 (version `scheduled_states.yaml`), E03-S13 (REVIEW variant of the E01-B01 test)
    and E03-S18 (clean up FAILED/BLOCKED worktrees).
 
@@ -49,7 +58,7 @@ blocked)` on this host (`git stash list`; restore with `git stash pop`).
 - Context-switch guard (global `~/.claude/CLAUDE.md`): a request that targets a different
   repo/task than the current one must be confirmed by the owner before any action.
 
-## Waiting on the owner (besides the E02-S16 decision)
+## Waiting on the owner
 
 - Install Codex CLI (`npm i -g @openai/codex`) and `codex login` when real provider tests
   are wanted; then run the integration tests listed in E02-B01/E02-B02 Evidence, e.g.
