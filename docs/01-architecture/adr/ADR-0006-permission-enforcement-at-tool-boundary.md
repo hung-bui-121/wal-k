@@ -45,6 +45,7 @@
 - `AgentOutput.changes` must match the real diff; `OutputApplier` reconciles against `git status` and logs discrepancies as findings.
 - Review/QC verdicts are workflow events raised by the kernel from `AgentOutput.status ∈ {APPROVED, REJECTED}` with the role check in the transition table, which is how Invariant 4 is enforced mechanically.
 - Codex residual risk must be re-evaluated when `codex` gains per-call approval hooks (tracked as a Stage 3 review item).
+- *(2026-10-12, E02-B04)* The `TOOL_DENIED` of D-5 is written by `runtime.AgentExecutor`, one per violating path (payload `source: BOUNDARY_AUDIT`); the executor's `ERROR {kind: BOUNDARY}` run-failure record stays.
 
 ## Related requirements
 

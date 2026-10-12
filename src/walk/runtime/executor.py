@@ -107,7 +107,8 @@ _MEMORY_PREFIX: Final = ".ai/"
 _NO_TRIGGER: Final = "none"
 _NATIVE_RESUME: Final = "native_resume"
 _RESUME: Final = "resume"
-_Outcome = Literal["OK", "FAILED", "SKIPPED"]
+_Outcome = Literal["OK", "FAILED", "SKIPPED", "DENIED"]
+_BOUNDARY_AUDIT: Final = "BOUNDARY_AUDIT"  # TOOL_DENIED source of an audit finding (E02-B04)
 
 
 class _Stop(Enum):
@@ -162,6 +163,7 @@ class _End:
     reason: str | None = None
     error: JsonDict | None = None
     task_failed: bool = False
+    denied: tuple[str, ...] = ()  # boundary violations recorded as TOOL_DENIED (E02-B04)
 
 
 class DefaultAgentExecutor:
@@ -986,9 +988,18 @@ class DefaultAgentExecutor:
         await self._git.discard_changes(_worktree(live))
         error: JsonDict = {"kind": "BOUNDARY", "violations": violations}
         reason = f"boundary: {', '.join(violations)}"
+        # Advisory rejections already have a TOOL_DENIED from the post-hoc authorizer.
+        denied = tuple(path for path in violations if path not in live.advisory)
         await self._end(
             live,
-            _End(AgentRunState.FAILED_BOUNDARY, "FAILED", reason, error, task_failed=True),
+            _End(
+                AgentRunState.FAILED_BOUNDARY,
+                "FAILED",
+                reason,
+                error,
+                task_failed=True,
+                denied=denied,
+            ),
         )
         await self._notify_finished(live)
         return True
@@ -1301,13 +1312,15 @@ class DefaultAgentExecutor:
         )
 
     async def _end(self, live: _Live, end: _End, payload: JsonDict | None = None) -> None:
-        """Record the run's end state, ERROR (when failed) and AGENT_RUN_ENDED; unassign."""
+        """Record the end state, boundary TOOL_DENIED, ERROR (when failed), AGENT_RUN_ENDED."""
         live.ended = True
         if live.started is not None:
             seconds = max((self._clock.now() - live.started).total_seconds(), 0.0)
             await self._budgets.meter(live.subject, BudgetDimension.EXECUTION_TIME_S, seconds)
         async with UnitOfWork(self._db) as uow:
             live.run = await self._set_state(live, end.state, uow, failure_reason=end.reason)
+            for path in end.denied:
+                await self._ledger.append(self._boundary_denied(live.run, path), uow=uow)
             if end.error is not None:
                 await self._ledger.append(
                     self._event(
@@ -1407,6 +1420,16 @@ class DefaultAgentExecutor:
             payload=payload or {},
             behavior_versions=versions,
         )
+
+    def _boundary_denied(self, run: AgentRun, path: str) -> LedgerEvent:
+        """TOOL_DENIED for one boundary audit finding; no tool call and no matched rule."""
+        payload: JsonDict = {
+            "source": _BOUNDARY_AUDIT,
+            "path": path,
+            "reason": f"boundary: {path}",
+            "matched_rule": None,
+        }
+        return self._event(LedgerEventKind.TOOL_DENIED, run, outcome="DENIED", payload=payload)
 
     async def _fire(self, name: HookName, live: _Live, payload: JsonDict) -> None:
         context = HookContext(

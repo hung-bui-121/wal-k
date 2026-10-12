@@ -2925,7 +2925,7 @@ Level-0 decisions:
 
 ### E02-B04 — Executor writes `TOOL_DENIED` when a run fails on the repository boundary
 
-**Status:** TODO
+**Status:** DONE (pending)
 **Type:** bugfix
 **Requirements:** §31, §81, §86, §91
 **Depends on:** E02-S14
@@ -3008,4 +3008,36 @@ INTERFACES §1.13, `BoundaryAuditor.audit` docstring, first sentence after the c
 - Commit subject: `bugfix: write tool denied event on boundary violation (E02-B04)`.
 
 #### Evidence (filled by implementer)
-_pending_
+Quality gate (`sh scripts/check.sh`, Windows 11 host, Python 3.12):
+```
+409 files already formatted
+All checks passed!
+Success: no issues found in 408 source files
+Contracts: 21 kept, 0 broken.
+src\walk\runtime\executor.py                             731      4    99%   764, 783, 1237-1238
+Required test coverage of 85% reached. Total coverage: 99.84%
+=============== 1374 passed, 5 deselected in 615.29s (0:10:15) ================
+```
+Coverage of `runtime/executor.py` is unchanged at 99 %: the same four statements stay uncovered as before this story (E01 recorded them as 689, 708, 1125-1126; the line numbers moved with later stories and with this change's inserts). Every new line is covered.
+
+`uv run pytest tests/runtime/test_executor_boundary.py -v`: 10 passed.
+```
+test_violation_detected_before_wip_commit PASSED              (AC 6, assertions unchanged)
+test_advisory_deny_fails_run PASSED                           (assertions unchanged)
+test_codex_run_is_never_paused_for_approval PASSED            (assertions unchanged: one TOOL_DENIED, dotnet)
+test_role_and_kernel_allowed_paths_bound_the_run PASSED
+test_kernel_allowed_paths_also_apply PASSED
+test_boundary_violation_writes_tool_denied PASSED             (AC 1)
+test_boundary_tool_denied_precedes_error_and_run_end PASSED   (AC 2)
+test_boundary_tool_denied_per_violation_on_completion PASSED  (AC 3)
+test_advisory_denial_not_duplicated_by_boundary_audit PASSED  (AC 4)
+test_clean_run_writes_no_boundary_tool_denied PASSED          (AC 5)
+```
+AC 1–4 failed before the change (no `TOOL_DENIED`); AC 5 is the negative case and passed before and after.
+
+Implementation: `_violates_boundary` computes the violations not in `live.advisory` and passes them to `_end` in the private `_End.denied`. `_end` writes one `TOOL_DENIED` per entry (`_boundary_denied`: `tool` None, outcome `DENIED`, payload `source: BOUNDARY_AUDIT`, `path`, `reason`, `matched_rule: None`) in its unit of work, after the run's state change and before `ERROR` and `AGENT_RUN_ENDED`. The three callers (audited checkpoint, `_complete`, `_fall_back`) share this one path. `ON_TOOL_DENIED` is not fired. `_Outcome` gains `"DENIED"`. INTERFACES §1.13 (`BoundaryAuditor.audit` docstring) and ADR-0006 (dated consequence line) are updated as the story specifies.
+
+Level-0 decisions:
+- **AC 2 order check.** `ON_TASK_FAILED` fires after the unit of work, so a `HOOK_EXECUTED` follows `AGENT_RUN_ENDED`. The test asserts that `TOOL_DENIED`, `ERROR` and `AGENT_RUN_ENDED` are adjacent and in that order, which also shows they come from one write.
+- **AC 3/4 scripts.** AC 3 uses one tool call (`src/Fake1.cs`) plus the hook's `FORBIDDEN` write under `allowed_paths=("Assets/**",)`. AC 4 uses two tool calls with `_AdvisoryAdapter`: `src/Fake2.cs` is advisory and audited, `src/Fake1.cs` is audited only.
+- The WBS status row is updated per protocol §5.3; traceability and name register regenerated with no change.

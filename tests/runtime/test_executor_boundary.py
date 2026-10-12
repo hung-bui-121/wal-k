@@ -6,14 +6,14 @@ import tests.fixtures.codex
 from tests.fakes.fake_clock import FakeClock
 from tests.fakes.fake_codex_launcher import FakeCodexProcessLauncher
 from tests.fakes.fake_model_adapter import FakeModelAdapter, fake_descriptor
-from tests.runtime.executor_env import CODEX_MODEL, SENIOR, EnvFactory, script
+from tests.runtime.executor_env import CODEX_MODEL, SENIOR, EnvFactory, ExecutorEnv, script
 from walk.agents import AgentInput
 from walk.hooks import Hook, HookContext, HookName
 from walk.model_router import AgentEvent, AgentEventKind, RunSession
 from walk.model_router.adapters.codex import CodexAdapter
 from walk.permissions import Approver, PermissionEffect, PermissionRule
 from walk.runtime import AgentRunState, CheckpointKind
-from walk.telemetry import LedgerEventKind
+from walk.telemetry import LedgerEvent, LedgerEventKind
 from walk.workflow import WorkItemState
 
 FORBIDDEN = ".ai/agents/roles/qc.md"
@@ -165,3 +165,124 @@ async def test_kernel_allowed_paths_also_apply(make_executor_env: EnvFactory) ->
 
     assert run.state is AgentRunState.FAILED_BOUNDARY
     assert "src/Fake1.cs" in str(run.failure_reason)
+
+
+def _rogue_writer(env: ExecutorEnv, *, on_call: int) -> None:
+    """Register an ON_TOOL_AFTER hook that writes `FORBIDDEN` into the run's worktree."""
+    calls: list[str] = []
+
+    async def write_forbidden(ctx: HookContext) -> None:
+        calls.append(str(ctx.run_id))
+        if len(calls) == on_call:
+            run = await env.runs.get(str(ctx.run_id))
+            assert run is not None
+            assert run.worktree_path is not None
+            _write(Path(run.worktree_path) / FORBIDDEN, "# rogue role\n")
+
+    env.hooks.register(
+        Hook(name=HookName.ON_TOOL_AFTER, id="test.rogue", kind="builtin"), write_forbidden
+    )
+
+
+async def _boundary_denials(env: ExecutorEnv, run_id: str) -> list[LedgerEvent]:
+    denied = await env.events(run_id, LedgerEventKind.TOOL_DENIED)
+    return [event for event in denied if event.payload.get("source") == "BOUNDARY_AUDIT"]
+
+
+async def test_boundary_violation_writes_tool_denied(make_executor_env: EnvFactory) -> None:
+    env = await make_executor_env(script(tool_calls=6), checkpoint_every=5)
+    _rogue_writer(env, on_call=2)
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.FAILED_BOUNDARY
+    assert run.worktree_path is not None
+    assert _git(run.worktree_path, "status", "--porcelain") == ""
+    denied = await env.events(run.id, LedgerEventKind.TOOL_DENIED)
+    assert len(denied) == 1
+    assert denied[0].tool is None
+    assert denied[0].outcome == "DENIED"
+    assert denied[0].actor_role is SENIOR
+    assert denied[0].payload == {
+        "source": "BOUNDARY_AUDIT",
+        "path": FORBIDDEN,
+        "reason": f"boundary: {FORBIDDEN}",
+        "matched_rule": None,
+    }
+    assert env.hooks_fired(HookName.ON_TASK_FAILED)
+
+
+async def test_boundary_tool_denied_precedes_error_and_run_end(
+    make_executor_env: EnvFactory,
+) -> None:
+    env = await make_executor_env(script(tool_calls=6), checkpoint_every=5)
+    _rogue_writer(env, on_call=2)
+
+    run = await env.run_to_end()
+
+    events = await env.ledger.query(run_id=run.id)
+    seqs = [event.seq or 0 for event in events]
+    assert seqs == sorted(seqs)
+    kinds = [event.kind for event in events]
+    denied = kinds.index(LedgerEventKind.TOOL_DENIED)
+    error = kinds.index(LedgerEventKind.ERROR)
+    ended = kinds.index(LedgerEventKind.AGENT_RUN_ENDED)
+    assert denied < error < ended
+    assert kinds[denied : ended + 1] == [
+        LedgerEventKind.TOOL_DENIED,
+        LedgerEventKind.ERROR,
+        LedgerEventKind.AGENT_RUN_ENDED,
+    ]
+    assert events[error].payload == {"kind": "BOUNDARY", "violations": [FORBIDDEN]}
+    assert events[ended].payload["state"] == AgentRunState.FAILED_BOUNDARY.value
+
+
+async def test_boundary_tool_denied_per_violation_on_completion(
+    make_executor_env: EnvFactory,
+) -> None:
+    env = await make_executor_env(
+        script(tool_calls=1), checkpoint_every=5, allowed_paths=("Assets/**",)
+    )
+    _rogue_writer(env, on_call=1)
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.FAILED_BOUNDARY
+    assert [c.kind for c in env.checkpoints_of(run.id)] == [CheckpointKind.START]
+    error = (await env.events(run.id, LedgerEventKind.ERROR))[0]
+    violations = error.payload["violations"]
+    assert isinstance(violations, list)
+    assert sorted(violations) == sorted([FORBIDDEN, "src/Fake1.cs"])
+    denied = await _boundary_denials(env, run.id)
+    assert [event.payload["path"] for event in denied] == violations
+    assert all(event.outcome == "DENIED" for event in denied)
+
+
+async def test_advisory_denial_not_duplicated_by_boundary_audit(
+    make_executor_env: EnvFactory, fake_clock: FakeClock
+) -> None:
+    adapter = _AdvisoryAdapter(
+        "fake-codex",
+        [fake_descriptor(CODEX_MODEL, "fake-codex")],
+        script(tool_calls=2),
+        fake_clock,
+    )
+    env = await make_executor_env(adapters={"fake-codex": adapter}, allowed_paths=("Assets/**",))
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.FAILED_BOUNDARY
+    error = (await env.events(run.id, LedgerEventKind.ERROR))[0]
+    assert error.payload == {"kind": "BOUNDARY", "violations": ["src/Fake1.cs", "src/Fake2.cs"]}
+    denied = await _boundary_denials(env, run.id)
+    assert [event.payload["path"] for event in denied] == ["src/Fake1.cs"]
+
+
+async def test_clean_run_writes_no_boundary_tool_denied(make_executor_env: EnvFactory) -> None:
+    env = await make_executor_env(script())
+
+    run = await env.run_to_end()
+
+    assert run.state is AgentRunState.COMPLETED
+    assert await _boundary_denials(env, run.id) == []
+    assert await env.events(run.id, LedgerEventKind.ERROR) == []

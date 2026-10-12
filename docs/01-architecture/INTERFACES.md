@@ -868,7 +868,10 @@ class BoundaryAuditor(Protocol):
         allowed_paths: list[str],
         forbidden_paths: list[str],
     ) -> list[str]:
-        """Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .).
+        """Returns violations (paths). Non-empty → run FAILED_BOUNDARY, changes discarded (git checkout -- .), and the executor
+        writes, in one unit of work, one `TOOL_DENIED` (payload `source: BOUNDARY_AUDIT`, `path`, `reason`, `matched_rule: None`)
+        per audited violation not already recorded by the post-hoc authorizer, then `ERROR {kind: BOUNDARY, violations}` and
+        `AGENT_RUN_ENDED` (ADR-0006 D-5; E02-B04).
         E02-S14: DefaultBoundaryAuditor(*, forbidden=DEFAULT_FORBIDDEN_PATHS, exceptions=EVIDENCE_EXCEPTIONS,
         secret_scan=None); exceptions win over forbidden, forbidden over allowed; `SECRET:<path>` for an added/modified
         text file ≤ 1 MB in which the injected scan (walk.memory.secrets.contains_secret) finds a secret. The executor audits
